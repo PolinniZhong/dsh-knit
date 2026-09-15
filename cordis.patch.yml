@@ -1,0 +1,8 @@
+# dsh-knit bundle patch
+#
+# dsh.bundle.patch 层：`dsh plugin --profile <name> add <本包>` 时，
+# CLI 会读取本文件，把 install 行挂进 profile 的 bundle 栈。
+# 也可以手工在 ~/.dsh/profiles/web/cordis.patch.yml 里加同样的两行。
+- insert:
+    - id: dsh-knit
+      name: 'dsh-knit'

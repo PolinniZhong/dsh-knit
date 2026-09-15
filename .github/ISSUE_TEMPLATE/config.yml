@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安装问题先看这里
+    url: https://github.com/PolinniZhong/dsh-knit#安装
+    about: 装完必须重启 DSH，然后硬刷新浏览器 —— 一半的「没生效」是这两步没做全。
+  - name: 已知限制
+    url: https://github.com/PolinniZhong/dsh-knit#已知限制
+    about: 短对话排序会退化、中文分词是 n-gram 近似、右侧栏默认页是 guide —— 这几条不是 bug。

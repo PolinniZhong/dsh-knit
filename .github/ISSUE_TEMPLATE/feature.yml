@@ -1,0 +1,65 @@
+name: 功能建议
+description: 先说说你现在是怎么绕过它的
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个项目当前的重心**不是加功能**，是验证「按对话排序的最近文档」这个需求到底成不成立。
+
+        所以请先回答下面两个问题 —— 尤其**第二个**。它能把「想象出来的需求」和
+        「真的每天在疼」分开，也能让我们看清你现在的绕法离一个好东西还差什么。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 你现在遇到的具体场景是什么
+      description: 尽量具体：你在做什么事、什么时候卡住、多久遇到一次
+      placeholder: |
+        例如：我一天里 Agent 会生成十几个 .md，下午想回头改上午那份方案时，
+        文件名都差不多，只能一个个点开看。
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 不用这个功能，你现在是怎么绕过它的？
+      description: |
+        这一栏是必答的。真实的痛点一定有绕法 —— 哪怕是「忍着」「翻五分钟文件夹」
+        「开个终端 grep」。说不清绕法，通常说明这个需求还没真的发生。
+      placeholder: |
+        例如：我现在开一个终端窗口跑 `ls -lt **/*.md | head -20`，
+        或者干脆在对话里问 Agent「刚才那份方案叫什么名字」。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望 Knit 怎么做
+      description: 描述你想要的**结果**，不用设计 UI
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 这个场景多久发生一次？
+      options:
+        - 每天好几次
+        - 每天一次左右
+        - 每周几次
+        - 偶尔
+        - 只是觉得「有会更好」
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternative
+    attributes:
+      label: 你试过其他 DSH 插件或工具来解这个问题吗？
+      description: 试过哪些、为什么不行 —— 这比新功能本身更有信息量
+    validations:
+      required: false

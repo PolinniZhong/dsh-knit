@@ -1,0 +1,10 @@
+# 依赖与构建产物（本项目零依赖、无构建步骤，正常应该只有一个空目录或不存在）
+node_modules/
+package-lock.json
+*.tgz
+
+# 编辑器与系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

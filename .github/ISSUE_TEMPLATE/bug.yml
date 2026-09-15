@@ -1,0 +1,114 @@
+name: Bug 报告
+description: 装不上、面板打不开、列表不对、排序不对、预览坏了
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先看一眼这两条，能省一轮来回：
+
+        1. **装完插件后重启过 DSH 吗？** 宿主半边不热加载 —— 一半的「没生效」其实是没重启。
+        2. **硬刷新过浏览器吗？**（`Cmd + Shift + R` / `Ctrl + Shift + R`）客户端半边改完必须硬刷新。
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本
+      description: "`dsh --version` 的输出"
+      placeholder: 例如 0.1.5-rc.2
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: 例如 macOS 15.3 (Apple Silicon) / Windows 11 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: dropdown
+    id: restarted
+    attributes:
+      label: 安装之后重启过 DSH 吗？
+      description: 宿主半边（`src/host/`）实测不热加载，不重启会看不到新代码在跑
+      options:
+        - 是，重启过了
+        - 否，还没重启
+        - 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hard-refresh
+    attributes:
+      label: 硬刷新过浏览器吗？
+      options:
+        - 是，硬刷新过了
+        - 否，只普通刷新过
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Knit 版本
+      description: 从插件市场看到的版本，或 `dsh plugin list` 里的版本
+      placeholder: 例如 0.4.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: host
+    attributes:
+      label: 在哪个宿主里出的问题？
+      options:
+        - DSH 自带右侧栏
+        - dsh-better-sidebar
+        - 会话头部的 Knit 图标按钮
+        - 不确定 / 都试了
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 期望看到什么，实际看到什么
+      placeholder: |
+        期望：右侧栏里列出项目里的所有 .md
+        实际：列表是空的
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开一个含 .md 文件的项目
+        2. 点会话头部的 Knit 图标
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图 或 控制台日志
+      description: |
+        面板截图最有帮助。控制台里以 `[knit]` 或 `[dsh-knit]` 开头的日志也很有用
+        （F12 → Console）。
+      placeholder: 拖图片进来，或粘贴日志
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他补充
+      description: 工作区里 `.md` 的大致数量、是否嵌套很深、是否用了非 ASCII 文件名等等
+    validations:
+      required: false

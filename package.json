@@ -1,0 +1,63 @@
+{
+  "name": "dsh-knit",
+  "version": "0.4.0",
+  "type": "module",
+  "description": "Knit — recent Markdown documents in the DSH sidebar, sorted by relevance to the current conversation. Zero model calls.",
+  "main": "./src/host/index.js",
+  "exports": {
+    ".": "./src/host/index.js",
+    "./client": "./src/client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "assets",
+    "src",
+    "test",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/host.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "markdown",
+    "documents",
+    "sidebar",
+    "right-sidebar",
+    "recent-files",
+    "relevance",
+    "knowledge-base",
+    "最近文档",
+    "侧边栏",
+    "知识管理"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PolinniZhong/dsh-knit.git"
+  },
+  "homepage": "https://github.com/PolinniZhong/dsh-knit",
+  "bugs": {
+    "url": "https://github.com/PolinniZhong/dsh-knit/issues"
+  },
+  "author": "Polinni",
+  "license": "MIT"
+}
