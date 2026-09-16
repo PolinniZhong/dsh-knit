@@ -13,9 +13,10 @@ import { fileURLToPath } from 'node:url'
 import { stat } from 'node:fs/promises'
 
 import { apply } from '../src/host/index.js'
+import { makeWorkspace } from './fixture.mjs'
 
-/** 本仓库根（08_Knit），里面有 knit/docs/screenshot.png 当媒体样本。 */
-const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+/** 测试自带样本工作区（临时目录），里面有 docs/screenshot.png 当媒体样本。 */
+const PROJECT_ROOT = makeWorkspace()
 
 /**
  * 起一个挂着 Knit 路由的回环 server（伪造 cordis 的 webServer / sessions / effect）。
@@ -69,7 +70,7 @@ test('HTTP 端到端：媒体列表、/raw 整文件、Range 206、安全拒绝'
     assert.ok(body.docs.every((d) => d.kind === 'md'))
 
     // /raw 整文件：200、字节一致、安全头齐全
-    const rel = 'knit/docs/screenshot.png'
+    const rel = 'docs/screenshot.png'
     const realSize = (await stat(`${PROJECT_ROOT}/${rel}`)).size
     r = await fetch(`${base}/api/raw?sessionId=s&rel=${encodeURIComponent(rel)}`)
     assert.equal(r.status, 200)
@@ -104,7 +105,7 @@ test('HTTP 端到端：媒体列表、/raw 整文件、Range 206、安全拒绝'
     assert.equal(body.code, 'knit/outside-workspace')
 
     // 非白名单扩展名：404 + media-only
-    r = await fetch(`${base}/api/raw?sessionId=s&rel=${encodeURIComponent('knit/package.json')}`)
+    r = await fetch(`${base}/api/raw?sessionId=s&rel=${encodeURIComponent('package.json')}`)
     body = await r.json()
     assert.equal(r.status, 404)
     assert.equal(body.code, 'knit/media-only')

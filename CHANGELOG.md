@@ -3,6 +3,28 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-09-16
+
+### Fixed
+
+- **测试不再依赖仓库目录布局。** 原先样本工作区写成 `new URL('../../', import.meta.url)`，
+  也就是**包根的上一层目录** —— 在作者本机那是 `08_Knit/`（恰好有 Markdown 与截图样本），
+  但别人 `git clone` 公开仓库时那是 clone 的**父目录**，从 npm 装进 `node_modules/` 时
+  那是 `node_modules/`，两处都没有样本，于是 `npm test` 在 clone 里 160/162、
+  在装好的包里 157/162。
+  现在由新增的 `test/fixture.mjs` 在临时目录自造样本工作区（3 篇 Markdown、一张图、
+  一个非媒体文件，mtime 用 `utimes` 定死以免排序断言看运气），
+  三种布局下都是 **162/162**。顺带去掉了对 `docs/screenshot.png`（193 kB）与
+  `08_Knit/` 私有内容的依赖 —— 包的体积只增加 1 kB。
+- 运行时代码（`src/`）与 `assets/` **逐字节零改动**，插件行为与 `0.5.0` 完全一致。
+
+### Notes
+
+- 这是一次测试与发布质量修正，**没有新功能、没有行为变更**。
+  因此若你正在用 `0.5.0`，没有升级的必要。
+
+[0.5.1]: https://github.com/PolinniZhong/dsh-knit/releases/tag/v0.5.1
+
 ## [0.5.0] - 2026-09-16
 
 ### Added

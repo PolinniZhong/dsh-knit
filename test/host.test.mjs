@@ -20,9 +20,10 @@ import {
   ERROR_CODES,
 } from '../src/host/index.js'
 import { extractKeywords, rankByRelevance, topicLabel } from '../src/host/relevance.js'
+import { makeWorkspace } from './fixture.mjs'
 
-/** 本仓库根（08_Knit），里面有真实 Markdown 可当样本。 */
-const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+/** 测试自带样本工作区（临时目录），不依赖仓库/包的目录布局。 */
+const PROJECT_ROOT = makeWorkspace()
 
 /**
  * 造一个假的宿主会话对象。
@@ -135,7 +136,7 @@ test('readDocument: 拒绝绝对路径逃逸', async () => {
 })
 
 test('readDocument: 拒绝非 Markdown', async () => {
-  const r = await readDocument(PROJECT_ROOT, 'knit/package.json')
+  const r = await readDocument(PROJECT_ROOT, 'package.json')
   assert.equal(r.ok, false)
   assert.equal(r.code, ERROR_CODES.markdownOnly)
 })
@@ -275,7 +276,7 @@ test('collectDocs: 同时扫出 Markdown 与媒体，媒体带 kind/size 且不�
   assert.ok(docs.every((d) => typeof d.size === 'number'))
 
   const shot = media.find((m) => m.rel.split('/').pop() === 'screenshot.png')
-  assert.ok(shot, '应扫到 knit/docs/screenshot.png')
+  assert.ok(shot, '应扫到样本里的 screenshot.png')
   assert.equal(shot.kind, 'image')
   assert.ok(shot.size > 0)
   assert.equal(shot.summary, '', '媒体没有正文摘要')

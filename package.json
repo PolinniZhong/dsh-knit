@@ -1,6 +1,6 @@
 {
   "name": "dsh-knit",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Knit — recent Markdown, images and video in the DSH sidebar, sorted by relevance to the current conversation, with inline previews and HTTP Range streaming. Zero model calls.",
   "main": "./src/host/index.js",
