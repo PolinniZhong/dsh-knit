@@ -14,6 +14,7 @@
  * 零模型、零网络出口：只读本地文件与会话日志。
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
@@ -27,6 +28,8 @@ export const ROUTE_PREFIX = '/knit'
 const MAX_DEPTH = 6
 const MAX_DIRS = 500
 const MAX_DOCS = 400
+/** 图片/视频等媒体产物的扫描上限（与文档分开计数，避免截图刷爆文档列表）。 */
+const MAX_MEDIA = 400
 const SCAN_BUDGET_MS = 4000
 const HEAD_BYTES = 16 * 1024
 /** 单次内联预览返回的正文上限（超出截断，面板只做预览不做全量阅读）。 */
@@ -57,8 +60,31 @@ const IMAGE_TYPES = new Map([
   ['svg', 'image/svg+xml'],
 ])
 
+/**
+ * 允许内联渲染的视频类型白名单。
+ * 与 IMAGE_TYPES 同样的口径：只放行表里的扩展名，/raw 不读其它任何文件。
+ */
+const VIDEO_TYPES = new Map([
+  ['mp4', 'video/mp4'],
+  ['m4v', 'video/mp4'],
+  ['webm', 'video/webm'],
+  ['mov', 'video/quicktime'],
+  ['ogv', 'video/ogg'],
+])
+
 /** 单张内联图片的字节上限。 */
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024
+/**
+ * 单个视频的字节上限。
+ * Agent 生成的短视频通常几十 MB；放宽到 256MB，再大就该用系统播放器打开，
+ * 而不是让侧边栏扛着整段字节。
+ */
+const MAX_VIDEO_BYTES = 256 * 1024 * 1024
+
+/** 列表条目类型：文档 / 图片 / 视频。 */
+const KIND_DOC = 'md'
+const KIND_IMAGE = 'image'
+const KIND_VIDEO = 'video'
 
 /**
  * 机器可读的错误码。
@@ -73,6 +99,8 @@ export const ERROR_CODES = {
   notAFile: 'knit/not-a-file',
   imageOnly: 'knit/image-only',
   imageTooLarge: 'knit/image-too-large',
+  mediaOnly: 'knit/media-only',
+  mediaTooLarge: 'knit/media-too-large',
   readFailed: 'knit/read-failed',
   missingRel: 'knit/missing-rel',
   notFoundRoute: 'knit/not-found-route',
@@ -215,19 +243,42 @@ async function readDoc(absPath) {
 }
 
 /**
- * 广度优先扫出工作区里的 .md 文件。
- * @param {string} root - 工作区根（会话 cwd）
- * @returns {Promise<string[]>} 绝对路径列表
+ * 按扩展名判定文件是不是 Knit 要管的产物。
+ * @param {string} name - 文件名
+ * @returns {''|'md'|'image'|'video'} 类型，都不是返回空串
  */
-async function collectMarkdown(root) {
-  const found = []
+function kindOfName(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  if (ext === 'md') return KIND_DOC
+  if (IMAGE_TYPES.has(ext)) return KIND_IMAGE
+  if (VIDEO_TYPES.has(ext)) return KIND_VIDEO
+  return ''
+}
+
+/**
+ * 广度优先扫出工作区里的 Markdown 与媒体文件。
+ *
+ * 一次遍历同时收两类，目录预算与时间预算共享；文档、媒体各自有数量上限，
+ * 截图再多也不会把文档名额挤光。
+ *
+ * @param {string} root - 工作区根（会话 cwd）
+ * @returns {Promise<{md: string[], media: Array<{abs:string, kind:string}>,
+ *                    mdTruncated: boolean, mediaTruncated: boolean}>}
+ */
+async function collectEntries(root) {
+  /** @type {string[]} */
+  const md = []
+  /** @type {Array<{abs:string, kind:string}>} */
+  const media = []
   const deadline = Date.now() + SCAN_BUDGET_MS
   /** @type {Array<{dir:string,depth:number}>} */
   const queue = [{ dir: root, depth: 0 }]
   let visited = 0
 
   while (queue.length > 0) {
-    if (visited >= MAX_DIRS || found.length >= MAX_DOCS || Date.now() > deadline) break
+    if (visited >= MAX_DIRS
+      || (md.length >= MAX_DOCS && media.length >= MAX_MEDIA)
+      || Date.now() > deadline) break
     const { dir, depth } = queue.shift()
     visited += 1
 
@@ -245,41 +296,91 @@ async function collectMarkdown(root) {
         if (SKIP_DIRS.has(entry.name)) continue
         if (entry.name.startsWith('.')) continue
         queue.push({ dir: abs, depth: depth + 1 })
-      } else if (entry.isFile() && /\.md$/i.test(entry.name)) {
-        found.push(abs)
-        if (found.length >= MAX_DOCS) break
+      } else if (entry.isFile()) {
+        const kind = kindOfName(entry.name)
+        if (kind === KIND_DOC) {
+          if (md.length < MAX_DOCS) md.push(abs)
+        } else if (kind === KIND_IMAGE || kind === KIND_VIDEO) {
+          if (media.length < MAX_MEDIA) media.push({ abs, kind })
+        }
       }
     }
   }
 
-  return found
+  return {
+    md,
+    media,
+    mdTruncated: md.length >= MAX_DOCS,
+    mediaTruncated: media.length >= MAX_MEDIA,
+  }
 }
 
 /**
- * 扫出工作区里全部 Markdown 的元信息（按 mtime 倒序）。
+ * 读一个媒体文件的元信息（只 stat，绝不读内容 —— 视频可能上百 MB）。
  * @param {string} root - 工作区根
- * @returns {Promise<{docs: Array<object>, truncated: boolean}>} 文档列表
+ * @param {{abs:string, kind:string}} item - 扫描阶段记下的媒体项
+ * @returns {Promise<object|null>} 列表记录，读失败返回 null
+ */
+async function readMediaMeta(root, { abs, kind }) {
+  let st
+  try {
+    st = await stat(abs)
+  } catch {
+    return null
+  }
+  if (!st.isFile()) return null
+
+  const name = abs.split(sep).pop() || abs
+  return {
+    kind,
+    path: abs,
+    rel: relative(root, abs).split(sep).join('/'),
+    name,
+    // 没有正文可解析，标题就用文件名（去扩展名）。
+    title: name.replace(/\.[^.]+$/, ''),
+    summary: '',
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+    // 媒体只能靠文件名参与相关性匹配（镜头名、截图名里的关键词）。
+    haystack: { title: name.toLowerCase(), summary: '', body: '' },
+  }
+}
+
+/**
+ * 扫出工作区里全部 Markdown 与媒体的元信息（各自按 mtime 倒序）。
+ * @param {string} root - 工作区根
+ * @returns {Promise<{docs: Array<object>, media: Array<object>,
+ *                    truncated: boolean, mediaTruncated: boolean}>}
  */
 export async function collectDocs(root) {
-  const files = await collectMarkdown(root)
+  const found = await collectEntries(root)
   const docs = []
 
-  for (const abs of files) {
+  for (const abs of found.md) {
     const meta = await readDoc(abs)
     if (!meta) continue
     docs.push({
+      kind: KIND_DOC,
       path: abs,
       rel: relative(root, abs).split(sep).join('/'),
       name: abs.split(sep).pop(),
       title: meta.title,
       summary: meta.summary,
+      size: meta.size,
       mtimeMs: meta.mtimeMs,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
-
   docs.sort((a, b) => b.mtimeMs - a.mtimeMs)
-  return { docs, truncated: files.length >= MAX_DOCS }
+
+  const media = []
+  for (const item of found.media) {
+    const meta = await readMediaMeta(root, item)
+    if (meta) media.push(meta)
+  }
+  media.sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+  return { docs, media, truncated: found.mdTruncated, mediaTruncated: found.mediaTruncated }
 }
 
 /* ── 会话事件 → 对话文本 ────────────────────────────── */
@@ -372,11 +473,13 @@ function keywordsFor(session, sessionId) {
  */
 function publicDoc(doc) {
   return {
+    kind: doc.kind || KIND_DOC,
     path: doc.path,
     rel: doc.rel,
     name: doc.name,
     title: doc.title,
     summary: doc.summary,
+    size: typeof doc.size === 'number' ? doc.size : null,
     mtimeMs: doc.mtimeMs,
     score: typeof doc.score === 'number' ? doc.score : null,
   }
@@ -387,11 +490,27 @@ function publicDoc(doc) {
  *
  * @param {string} root - 工作区根
  * @param {number} limit - 最多返回多少条
- * @param {{session?: object, sessionId?: string, sort?: string}} options - 排序上下文
+ * @param {{session?: object, sessionId?: string, sort?: string, kind?: string}} options -
+ *   排序上下文；`kind` 为 `doc`（默认，仅 Markdown）、`media`（仅图片/视频）或 `all`
  * @returns {Promise<object>} 给浏览器的载荷
  */
 export async function scan(root, limit, options = {}) {
-  const { docs, truncated } = await collectDocs(root)
+  const collected = await collectDocs(root)
+
+  // 默认 doc：旧版客户端 / 悬停浮层不带 kind，行为与「只列 Markdown」时完全一致。
+  const kind = options.kind === 'all' || options.kind === 'media' ? options.kind : 'doc'
+  let pool
+  let truncated
+  if (kind === 'media') {
+    pool = collected.media
+    truncated = collected.mediaTruncated
+  } else if (kind === 'all') {
+    pool = collected.docs.concat(collected.media).sort((a, b) => b.mtimeMs - a.mtimeMs)
+    truncated = collected.truncated || collected.mediaTruncated
+  } else {
+    pool = collected.docs
+    truncated = collected.truncated
+  }
 
   const wantRelevance = options.sort === 'relevance'
   const sessionId = options.sessionId || ''
@@ -405,12 +524,13 @@ export async function scan(root, limit, options = {}) {
   }
 
   const ordered = mode === 'relevance'
-    ? rankByRelevance(docs, keywords, Date.now()).docs
-    : docs.map((doc) => ({ ...doc, score: null }))
+    ? rankByRelevance(pool, keywords, Date.now()).docs
+    : pool.map((doc) => ({ ...doc, score: null }))
 
   return {
     ok: true,
     root,
+    kind,
     total: ordered.length,
     truncated,
     sessionId,
@@ -462,16 +582,18 @@ export async function readDocument(root, rel) {
 }
 
 /**
- * 读一张内联图片的字节，供预览里的相对路径图片渲染。
+ * 解析一个媒体（图片/视频）路径：越界防护 + 扩展名白名单 + 类型与大小校验。
  *
- * 与 `readDocument` 同样的越界防护，再叠一层扩展名白名单 —— 这是按路径读文件的接口，
- * 不设限就等于开了一个读任意文件的后门。
+ * 这是按路径读文件的接口，不设限就等于开了读任意文件的后门：路径必须落在工作区内，
+ * 扩展名必须在图片/视频白名单里，视频还有单独的大小上限。
+ *
+ * 只 stat、不读字节 —— 视频可能上百 MB，字节交给流式接口按需读取。
  *
  * @param {string} root - 工作区根
  * @param {string} rel - 工作区相对路径
- * @returns {Promise<object>} 成功时带 `type` 与 `bytes`
+ * @returns {Promise<object>} 成功时带 `{ abs, kind, type, size }`，否则带错误码
  */
-export async function readImage(root, rel) {
+export async function mediaInfo(root, rel) {
   const base = resolve(root)
   const abs = resolve(base, rel)
   if (abs !== base && !abs.startsWith(base + sep)) {
@@ -479,8 +601,13 @@ export async function readImage(root, rel) {
   }
 
   const ext = (abs.split('.').pop() || '').toLowerCase()
-  const type = IMAGE_TYPES.get(ext)
-  if (!type) return { ok: false, code: ERROR_CODES.imageOnly }
+  let kind = KIND_IMAGE
+  let type = IMAGE_TYPES.get(ext)
+  if (!type) {
+    kind = KIND_VIDEO
+    type = VIDEO_TYPES.get(ext)
+  }
+  if (!type) return { ok: false, code: ERROR_CODES.mediaOnly }
 
   let st
   try {
@@ -489,14 +616,47 @@ export async function readImage(root, rel) {
     return { ok: false, code: ERROR_CODES.notFound }
   }
   if (!st.isFile()) return { ok: false, code: ERROR_CODES.notAFile }
-  if (st.size > MAX_IMAGE_BYTES) return { ok: false, code: ERROR_CODES.imageTooLarge }
-
-  try {
-    const bytes = await readFile(abs)
-    return { ok: true, type, bytes }
-  } catch {
-    return { ok: false, code: ERROR_CODES.readFailed }
+  if (kind === KIND_IMAGE && st.size > MAX_IMAGE_BYTES) {
+    return { ok: false, code: ERROR_CODES.imageTooLarge }
   }
+  if (kind === KIND_VIDEO && st.size > MAX_VIDEO_BYTES) {
+    return { ok: false, code: ERROR_CODES.mediaTooLarge }
+  }
+
+  return { ok: true, abs, kind, type, size: st.size }
+}
+
+/**
+ * 解析 HTTP Range 头（只支持 bytes 的单区间，覆盖 `<video>` 首帧与拖动播放的请求形态）。
+ *
+ * 解析不了（无 Range、多区间、语法怪异）一律返回 null —— 调用方回退成 200 整文件，
+ * 而不是因为一个边角 Range 把播放掐死。
+ *
+ * @param {string|undefined} header - Range 头原值
+ * @param {number} size - 文件总字节
+ * @returns {{start:number,end:number}|null} 闭区间字节范围；null 表示返回整个文件
+ */
+export function parseRange(header, size) {
+  if (!header || size <= 0) return null
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim())
+  if (!m) return null
+  const startRaw = m[1]
+  const endRaw = m[2]
+  if (startRaw === '' && endRaw === '') return null
+
+  // bytes=-N：最后 N 个字节
+  if (startRaw === '') {
+    const suffix = Number(endRaw)
+    if (!Number.isInteger(suffix) || suffix <= 0) return null
+    return { start: Math.max(0, size - suffix), end: size - 1 }
+  }
+
+  const start = Number(startRaw)
+  if (!Number.isInteger(start) || start < 0 || start >= size) return null
+  let end = endRaw === '' ? size - 1 : Number(endRaw)
+  if (!Number.isInteger(end) || end < start) end = size - 1
+  end = Math.min(end, size - 1)
+  return { start, end }
 }
 
 /**
@@ -561,25 +721,46 @@ function sendJson(res, status, body) {
 }
 
 /**
- * 写一个二进制响应（内联图片用）。
+ * 流式回一个媒体文件（图片/视频），支持 HTTP Range（206 Partial Content）。
  *
- * 安全头是刻意的：`nosniff` 防止浏览器把非图片当图片猜类型；
- * `default-src 'none'` 让 SVG 里的脚本、外链一并失效 —— 即使它被直接打开也跑不起来。
+ * 视频首帧与拖动播放都依赖 Range：一次性把上百 MB 读进内存再返回既慢又占内存；
+ * createReadStream 按区间读，客户端断开就销毁流。安全头与原图片接口一致：
+ * nosniff 防类型嗅探，default-src 'none' + sandbox 让 SVG 脚本/外链失效。
  *
+ * @param {import('node:http').IncomingMessage} req - 请求对象
  * @param {import('node:http').ServerResponse} res - 响应对象
- * @param {string} type - Content-Type
- * @param {Buffer} bytes - 文件字节
+ * @param {{abs:string, type:string, size:number}} info - mediaInfo 的成功结果
  * @returns {void}
  */
-function sendBytes(res, type, bytes) {
-  res.writeHead(200, {
-    'content-type': type,
-    'content-length': bytes.length,
+function sendMedia(req, res, info) {
+  const part = parseRange(req.headers.range, info.size)
+  /** @type {Record<string, string|number>} */
+  const headers = {
+    'content-type': info.type,
+    'accept-ranges': 'bytes',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; sandbox",
+  }
+
+  let stream
+  if (part) {
+    headers['content-range'] = `bytes ${part.start}-${part.end}/${info.size}`
+    headers['content-length'] = part.end - part.start + 1
+    res.writeHead(206, headers)
+    stream = createReadStream(info.abs, { start: part.start, end: part.end })
+  } else {
+    headers['content-length'] = info.size
+    res.writeHead(200, headers)
+    stream = createReadStream(info.abs)
+  }
+
+  stream.on('error', () => {
+    try { stream.destroy() } catch { /* 已关闭 */ }
+    try { res.destroy() } catch { /* 已关闭 */ }
   })
-  res.end(bytes)
+  req.on('close', () => { try { stream.destroy() } catch { /* 已关闭 */ } })
+  stream.pipe(res)
 }
 
 /**
@@ -607,7 +788,11 @@ export function apply(ctx) {
         if (url.pathname === `${ROUTE_PREFIX}/api/recent`) {
           const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100)
           const sort = url.searchParams.get('sort') === 'relevance' ? 'relevance' : 'time'
-          const payload = await scan(root, limit, { session: sessionOf(webCtx, sessionId), sessionId, sort })
+          const kindParam = url.searchParams.get('kind')
+          const kind = kindParam === 'all' || kindParam === 'media' ? kindParam : 'doc'
+          const payload = await scan(root, limit, {
+            session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
+          })
           sendJson(res, 200, payload)
           return
         }
@@ -629,12 +814,12 @@ export function apply(ctx) {
             sendJson(res, 400, { ok: false, code: ERROR_CODES.missingRel })
             return
           }
-          const image = await readImage(root, rel)
-          if (!image.ok) {
-            sendJson(res, 404, { ok: false, code: image.code })
+          const media = await mediaInfo(root, rel)
+          if (!media.ok) {
+            sendJson(res, 404, { ok: false, code: media.code })
             return
           }
-          sendBytes(res, image.type, image.bytes)
+          sendMedia(req, res, media)
           return
         }
 

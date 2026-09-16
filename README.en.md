@@ -12,7 +12,7 @@ inline preview. Note the top line — **before a session has any conversation to
 back to newest-first and states its basis instead of pretending to rank.** Send a message and that
 line switches to what you're currently talking about.*
 
-Scans the whole project folder · Order follows the conversation · No model calls, no network
+Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network
 
 ```sh
 dsh plugin --profile web add dsh-knit
@@ -96,9 +96,15 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
+| One-click switch between **Docs / Images & video / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline | ✅ |
+| Images & video: square thumbnail grid — **at least 3 columns, more only as the pane gets wider**; cells start at 64px and the baseline is **8 per screen**; past 8 nothing is hidden, the whole grid scales down proportionally; videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
+| Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
+| The **All** view splits into **two stacked sections**: docs (max 4, with "View all →" when truncated) and images & video (**never truncated**, count only) | ✅ |
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
 | Double-click opens in a new tab | ✅ |
 | Filter box over title / summary / path | ✅ |
+| **Click the workspace path** to open the project folder in your file manager | ✅ |
+| **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout) | ✅ |
 | Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse | ✅ |
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
@@ -111,13 +117,15 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 
 ## What it reads, and what it doesn't
 
-- Reads only `.md` files **inside the current session workspace** (anything resolving outside is rejected)
+- Scans `.md`, images and video **inside the current session workspace** (anything resolving
+  outside is rejected); for media it reads metadata only, never the pixels
 - Reads only **the current session's** conversation events (used for ranking)
-- **Makes no outbound network requests**: the client has exactly two `fetch` calls, both to
+- **Makes no outbound network requests**: the client's `fetch` calls all point to
   the plugin's own same-origin routes
 - **No install-time scripts** (no `install` / `postinstall`)
 - **Zero dependencies** — nothing to build, no build-authorisation prompt
-- The file-reading route only allows an **image-extension allowlist**, and responds with
+- The file-reading route only allows an **image/video-extension allowlist** (images ≤ 12MB,
+  video ≤ 256MB), serves video over HTTP Range, and responds with
   `nosniff` plus `default-src 'none'; sandbox`
 
 The relevance figure only affects ordering — it is **never displayed and never sent anywhere**.
@@ -133,7 +141,10 @@ The relevance figure only affects ordering — it is **never displayed and never
 - **The right sidebar's default page becomes the guide**: DSH's rule is "if there's exactly one
   guide entry, open it directly"; the built-in Files entry takes that slot, so expanding the
   sidebar shows the guide first and Knit needs one more click on its pill
-- **Markdown only**: formats other than `.md` are not listed
+- **Media is limited to common formats and sizes**: images `png/jpg/jpeg/gif/webp/avif/bmp/ico/svg`,
+  video `mp4/m4v/webm/mov/ogv`; images ≤ 12MB and video ≤ 256MB or they are not listed
+- **Media matches relevance by filename only**: no visual/audio content is parsed — give
+  screenshots and recordings searchable names
 - **Right-sidebar state is memory-only**: a refresh or a new session collapses it again
 
 ---
@@ -144,7 +155,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 105 tests, zero dependencies, no npm install needed
+npm test          # 162 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -164,7 +175,7 @@ knit/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw
 │   ├── host/relevance.js # the relevance engine (pure functions)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 105 tests
+└── test/                 # 162 tests
 ```
 
 Details and trade-offs live in the source comments; see [CONTRIBUTING.md](CONTRIBUTING.md)

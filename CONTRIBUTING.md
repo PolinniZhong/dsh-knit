@@ -7,7 +7,7 @@
 ```sh
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
-npm test                    # 105 项，零依赖，不需要 npm install
+npm test                    # 162 项，零依赖，不需要 npm install
 ```
 
 **没有构建步骤，也没有依赖。** 客户端半边是手写的 `window.__ModuleLoader__.load({...})`，

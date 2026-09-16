@@ -6,12 +6,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   parseMarkdown,
   scan,
   readDocument,
   collectDocs,
+  mediaInfo,
+  parseRange,
   ERROR_CODES,
 } from '../src/host/index.js'
 import { extractKeywords, rankByRelevance, topicLabel } from '../src/host/relevance.js'
@@ -246,4 +251,136 @@ test('scan: limit 生效', async () => {
   const r = await scan(PROJECT_ROOT, 2, { sessionId: 's', sort: 'time' })
   assert.ok(r.docs.length <= 2)
   assert.ok(r.total >= r.docs.length)
+})
+
+/* ── 图片与视频：扫描、类型过滤、Range、安全边界 ──────── */
+
+/** 建一个临时工作区并写入若干文件，跑完自动清理。 */
+async function withTempFiles(files, fn) {
+  const dir = await mkdtemp(join(tmpdir(), 'knit-media-'))
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(join(dir, name), content)
+    }
+    await fn(dir)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+test('collectDocs: 同时扫出 Markdown 与媒体，媒体带 kind/size 且不读正文', async () => {
+  const { docs, media } = await collectDocs(PROJECT_ROOT)
+  assert.ok(docs.length > 0)
+  assert.ok(docs.every((d) => d.kind === 'md'), '文档池 kind 全为 md')
+  assert.ok(docs.every((d) => typeof d.size === 'number'))
+
+  const shot = media.find((m) => m.rel.split('/').pop() === 'screenshot.png')
+  assert.ok(shot, '应扫到 knit/docs/screenshot.png')
+  assert.equal(shot.kind, 'image')
+  assert.ok(shot.size > 0)
+  assert.equal(shot.summary, '', '媒体没有正文摘要')
+  assert.equal(shot.haystack.body, '')
+  assert.match(shot.haystack.title, /screenshot\.png/)
+})
+
+test('scan: 默认（doc）只回 Markdown 并回显 kind=doc', async () => {
+  const r = await scan(PROJECT_ROOT, 400, { sessionId: 's', sort: 'time' })
+  assert.equal(r.kind, 'doc')
+  assert.ok(r.docs.length > 0)
+  assert.ok(r.docs.every((d) => d.kind === 'md'))
+})
+
+test('scan: kind=media 只回图片/视频，公开载荷不带 haystack', async () => {
+  const r = await scan(PROJECT_ROOT, 400, { sessionId: 's', sort: 'time', kind: 'media' })
+  assert.equal(r.kind, 'media')
+  assert.ok(r.docs.some((d) => d.name === 'screenshot.png'))
+  assert.ok(r.docs.every((d) => d.kind === 'image' || d.kind === 'video'))
+  assert.ok(r.docs.every((d) => !('haystack' in d)), '媒体公开载荷也不得泄漏 haystack')
+})
+
+test('scan: kind=all 文档与媒体混排，并整体按 mtime 倒序', async () => {
+  const r = await scan(PROJECT_ROOT, 400, { sessionId: 's', sort: 'time', kind: 'all' })
+  assert.equal(r.kind, 'all')
+  assert.ok(r.docs.some((d) => d.kind === 'md'))
+  assert.ok(r.docs.some((d) => d.kind === 'image'))
+  const mt = r.docs.map((d) => d.mtimeMs)
+  assert.ok(mt.every((v, i) => i === 0 || mt[i - 1] >= v), '应整体按 mtime 倒序')
+})
+
+test('scan: 非法 kind 老实回落 doc', async () => {
+  const r = await scan(PROJECT_ROOT, 50, { sessionId: 's', sort: 'time', kind: 'wat' })
+  assert.equal(r.kind, 'doc')
+  assert.ok(r.docs.every((d) => d.kind === 'md'))
+})
+
+test('parseRange: 无 Range 头或空文件回 null（交给整文件响应）', () => {
+  assert.equal(parseRange(undefined, 1000), null)
+  assert.equal(parseRange('', 1000), null)
+  assert.equal(parseRange('bytes=0-99', 0), null)
+})
+
+test('parseRange: 解析起止区间与开放结尾', () => {
+  assert.deepEqual(parseRange('bytes=0-99', 1000), { start: 0, end: 99 })
+  assert.deepEqual(parseRange('bytes=0-', 1000), { start: 0, end: 999 })
+  assert.deepEqual(parseRange('bytes=500-', 1000), { start: 500, end: 999 })
+})
+
+test('parseRange: bytes=-N 取最后 N 字节，超过总长则从 0 开始', () => {
+  assert.deepEqual(parseRange('bytes=-500', 1000), { start: 500, end: 999 })
+  assert.deepEqual(parseRange('bytes=-2000', 1000), { start: 0, end: 999 })
+})
+
+test('parseRange: end 越界截断、end 小于 start 回落整段、start 越界拒绝', () => {
+  assert.deepEqual(parseRange('bytes=0-99999', 1000), { start: 0, end: 999 })
+  assert.deepEqual(parseRange('bytes=500-100', 1000), { start: 500, end: 999 })
+  assert.equal(parseRange('bytes=1000-', 1000), null)
+})
+
+test('parseRange: 多区间与怪异语法一律回 null', () => {
+  assert.equal(parseRange('bytes=0-9,20-29', 1000), null)
+  assert.equal(parseRange('bytes=-', 1000), null)
+  assert.equal(parseRange('items=0-9', 1000), null)
+})
+
+test('mediaInfo: 放行白名单图片并给出类型与大小', async () => {
+  await withTempFiles({ 'shot.png': Buffer.from([0x89, 0x50, 0x4e, 0x47]) }, async (dir) => {
+    const r = await mediaInfo(dir, 'shot.png')
+    assert.equal(r.ok, true)
+    assert.equal(r.kind, 'image')
+    assert.equal(r.type, 'image/png')
+    assert.equal(r.size, 4)
+  })
+})
+
+test('mediaInfo: 放行视频扩展名并判为 video', async () => {
+  await withTempFiles({ 'clip.mp4': Buffer.from([0, 0, 0, 20]) }, async (dir) => {
+    const r = await mediaInfo(dir, 'clip.mp4')
+    assert.equal(r.ok, true)
+    assert.equal(r.kind, 'video')
+    assert.equal(r.type, 'video/mp4')
+  })
+})
+
+test('mediaInfo: 拒绝非白名单扩展名（只准图片/视频）', async () => {
+  await withTempFiles({ 'secret.txt': 'x' }, async (dir) => {
+    const r = await mediaInfo(dir, 'secret.txt')
+    assert.equal(r.ok, false)
+    assert.equal(r.code, ERROR_CODES.mediaOnly)
+  })
+})
+
+test('mediaInfo: 拒绝目录穿越', async () => {
+  await withTempFiles({ 'a.png': Buffer.from([1]) }, async (dir) => {
+    const r = await mediaInfo(dir, '../../../../etc/passwd')
+    assert.equal(r.ok, false)
+    assert.equal(r.code, ERROR_CODES.outsideWorkspace)
+  })
+})
+
+test('mediaInfo: 文件不存在回 notFound', async () => {
+  await withTempFiles({ 'a.png': Buffer.from([1]) }, async (dir) => {
+    const r = await mediaInfo(dir, 'missing.png')
+    assert.equal(r.ok, false)
+    assert.equal(r.code, ERROR_CODES.notFound)
+  })
 })

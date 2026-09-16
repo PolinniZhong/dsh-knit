@@ -59,8 +59,9 @@ export function loadClientModule(options = {}) {
       "module.exports.inject = ['slots', 'locale']",
       'module.exports.__test = { KnitBody, OfficialTabBody, BetterSidebarTabBody, '
         + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, '
-        + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, '
-        + 'MIN_RATIO, MAX_RATIO }\n'
+        + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, openLocalPath, '
+        + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
+        + 'MIN_RATIO, MAX_RATIO, ALL_DOC_CAP, MEDIA_MAX_ITEMS, MEDIA_MIN_PX, MEDIA_VIEW_ROWS }\n'
         + "    module.exports.inject = ['slots', 'locale']",
     )
 
@@ -100,15 +101,24 @@ export function createHarness() {
     useEffect: (fn) => { pendingEffects.push(fn) },
     // 测试里不做记忆化：每次渲染重算即可，行为与真实 useMemo 等价
     useMemo: (fn) => fn(),
-    // 真实 useRef 跨渲染稳定；这里每次渲染新建，但被测代码只读 .current（测试环境无 DOM 时为 null）
-    useRef: (init) => ({ current: init === undefined ? null : init }),
+    // 真实 useRef 跨渲染稳定（与 useState 共用槽位空间，同 React）
+    useRef(init) {
+      const i = hookIdx++
+      if (!(i in hookStates)) hookStates[i] = { current: init === undefined ? null : init }
+      return hookStates[i]
+    },
     // 照抄 React.memo 的真实形态：返回对象而不是函数
     memo: (fn) => ({ $$typeof: Symbol.for('react.memo'), type: fn, compare: null }),
   }
 
   globalThis.__knitReact = React
-  globalThis.setTimeout = () => 0
-  globalThis.clearTimeout = () => {}
+
+  // 可控定时器：默认什么也不做（否则轮询会拖住进程），
+  // 需要时用 tick() 显式跑一轮。
+  let timers = new Map()
+  let timerSeq = 0
+  globalThis.setTimeout = (fn) => { const id = ++timerSeq; timers.set(id, fn); return id }
+  globalThis.clearTimeout = (id) => { timers.delete(id) }
 
   return {
     /** 重置 hook 槽位，供每个用例独立开始。 */
@@ -138,6 +148,20 @@ export function createHarness() {
       }
       return walk(element)
     },
+    /**
+     * 跑一轮当前挂起的定时器（快照后清空，新排的不算）。
+     *
+     * 用来测「悬停延迟显示」这类依赖 setTimeout 的行为。
+     * @returns {number} 执行了几个
+     */
+    tick() {
+      const pending = [...timers.values()]
+      timers.clear()
+      pending.forEach((fn) => fn())
+      return pending.length
+    },
+    /** 当前挂起几个定时器。 */
+    pendingTimers() { return timers.size },
     /** 跑一遍已登记的 useEffect（并给微任务一个 tick）。 */
     async flush() {
       const fx = pendingEffects.slice()
