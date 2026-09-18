@@ -3,9 +3,7 @@
 > Agent 一天产出 20 篇文档，你找不到刚才那篇。
 > Knit 把它们放到对话旁边 —— 你正在聊什么，相关的那篇就在最上面。
 
-<img src="https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png"
-     alt="Knit 面板真机截图：右侧栏列出工作区里的文档，下方就地展开 Markdown 预览"
-     width="880">
+![Knit 面板真机截图：右侧栏列出工作区里的文档，下方就地展开 Markdown 预览](docs/screenshot.png)
 
 *真机截图（不是原型）：一个含 16 篇文档的工作区，列表 + 就地预览。*
 *顶行会跟着你正在聊什么变；对话内容还不足时它退回按时间排，并如实说明依据。*

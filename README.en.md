@@ -3,9 +3,7 @@
 > Your agent writes 20 documents a day. You can't find the one you just saw.
 > Knit puts them next to the conversation — whatever you're talking about, the relevant doc is on top.
 
-<img src="https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png"
-     alt="Screenshot from a real machine: the Knit sidebar listing the workspace documents, with a Markdown preview expanded in place"
-     width="880">
+![Screenshot from a real machine: the Knit sidebar listing the workspace documents, with a Markdown preview expanded in place](docs/screenshot.png)
 
 *Screenshot from a real machine, not a mock-up: a workspace with 16 documents, the list plus an
 inline preview.*
