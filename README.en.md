@@ -8,9 +8,9 @@
      width="880">
 
 *Screenshot from a real machine, not a mock-up: a workspace with 16 documents, the list plus an
-inline preview. Note the top line — **before a session has any conversation to go on, it falls
-back to newest-first and states its basis instead of pretending to rank.** Send a message and that
-line switches to what you're currently talking about.*
+inline preview.*
+*The top line follows whatever you're talking about; when there isn't enough conversation yet it
+falls back to newest-first and states its basis.*
 
 Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network
 
@@ -85,6 +85,22 @@ Measured on `test/eval/fixture.mjs` (21 cases, both engines on the same corpus):
 That eval runs inside `npm test`, and the baseline is **recomputed each run** from the old
 engine frozen in `test/eval/legacy.mjs` — so "the new engine must be clearly better" is
 verified automatically rather than asserted against a hard-coded number.
+
+**Against counting keywords yourself** (`knit/tools/scale-benchmark.mjs`, N = 20/60/180/540):
+the corpus is built with a real trap — 12 short, focused topic documents, plus a pile of long
+distractors that mention every topic five times without explaining any of them (which is what a
+real project's CHANGELOG looks like). Half the topic documents have descriptive filenames, half
+are opaque.
+
+| Approach | Descriptive filenames | Opaque filenames | MRR vs. scale |
+|---|---|---|---|
+| **Knit (BM25)** | **100%** | **100%** | **1.000 (flat)** |
+| `grep -c` keyword counting | 17% | **0%** | 0.313 → **0.089** |
+| Filenames only | 100% | **0%** | 0.602 |
+
+Three things: **the ranking beats counting keywords yourself** (so having the agent recompute it
+is irrational); **filename matching only works when names describe content**, and Knit is the
+only approach that scores 100% either way; and **self-counting degrades as the corpus grows**.
 
 **About the "sorted by「xxx」" line**: it shows the **span of your own text** that the matched
 terms cover, not the raw candidate tokens. Chinese has no word boundaries, so candidates always

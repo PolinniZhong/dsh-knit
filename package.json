@@ -2,7 +2,7 @@
   "name": "dsh-knit",
   "version": "0.9.0",
   "type": "module",
-  "description": "Knit — recent Markdown, images and video in the DSH sidebar, sorted by relevance to the current conversation, with inline previews and HTTP Range streaming. Zero model calls.",
+  "description": "Find the doc your agent just wrote. Lists the DSH workspace's Markdown, images and video in the sidebar, ranked by relevance to the current conversation, with inline preview. Zero model calls, zero network.",
   "main": "./src/host/index.js",
   "exports": {
     ".": "./src/host/index.js",
