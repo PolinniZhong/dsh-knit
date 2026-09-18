@@ -44,15 +44,26 @@ const SUMMARY_CHARS = 90
 /**
  * 模型面向的描述。**必须短** —— 它会进每一次请求的系统提示词。
  *
- * v0.8 把最后一句换成了「Reports how many exist in total」。起因是**真机验收的实测**：
- * agent 每次调用完 `knit_docs`，都又跑一遍 `find` / `glob` / `grep` 去**交叉验证**
- * —— 它不认为这个结果是完整的。结果里给出总数、描述里说明它数得全，
- * 就是为了消掉这次多余的调用。
+ * v0.8 加过「Reports how many exist in total」，**但真机验证显示没用**：
+ * agent 照样自己 `grep -c` 数一遍关键词重新排名（`Knit_SDD-v0.8` §8.4）。
+ * 原因是它**不认这个排名**，不是怕漏。
+ *
+ * v0.9 换成直接说明**这个排名比它自己数准** —— 依据是 `tools/scale-benchmark.mjs`
+ * 的实测（同一套词、同一个可判定任务、N = 20/60/180/540）：
+ *
+ *   路线          文件名说得清   文件名看不出   MRR 随规模
+ *   Knit BM25     100%          100%         1.000（不变）
+ *   grep -c 计数   17%           0%           0.313 → 0.089
+ *   只看文件名     100%          0%           0.602
+ *
+ * 所以描述要点名两件它自己做不到的事：**稀有词权重**（不是数次数）
+ * 与**不依赖文件名**。最后一句是行为引导 —— 直说「别自己来」。
  */
 const DESCRIPTION = 'List Markdown documents that already exist in this project, '
   + 'ranked by relevance to the current conversation (or to an explicit query). '
-  + 'Reports how many exist in total, so there is no need to glob or find them separately. '
-  + 'Reads the workspace only — it stores nothing and calls no model.'
+  + 'The ranking weighs rare terms above common ones and normalizes document length, '
+  + 'so it beats matching filenames or counting keyword hits — prefer it to doing that yourself. '
+  + 'Reads the workspace only; stores nothing and calls no model.'
 
 /**
  * 参数 schema。与 `defineTool` 的编译产物逐字一致
@@ -169,13 +180,16 @@ export function renderToolText(value) {
   const total = Number.isInteger(value && value.total) ? value.total : docs.length
   if (docs.length === 0) return 'No Markdown documents found in the workspace.'
 
-  // 「共 total 篇，这里是前 docs.length 篇」—— 一部分用来消除「是不是漏了」的疑问
-  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'} in this workspace`
+  // 「共 total 篇」回答「是不是漏了」；「IDF-weighted … not a keyword count or filename match」
+  // 回答「凭什么信这个排名」—— 后者才是 agent 自己再 grep 一遍的真正原因（v0.9）。
+  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
 
   // 退化情形要**如实说明**，与面板那行「对话内容还不足，暂按最新排序」同一个口径
   const head = value.mode === 'time'
     ? `Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified${scope}:`
-    : `Top ${docs.length}${scope}, by relevance to ${value.topic ? `「${value.topic}」` : 'the current conversation'}:`
+    : `Top ${docs.length}${scope} in this workspace, ranked by IDF-weighted relevance to `
+      + `${value.topic ? `「${value.topic}」` : 'the current conversation'} `
+      + '(rare terms weighted, length-normalised — not a keyword count or filename match):'
 
   const lines = docs.map((doc, index) => {
     const summary = oneLine(doc.summary)

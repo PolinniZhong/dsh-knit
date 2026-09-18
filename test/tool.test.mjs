@@ -273,32 +273,35 @@ test('renderToolText: 有序号、rel、标题与单行摘要', () => {
       { rel: 'docs/b.md', title: '乙', summary: '', mtimeMs: 2 },
     ],
   })
-  assert.match(text, /Top 2 of 9 Markdown documents in this workspace, by relevance to 「排序、sidebar」/)
+  assert.match(text, /Top 2 of 9 Markdown documents in this workspace/)
+  assert.match(text, /ranked by IDF-weighted relevance to 「排序、sidebar」/)
   assert.match(text, /1\. docs\/a\.md — 甲/)
   assert.match(text, /第一行 第二行/, '摘要要压成一行')
   assert.match(text, /2\. docs\/b\.md — 乙/)
 })
 
-test('renderToolText: 头部给出「一共多少篇」（v0.8 用来消除交叉验证）', () => {
-  // 真机验收里 agent 每次拿到结果都还要自己 find 一遍 ——
-  // 把总数写在第一行，就是为了让它不必再确认「是不是漏了」
+test('renderToolText: 头部同时回答「漏没错」与「凭什么信这个排名」', () => {
+  // v0.8 只答了前者（`of N`），真机验证显示 agent 照样自己 grep 一遍 ——
+  // 因为它不认这个排名。v0.9 补上后者。
   const relevance = renderToolText({
     mode: 'relevance', topic: 'x', total: 21,
     docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
   })
-  assert.match(relevance, /of 21 Markdown documents in this workspace/)
+  assert.match(relevance, /of 21 Markdown documents in this workspace/, '要回答「一共多少篇」')
+  assert.match(relevance, /not a keyword count or filename match/, '要回答「凭什么信这个排名」')
+  assert.match(relevance, /rare terms weighted/, '要说清权重口径')
 
   const time = renderToolText({
     mode: 'time', topic: '', total: 21,
     docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
   })
-  assert.match(time, /most recently modified of 21 Markdown documents in this workspace/)
+  assert.match(time, /most recently modified of 21 Markdown documents/)
 
   // 没有 total 时回落成返回条数，不写 undefined
   const fallback = renderToolText({
     mode: 'relevance', topic: '', docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
   })
-  assert.match(fallback, /of 1 Markdown document in this workspace/)
+  assert.match(fallback, /of 1 Markdown document/)
   assert.ok(!fallback.includes('undefined'))
 })
 

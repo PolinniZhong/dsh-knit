@@ -64,7 +64,10 @@ const names = ctx.tools.schemas().map((s) => s.name)
 ok('knit_docs 注册进真实注册表', names.includes('knit_docs'), names.join(', ') || '(空)')
 const schema = ctx.tools.schemas().find((s) => s.name === 'knit_docs')
 if (schema) {
-  ok('描述里说明了「数得全」', schema.description.includes('how many exist in total'))
+  // v0.9：描述要同时说清「凭什么信这个排名」与行为引导，两者都有实测支撑
+  // （见 tools/scale-benchmark.mjs 与 Knit_SDD-v0.8 §8.4）
+  ok('描述说明了「比你自己数准」', schema.description.includes('beats matching filenames'))
+  ok('描述点名了行为引导', schema.description.includes('prefer it to doing that yourself'))
   ok('参数只有 query / limit', Object.keys(schema.parameters.properties).join(',') === 'query,limit')
 }
 
