@@ -20,19 +20,28 @@ const PROJECT_ROOT = makeWorkspace()
 
 /**
  * 起一个挂着 Knit 路由的回环 server（伪造 cordis 的 webServer / sessions / effect）。
+ *
+ * ⚠️ `inject` 必须**照抄 cordis 的真实语义**：只有它真的能提供所请求的依赖时才回调。
+ * v0.7 给 `apply` 加了第二个 `ctx.inject(['tools'], …)`，如果这里对所有 deps 都无脑回调，
+ * 那个回调会拿到一个没有 `tools` 的假 ctx —— 那是**替身的谎**，不是代码的 bug
+ * （AGENTS.md §6.1 的教训）。真实的 cordis 在回调前保证依赖可用。
+ *
  * @returns {Promise<{base:string, close:Function}>} 地址根与关闭函数
  */
 async function startKnitServer() {
   let handler = null
+  const provided = {
+    webServer: {
+      register({ handler: h }) { handler = h; return () => {} },
+    },
+    sessions: { get: () => ({ header: { cwd: PROJECT_ROOT } }) },
+    effect(fn) { fn() },
+  }
   apply({
-    inject(_deps, cb) {
-      cb({
-        webServer: {
-          register({ handler: h }) { handler = h; return () => {} },
-        },
-        sessions: { get: () => ({ header: { cwd: PROJECT_ROOT } }) },
-        effect(fn) { fn() },
-      })
+    inject(deps, cb) {
+      // 只提供 webServer / sessions；tools 不存在 → 那条回调不该被调用
+      if (!deps.every((dep) => dep in provided)) return
+      cb(provided)
     },
   })
   assert.ok(handler, 'apply 应注册路由 handler')

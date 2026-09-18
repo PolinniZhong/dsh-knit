@@ -18,6 +18,7 @@ import { createReadStream } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
+import { registerKnitDocsTool } from './tool.js'
 
 export const name = 'dsh-knit'
 
@@ -490,8 +491,10 @@ function publicDoc(doc) {
  *
  * @param {string} root - 工作区根
  * @param {number} limit - 最多返回多少条
- * @param {{session?: object, sessionId?: string, sort?: string, kind?: string}} options -
- *   排序上下文；`kind` 为 `doc`（默认，仅 Markdown）、`media`（仅图片/视频）或 `all`
+ * @param {{session?: object, sessionId?: string, sort?: string, kind?: string, query?: string}} options -
+ *   排序上下文；`kind` 为 `doc`（默认，仅 Markdown）、`media`（仅图片/视频）或 `all`；
+ *   `query` 非空时**用它排序，而不是用当前对话**（v0.7 的 agent 工具走这条路）；
+ *   HTTP 路由不传 `query`，所以 `/knit/api/recent` 的行为逐字不变
  * @returns {Promise<object>} 给浏览器的载荷
  */
 export async function scan(root, limit, options = {}) {
@@ -519,7 +522,13 @@ export async function scan(root, limit, options = {}) {
   let matched = []
 
   if (wantRelevance) {
-    keywords = keywordsFor(options.session, sessionId)
+    // 调用方给了明确的 query（v0.7 的 agent 工具走这条路）：把它当成**一条最新的消息**，
+    // 于是走的是完全相同的抽取与门槛规则，不引入第二条抽取路径。
+    // 不进 convCache —— 那个缓存按 session seq 键控，塞 query 进去会互相污染。
+    const explicitQuery = typeof options.query === 'string' ? options.query.trim() : ''
+    keywords = explicitQuery
+      ? extractKeywords([explicitQuery], 30)
+      : keywordsFor(options.session, sessionId)
     // 没有对话可依据时老实退回时间序，而不是假装排了个序
     mode = keywords.length > 0 ? 'relevance' : 'time'
   }
@@ -843,5 +852,18 @@ export function apply(ctx) {
       console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw`)
       return () => unregister()
     }, 'dsh-knit: host route')
+  })
+
+  // ── v0.7：把同一个排序结果也交给模型 ──────────────────────────────
+  //
+  // 独立的一次 `ctx.inject`，**不是**把 'tools' 加进上面那个数组。
+  // 加进去的话 `tools` 缺席时整个回调都不跑 —— 连面板路由都起不来。
+  // 两条路互不依赖：没有 tools 服务时，浏览器那半边照常工作。
+  ctx.inject(['tools'], (toolCtx) => {
+    toolCtx.effect(
+      () => registerKnitDocsTool(toolCtx, scan),
+      'dsh-knit: knit_docs tool',
+    )
+    console.log(`[${name}] agent tool ready: knit_docs`)
   })
 }

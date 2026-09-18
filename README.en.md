@@ -103,6 +103,39 @@ All of it is string arithmetic — **no embeddings, no model calls**.
 
 ---
 
+## Also for the agent: the `knit_docs` tool
+
+The same ranking that you see in the panel is also exposed to the model.
+
+Once installed, the agent's tool list gains `knit_docs`: it can ask *"which documents in this
+project are most relevant to what we're discussing?"* and get back **relevance-ordered** paths,
+titles and summaries — then open one with its own `read` tool.
+
+**Why it helps**: to cite a document that already exists, an agent can only guess paths or glob
+and `read` them one by one — slow and token-hungry. Knit has **already computed that ranking**
+every refresh; this tool just hands it over.
+
+**Read-only, and it stores nothing**: it reads the files that are already in the project — this is
+not "memory". The difference from memory plugins is that **theirs start empty** (the agent has to
+have saved something first), while Knit has the whole project's history from the moment you install it.
+
+Three details:
+
+- **No relevance score in the result.** It is a *relative* score (something is always 100%, and it
+  may be a different document on the next refresh); shown to a model it reads as absolute confidence.
+  **The order is the relevance** — the same rule the panel follows.
+- **No document bodies.** The agent has its own `read` tool; Knit *finds*, it does not *carry*.
+- **No workspace means an error, never a fallback.** The HTTP route falls back to the process cwd
+  when a session can't be resolved (for older clients that send no session id); the tool has no such
+  baggage — falling back would scan an unrelated project and return *its* documents.
+  Better to fail than to return the wrong thing.
+
+> ⚠️ **The cost, stated plainly**: the tool description goes into the **system prompt of every
+> request**. Installing Knit costs a few extra tokens per session. That is the price of giving the
+> agent the capability.
+
+---
+
 ## Install
 
 ```sh
@@ -126,6 +159,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | | |
 |---|---|
 | **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
+| **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
@@ -144,6 +178,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
 | Zero model calls, zero network egress | ✅ |
+| **A `knit_docs` tool for the agent** — read-only, so the model can find this project's relevant docs itself | ✅ |
 
 > Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
 > the answer; position is relevance.
@@ -155,6 +190,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 - Scans `.md`, images and video **inside the current session workspace** (anything resolving
   outside is rejected); for media it reads metadata only, never the pixels
 - Reads only **the current session's** conversation events (used for ranking)
+- The `knit_docs` tool is **read-only**: it writes no files and persists no index
 - **Makes no outbound network requests**: the client's `fetch` calls all point to
   the plugin's own same-origin routes
 - **No install-time scripts** (no `install` / `postinstall`)
@@ -190,7 +226,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 162 tests, zero dependencies, no npm install needed
+npm test          # 206 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -210,7 +246,7 @@ knit/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 162 tests
+└── test/                 # 206 tests
 ```
 
 Details and trade-offs live in the source comments; see [CONTRIBUTING.md](CONTRIBUTING.md)

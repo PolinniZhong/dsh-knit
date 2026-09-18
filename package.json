@@ -1,6 +1,6 @@
 {
   "name": "dsh-knit",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "Knit — recent Markdown, images and video in the DSH sidebar, sorted by relevance to the current conversation, with inline previews and HTTP Range streaming. Zero model calls.",
   "main": "./src/host/index.js",
@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs"
+    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -53,7 +53,9 @@
     "最近文档",
     "侧边栏",
     "知识管理",
-    "图片视频"
+    "图片视频",
+    "agent-tool",
+    "model-tool"
   ],
   "repository": {
     "type": "git",

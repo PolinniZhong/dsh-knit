@@ -3,6 +3,50 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.0] - 2026-09-18
+
+**把同一份排序也交给模型。** 面板、`/knit/api/*` 响应、客户端**零改动**。
+
+### Added
+
+- **`knit_docs` 工具**（宿主侧，只读）：agent 可以问「这个项目里跟当前话题最相关的
+  文档是哪几篇」，拿到按相关性排序的**工作区相对路径 + 标题 + 摘要**。
+  - 不传 `query` 就用**当前对话**排序；传了就用 `query`（把 query 当成一条最新消息，
+    走完全相同的抽取规则，不引入第二条抽取路径）
+  - 对话不足以判断相关性时**如实返回 `mode: 'time'`** 并在文本里说明，
+    与面板那行「对话内容暂按最新排序」同一个口径
+  - **不返回相关度分数** —— 它是相对分数，给模型看会被当成绝对置信度。
+    顺序即相关度，与面板同一条规矩
+  - **不返回正文** —— agent 有自己的 `read` 工具；Knit 负责发现，不负责搬运
+  - `limit` 默认 5、上限 20；越界回落而不抛错
+- 工具与浏览器那半边是**两次独立的 `ctx.inject`**：没有 `tools` 服务时面板照常工作，
+  没有 `webServer` 时工具照常注册。
+
+### 注意事项（**升级前请读**）
+
+- ⚠️ **工具描述会进每一次请求的系统提示词**。装 Knit 的用户每个会话多占一点 token ——
+  这是「让 agent 有能力」的必要成本，不装作没有。
+- ⚠️ **拿不到会话就报错，不兜底**。HTTP 路由在会话查不到时会兜底到进程 cwd
+  （兼容不带 `sessionId` 的老客户端）；工具**没有这个包袱** ——
+  兜底只会扫到一个不相干的项目并返回它的文档。
+- ⚠️ **宿主半边不热加载，升级后必须重启 DSH**。
+
+### 实现说明
+
+- **没有 import `@deepseek-ai/dsh-tools`，手写 `ToolDefinition`。** 原因：Knit 被
+  `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **之外**，裸 Node 解析不到
+  `@deepseek-ai/*`（实测 `ERR_MODULE_NOT_FOUND`）。手写保持了**零依赖**，
+  且三种目录布局下都能跑。
+  这不是猜：手写的 `parameters` 与 `output.schema` 已与真实的
+  `parameterSchemaSpecToJsonSchema` / `valueSchemaSpecToJsonSchema` 产物**逐字比对通过**，
+  并通过了注册期的 `assertSupportedJsonSchema` 与值校验。
+- `scan()` 新增可选参数 `options.query`。**HTTP 路由不传它**，所以 `/knit/api/recent`
+  的行为逐字不变。
+
+### 测试
+
+**206/206**（新增 20 条工具测试）。
+
 ## [0.6.0] - 2026-09-18
 
 **只改排序质量，不加功能、不改界面。** 面板里唯一会变的是**文档的顺序**，
