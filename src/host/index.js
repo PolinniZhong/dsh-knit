@@ -534,12 +534,15 @@ export async function scan(root, limit, options = {}) {
   }
 
   let ordered
+  let topic = ''
   if (mode === 'relevance') {
     const ranked = rankByRelevance(pool, keywords, Date.now())
     ordered = ranked.docs
-    // `matched` 是**语料里真实存在**的词。候选词里有相当一部分是跨词边界的碎片
-    // （「个插」「件挺」这种），它们一个文档都匹配不上 —— 拿它们当「当前话题」
-    // 会把面板那行显示成乱码，所以 topic 与 keywords 都用 matched。
+    // 话题标签用 `label`（把命中词的**原文区间合并**后的可读结果），不是 `matched`。
+    // 后者是「语料里真实存在的词」，但仍可能是一堆碎片：
+    // 「项目文档」的候选是 `项目文` / `目文档`，直接显示就成了「按「目文档、项目文」排序」。
+    // `keywords` 字段保持语义不变，仍然是那批真实存在的词。
+    topic = topicLabel(ranked.label)
     matched = ranked.matched
   } else {
     ordered = pool.map((doc) => ({ ...doc, score: null }))
@@ -553,7 +556,7 @@ export async function scan(root, limit, options = {}) {
     truncated,
     sessionId,
     mode,
-    topic: mode === 'relevance' ? topicLabel(matched) : '',
+    topic,
     keywords: mode === 'relevance' ? matched.slice(0, 8) : [],
     docs: ordered.slice(0, limit).map(publicDoc),
   }

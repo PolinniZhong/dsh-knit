@@ -44,12 +44,15 @@ const SUMMARY_CHARS = 90
 /**
  * 模型面向的描述。**必须短** —— 它会进每一次请求的系统提示词。
  *
- * 最后一句是行为引导：直接命中「别一个个 read 试过去」这个真实问题。
+ * v0.8 把最后一句换成了「Reports how many exist in total」。起因是**真机验收的实测**：
+ * agent 每次调用完 `knit_docs`，都又跑一遍 `find` / `glob` / `grep` 去**交叉验证**
+ * —— 它不认为这个结果是完整的。结果里给出总数、描述里说明它数得全，
+ * 就是为了消掉这次多余的调用。
  */
 const DESCRIPTION = 'List Markdown documents that already exist in this project, '
   + 'ranked by relevance to the current conversation (or to an explicit query). '
-  + 'Scans the workspace only — it stores nothing and calls no model. '
-  + 'Use it to locate project documents instead of guessing paths and reading files one by one.'
+  + 'Reports how many exist in total, so there is no need to glob or find them separately. '
+  + 'Reads the workspace only — it stores nothing and calls no model.'
 
 /**
  * 参数 schema。与 `defineTool` 的编译产物逐字一致
@@ -81,6 +84,10 @@ const OUTPUT_SCHEMA = {
   properties: {
     mode: { type: 'string', enum: ['relevance', 'time'] },
     topic: { type: 'string' },
+    // 工作区里**一共有多少篇**（不是返回了几条）。
+    // 给这个数是为了让模型知道结果不是「随便挑的几条」，不必再自己 glob 一遍
+    // 做交叉验证 —— v0.8，依据是真机验收里观察到的行为。
+    total: { type: 'integer' },
     docs: {
       type: 'array',
       items: {
@@ -96,7 +103,7 @@ const OUTPUT_SCHEMA = {
       },
     },
   },
-  required: ['mode', 'topic', 'docs'],
+  required: ['mode', 'topic', 'total', 'docs'],
 }
 
 /**
@@ -151,17 +158,24 @@ function oneLine(text) {
  * （`todo_write`、`present`）也都是英文硬编码。这不是 i18n 违约：
  * AGENTS.md §4.5 那条规则管的是**用户可见**文案，而这里由模型消费。
  *
- * @param {{mode: string, topic: string, docs: Array<object>}} value - 工具结果
+ * **头部要说清「一共多少篇」**（v0.8）：真机验收里 agent 每次拿到结果都还要
+ * 自己 `find` 一遍来确认没漏 —— 把总数写在第一行，是为了消掉这次多余的调用。
+ *
+ * @param {{mode: string, topic: string, total?: number, docs: Array<object>}} value - 工具结果
  * @returns {string} 文本
  */
 export function renderToolText(value) {
   const docs = value && Array.isArray(value.docs) ? value.docs : []
+  const total = Number.isInteger(value && value.total) ? value.total : docs.length
   if (docs.length === 0) return 'No Markdown documents found in the workspace.'
+
+  // 「共 total 篇，这里是前 docs.length 篇」—— 一部分用来消除「是不是漏了」的疑问
+  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'} in this workspace`
 
   // 退化情形要**如实说明**，与面板那行「对话内容还不足，暂按最新排序」同一个口径
   const head = value.mode === 'time'
-    ? `Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified:`
-    : `Top ${docs.length} by relevance to ${value.topic ? `「${value.topic}」` : 'the current conversation'}:`
+    ? `Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified${scope}:`
+    : `Top ${docs.length}${scope}, by relevance to ${value.topic ? `「${value.topic}」` : 'the current conversation'}:`
 
   const lines = docs.map((doc, index) => {
     const summary = oneLine(doc.summary)
@@ -210,6 +224,9 @@ export function knitDocsDefinition(scan) {
       return {
         mode: payload.mode === 'relevance' ? 'relevance' : 'time',
         topic: typeof payload.topic === 'string' ? payload.topic : '',
+        // `scan()` 的 total 是**全量池子**的条数（在 limit 切片之前），
+        // 正好是这里要的「工作区一共有多少篇」。
+        total: Number.isInteger(payload.total) ? payload.total : 0,
         docs: (payload.docs || []).map((doc) => ({
           rel: String(doc.rel || ''),
           title: String(doc.title || ''),

@@ -144,8 +144,9 @@ test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致'
   assert.equal(definition.parameters.required, undefined)
   // 输出是严格的：根与 items 都 additionalProperties: false，且字段必填
   assert.equal(definition.output.schema.additionalProperties, false)
-  assert.deepEqual(definition.output.schema.required, ['mode', 'topic', 'docs'])
+  assert.deepEqual(definition.output.schema.required, ['mode', 'topic', 'total', 'docs'])
   assert.deepEqual(definition.output.schema.properties.mode.enum, ['relevance', 'time'])
+  assert.equal(definition.output.schema.properties.total.type, 'integer')
   assert.equal(definition.output.schema.properties.docs.items.additionalProperties, false)
   assert.deepEqual(
     definition.output.schema.properties.docs.items.required,
@@ -266,15 +267,48 @@ test('renderToolText: 有序号、rel、标题与单行摘要', () => {
   const text = renderToolText({
     mode: 'relevance',
     topic: '排序、sidebar',
+    total: 9,
     docs: [
       { rel: 'docs/a.md', title: '甲', summary: '第一行\n第二行', mtimeMs: 1 },
       { rel: 'docs/b.md', title: '乙', summary: '', mtimeMs: 2 },
     ],
   })
-  assert.match(text, /Top 2 by relevance to 「排序、sidebar」/)
+  assert.match(text, /Top 2 of 9 Markdown documents in this workspace, by relevance to 「排序、sidebar」/)
   assert.match(text, /1\. docs\/a\.md — 甲/)
   assert.match(text, /第一行 第二行/, '摘要要压成一行')
   assert.match(text, /2\. docs\/b\.md — 乙/)
+})
+
+test('renderToolText: 头部给出「一共多少篇」（v0.8 用来消除交叉验证）', () => {
+  // 真机验收里 agent 每次拿到结果都还要自己 find 一遍 ——
+  // 把总数写在第一行，就是为了让它不必再确认「是不是漏了」
+  const relevance = renderToolText({
+    mode: 'relevance', topic: 'x', total: 21,
+    docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
+  })
+  assert.match(relevance, /of 21 Markdown documents in this workspace/)
+
+  const time = renderToolText({
+    mode: 'time', topic: '', total: 21,
+    docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
+  })
+  assert.match(time, /most recently modified of 21 Markdown documents in this workspace/)
+
+  // 没有 total 时回落成返回条数，不写 undefined
+  const fallback = renderToolText({
+    mode: 'relevance', topic: '', docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
+  })
+  assert.match(fallback, /of 1 Markdown document in this workspace/)
+  assert.ok(!fallback.includes('undefined'))
+})
+
+test('renderToolText: 只有一篇时用单数', () => {
+  const text = renderToolText({
+    mode: 'relevance', topic: '', total: 1,
+    docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
+  })
+  assert.match(text, /of 1 Markdown document in this workspace/)
+  assert.ok(!text.includes('documents'))
 })
 
 test('renderToolText: 超长摘要被截断', () => {

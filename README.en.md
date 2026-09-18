@@ -86,9 +86,11 @@ That eval runs inside `npm test`, and the baseline is **recomputed each run** fr
 engine frozen in `test/eval/legacy.mjs` — so "the new engine must be clearly better" is
 verified automatically rather than asserted against a hard-coded number.
 
-**About the "sorted by「xxx」" line**: it shows terms that **actually exist in the corpus**.
-Some candidates are fragments that match no document at all, and showing those as the topic
-renders as gibberish.
+**About the "sorted by「xxx」" line**: it shows the **span of your own text** that the matched
+terms cover, not the raw candidate tokens. Chinese has no word boundaries, so candidates always
+include fragments that straddle two words (「项目文档」 yields `项目文` / `目文档`), and showing
+those renders as gibberish — merging their spans and slicing the original text recovers `项目文档`.
+The label is **your own wording**, so its casing is preserved (type `BM25`, see `BM25`).
 
 All of it is string arithmetic — **no embeddings, no model calls**.
 
@@ -207,8 +209,11 @@ The relevance figure only affects ordering — it is **never displayed and never
 
 - **Short conversations degrade the ranking**: one or two messages give too few keywords, so it
   falls back to modification time and says so in the panel
-- **Chinese segmentation is n-gram approximation**: no tokenizer dependency was added; good
-  enough in practice, not linguistically precise
+- **Chinese segmentation is n-gram approximation**: no tokenizer dependency was added. Fragments
+  that straddle two words are dropped when they start/end on a function character, and the
+  remaining hits are **merged by their spans** back into real words — but an **isolated fragment**
+  (like 「视频上」, with nothing overlapping to merge with) can still appear in the
+  "sorted by「xxx」" line
 - **The right sidebar's default page becomes the guide**: DSH's rule is "if there's exactly one
   guide entry, open it directly"; the built-in Files entry takes that slot, so expanding the
   sidebar shows the guide first and Knit needs one more click on its pill
@@ -226,7 +231,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 206 tests, zero dependencies, no npm install needed
+npm test          # 215 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -246,7 +251,7 @@ knit/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 206 tests
+└── test/                 # 215 tests
 ```
 
 Details and trade-offs live in the source comments; see [CONTRIBUTING.md](CONTRIBUTING.md)

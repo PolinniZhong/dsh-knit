@@ -103,16 +103,32 @@ const CN_STOP_BIGRAMS = new Set([
  * 那些是常见**构词成分**（上传、上下文、中间、下游…），拿它们做首尾判定会误杀真词。
  * 实测：窄集与宽集在评测集上表现完全相同（top-1 95.2% / MRR 0.976），
  * 但窄集保住了上面那些词。
+ *
+ * ⚠️ **「对」在 v0.8 被移出这个集合。** 它是介词，但也是**构词成分**：
+ * 对比、对话、对象、对齐 都是真词，判在首字会把它们全部误杀
+ * （实测：「对比度」被切成了碎片「比度」）。
+ * 移出之后评测四项指标**一个都没变**（top-1 95.2% / MRR 0.976 / 陷阱 0）。
+ * 移除是免费的，所以做了；**再往下裁就没有额外收益**（试过 以/从/到/及/或/为/之/于/并/等/着/过/来/去，
+ * 标签一个都没变好），所以停在这里，不再扩大。
  */
 const CN_EDGE_STOP = new Set([
   '的', '了', '是', '在', '和', '与', '就', '都', '也', '很', '把', '被', '让', '给',
-  '从', '到', '对', '为', '以', '及', '或', '但', '而', '之', '于', '并', '等', '着',
+  '从', '到', '为', '以', '及', '或', '但', '而', '之', '于', '并', '等', '着',
   '过', '呢', '吗', '吧', '啊', '哦', '嗯', '呀', '么', '些', '嘛', '啦',
   '我', '你', '他', '她', '它', '们', '这', '那', '有', '没', '会', '能', '要', '不',
   '说', '做', '用', '好', '多', '少', '来', '去', '出', '入', '时', '话', '个',
 ])
 
 /* ── 分词（只用于查询侧） ───────────────────────────── */
+
+/** 单个 CJK 字符。用来扫出连续的汉字段，同时保留原文位置。 */
+const CJK_RE = /[\u4e00-\u9fff]/
+
+/** 一个词最多留几个位置（只用于合并话题标签，不需要穷举）。 */
+const MAX_SPANS_PER_TERM = 8
+
+/** 合并后的标签最长几个字。真词一般不超过这个长度（扩展名白名单 = 6）。 */
+const MAX_LABEL_CHARS = 6
 
 /**
  * 给一个 n-gram 打分用的字符集检查。
@@ -127,19 +143,24 @@ function allStopChars(gram) {
 }
 
 /**
- * 把一段对话文本切成候选词。
+ * 把一段对话文本切成候选词，**并带上每个词在原文里的位置**。
+ *
+ * 位置是给「当前话题」标签用的：候选里难免有跨词边界的碎片
+ * （`项目文` / `目文档` 都是「项目文档」的碎片），但**它们覆盖的区间是重叠的** ——
+ * 把重叠区间合并再切原文，就还原出真词「项目文档」。
+ * 见 `readableTopics()`。
  *
  * 只在**查询侧**使用。文档侧不调它 —— 那是为了性能，见文件头说明。
  *
- * 规则：
+ * 规则（与 v0.6 的 `tokenize` 逐字一致，只是多带位置）：
  *   - ASCII 词 / 标识符：`[A-Za-z][A-Za-z0-9_]{2,29}`，小写后丢掉英文停用词
  *   - 中文：按非 CJK 字符切段，每段长度 ≥ 2 时产出**全部 2-gram 与 3-gram**，
  *     2-gram 丢掉中文停用 bigram，全是停用字符的 gram 丢掉
  *
  * @param {string} text - 文本（调用方保证已是小写；中文不受影响）
- * @returns {string[]} 词表，含重复
+ * @returns {Array<{term: string, start: number, end: number}>} 词与它在 `text` 里的区间
  */
-export function tokenize(text) {
+export function tokenizeSpans(text) {
   if (!text) return []
   const out = []
 
@@ -147,30 +168,53 @@ export function tokenize(text) {
   for (const m of text.matchAll(/[A-Za-z][A-Za-z0-9_]{2,29}/g)) {
     const token = m[0].toLowerCase()
     if (EN_STOP.has(token)) continue
-    out.push(token)
+    out.push({ term: token, start: m.index, end: m.index + m[0].length })
   }
 
-  // 中文 2-gram / 3-gram
-  const cjkRuns = text.replace(/[^\u4e00-\u9fff]+/g, ' ').split(' ')
-  for (const run of cjkRuns) {
-    if (run.length < 2) continue
-    for (let n = 2; n <= 3; n += 1) {
-      for (let i = 0; i + n <= run.length; i += 1) {
-        const gram = run.slice(i, i + n)
-        if (n === 2 && CN_STOP_BIGRAMS.has(gram)) continue
-        if (allStopChars(gram)) continue
-        out.push(gram)
+  // 中文 2-gram / 3-gram。
+  // **不能用 replace + split 找 run** —— 那会丢掉原文位置，只能自己扫。
+  let i = 0
+  while (i < text.length) {
+    if (!CJK_RE.test(text[i])) {
+      i += 1
+      continue
+    }
+    let j = i
+    while (j < text.length && CJK_RE.test(text[j])) j += 1
+    const runLen = j - i
+    if (runLen >= 2) {
+      for (let n = 2; n <= 3; n += 1) {
+        for (let k = 0; k + n <= runLen; k += 1) {
+          const gram = text.slice(i + k, i + k + n)
+          if (n === 2 && CN_STOP_BIGRAMS.has(gram)) continue
+          if (allStopChars(gram)) continue
+          out.push({ term: gram, start: i + k, end: i + k + n })
+        }
       }
     }
+    i = j
   }
 
   return out
 }
 
+/**
+ * 把一段对话文本切成候选词（只要词，不要位置）。
+ *
+ * 与 `tokenizeSpans` 产出的词表**逐字一致**，只是把位置丢掉了。
+ * 保留这个导出是因为 v0.6 的「抽词零变化」守卫测试直接对着它断言。
+ *
+ * @param {string} text - 文本
+ * @returns {string[]} 词表，含重复
+ */
+export function tokenize(text) {
+  return tokenizeSpans(text).map((tok) => tok.term)
+}
+
 /* ── 关键词抽取 ─────────────────────────────────────── */
 
 /**
- * 把一段文本的词频累加进两张表。
+ * 把一段文本的词频累加进两张表，并记下每个词在原文里的位置。
  *
  * **原始次数与加权分数分开记**：权重只影响排序，不影响「够不够格」。
  * 否则一条消息权重 3，里面出现一次的词也会被当成出现 3 次，噪音全进来了。
@@ -179,12 +223,21 @@ export function tokenize(text) {
  * @param {number} weight - 这段话的权重倍数
  * @param {Map<string, number>} raw - 原始出现次数
  * @param {Map<string, number>} weighted - 加权分数
+ * @param {Map<string, Array<{text: string, start: number, end: number}>>} spans - 词 → 它在原文里的区间
  * @returns {void}
  */
-function accumulate(text, weight, raw, weighted) {
-  for (const term of tokenize(text)) {
+function accumulate(text, weight, raw, weighted, spans) {
+  for (const tok of tokenizeSpans(text)) {
+    const term = tok.term
     raw.set(term, (raw.get(term) || 0) + 1)
     weighted.set(term, (weighted.get(term) || 0) + weight)
+    if (!spans) continue
+    let list = spans.get(term)
+    if (list === undefined) {
+      list = []
+      spans.set(term, list)
+    }
+    if (list.length < MAX_SPANS_PER_TERM) list.push({ text, start: tok.start, end: tok.end })
   }
 }
 
@@ -203,19 +256,24 @@ function accumulate(text, weight, raw, weighted) {
  * 几乎都是两个词粘起来的产物，不是词。不丢的话它们会占满候选位，
  * 把真实存在的词全挤出去。
  *
- * 输出仍按分数降序 —— 面板那行「按「xxx」排序」要显示最重要的词。
+ * 输出仍按分数降序。
+ *
+ * **每个词还会带上它在原文里的位置**（`spans`）。位置不参与排序，
+ * 只用来把「当前话题」标签还原成可读的词 —— 见 `readableTopics()`。
  *
  * @param {readonly string[]} messages - 对话文本，最新在前
  * @param {number} limit - 最多返回多少个关键词
- * @returns {Array<{term: string, weight: number}>} 关键词及其权重，权重降序
+ * @returns {Array<{term: string, weight: number, spans: Array<{text: string, start: number, end: number}>}>}
+ *   关键词及其权重，权重降序
  */
 export function extractKeywords(messages, limit = 30) {
   const raw = new Map()
   const weighted = new Map()
+  const spans = new Map()
 
   messages.forEach((text, index) => {
     const weight = index === 0 ? 3 : index === 1 ? 2 : 1
-    accumulate(text, weight, raw, weighted)
+    accumulate(text, weight, raw, weighted, spans)
   })
 
   const ranked = [...weighted.entries()]
@@ -238,7 +296,111 @@ export function extractKeywords(messages, limit = 30) {
     picked.push(entry)
   }
 
-  return picked.map((entry) => ({ term: entry.term, weight: entry.score }))
+  return picked.map((entry) => ({
+    term: entry.term,
+    weight: entry.score,
+    spans: spans.get(entry.term) || [],
+  }))
+}
+
+/* ── 当前话题标签（v0.8） ───────────────────────────── */
+
+/**
+ * 把「语料里真实存在」的那批候选词还原成人能读的标签。
+ *
+ * **问题**：候选分是 `出现次数 × 词长²`，所以每个 3-gram 都压过所有 2-gram。
+ * 对「项目文档」这种输入，`项目文` 与 `目文档` 先被选中，
+ * 真实的 `项目` / `文档` 作为它们的子串在去重叠时被吞掉 ——
+ * 面板那行就成了「按「目文档、项目文」排序」。
+ *
+ * **修法**：不动排序（`extractKeywords` 的候选与顺序一字不改），
+ * 只把命中词的**原文区间**拿来合并 —— `项目文[0,3)` 与 `目文档[1,4)` 是**重叠**的，
+ * 合并后切原文得到 `项目文档`，正好是真词。
+ *
+ * 三个细节：
+ *   - **只有严格重叠才合并**，相邻不算。否则 `相关[0,2)` + `性排[2,4)` 会被粘成
+ *     更难看的「相关性排」。
+ *   - **合并结果必须在语料里真的出现过**（`isPresent`）。这一条是必需的：
+ *     3-gram 逐个错位、彼此都重叠，所以**传递性合并会一路串下去** ——
+ *     实测「悬停浮层是怎么做的」会串成「悬停浮层是怎」、「扩展名白名单都放行什么」
+ *     会串成「扩展名白名单都放行什」。光靠长度上限没用（链条会一直长到上限为止）。
+ *     「项目文档」「悬停浮层」「扩展名白名单」都真的在项目里出现过，而串出来的那几句没有。
+ *   - 拿不到 `spans`（调用方直接传了 `{term, weight}`）时返回空数组，
+ *     由调用方回落成原来的词表。
+ *
+ * @param {readonly {term: string, weight: number, spans?: Array<{text: string, start: number, end: number}>}[]} keywords -
+ *   已经过滤到「语料里真实存在」的那批词
+ * @param {number} limit - 最多返回几个标签
+ * @param {(label: string) => boolean} [isPresent] - 判断一段文本是否在语料里出现过；
+ *   不传就只按长度上限取最长的那段（测试用）
+ * @returns {string[]} 标签词，按权重降序
+ */
+export function readableTopics(keywords, limit = 3, isPresent) {
+  const groups = new Map()
+  for (const kw of keywords) {
+    if (!kw || !Array.isArray(kw.spans)) continue
+    for (const span of kw.spans) {
+      if (!span || typeof span.text !== 'string') continue
+      if (!Number.isInteger(span.start) || !Number.isInteger(span.end)) continue
+      let list = groups.get(span.text)
+      if (list === undefined) {
+        list = []
+        groups.set(span.text, list)
+      }
+      list.push({ start: span.start, end: span.end, weight: kw.weight })
+    }
+  }
+
+  const found = []
+  for (const [text, list] of groups) {
+    list.sort((a, b) => (a.start - b.start) || (a.end - b.end))
+
+    // 滑动窗口：从每个还没被用掉的区间出发，尽量往后接**仍然与当前并集重叠**的区间，
+    // 一旦并集超过长度上限就停（后面只会更长）。
+    // 取其中**最长且在语料里真的出现过**的那一段；用掉它覆盖的区间，再处理下一个。
+    // 于是一句话里可以有多个标签（互不重叠），而不是只挑一个。
+    const used = new Array(list.length).fill(false)
+    for (let i = 0; i < list.length; i += 1) {
+      if (used[i]) continue
+      const start = list[i].start
+      let end = list[i].end
+      let weight = list[i].weight
+      let bestEnd = -1
+      let bestWeight = -1
+      for (let j = i; j < list.length; j += 1) {
+        if (j > i) {
+          if (list[j].start >= end) break // 不再重叠 → 链条断了
+          end = Math.max(end, list[j].end)
+          weight = Math.max(weight, list[j].weight)
+        }
+        const size = end - start
+        if (size < 2) continue
+        if (size > MAX_LABEL_CHARS) break
+        const label = text.slice(start, end)
+        if (isPresent !== undefined && !isPresent(label)) continue
+        if (size > bestEnd - start) {
+          bestEnd = end
+          bestWeight = weight
+        }
+      }
+      if (bestEnd < 0) continue // 这个起点组不出任何真实存在的词
+      found.push({ label: text.slice(start, bestEnd), weight: bestWeight })
+      for (let j = i; j < list.length; j += 1) {
+        if (list[j].start < bestEnd) used[j] = true
+      }
+    }
+  }
+
+  found.sort((a, b) => (b.weight - a.weight) || a.label.localeCompare(b.label))
+  const seen = new Set()
+  const out = []
+  for (const item of found) {
+    if (seen.has(item.label)) continue
+    seen.add(item.label)
+    out.push(item.label)
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 /* ── 文档打分（v0.6 换成 BM25） ─────────────────────── */
@@ -316,16 +478,17 @@ function countOccurrences(hay, needle) {
  * 文档侧不做分词 —— tf 用子串扫描数，长度用字符数，见文件头。
  *
  * @param {Array<object>} docs - 文档记录（含 haystack 与 mtimeMs）
- * @param {readonly {term: string, weight: number}[]} keywords - 关键词表
+ * @param {readonly {term: string, weight: number, spans?: Array<object>}[]} keywords - 关键词表
  * @param {number} now - 当前时间（epoch ms）
- * @returns {{docs: Array<object>, maxRaw: number, matched: string[]}}
- *   带 `score` 的文档（相关度降序）；`matched` 是**语料里真实存在**的词（按权重降序）。
- *   调用方应该用 `matched` 生成给用户看的「当前话题」——
- *   候选词里有相当一部分是跨词边界的碎片，它们一个文档都匹配不上。
+ * @returns {{docs: Array<object>, maxRaw: number, matched: string[], label: string[]}}
+ *   带 `score` 的文档（相关度降序）；
+ *   `matched` 是**语料里真实存在**的词，`label` 是给用户看的**可读**话题词
+ *   （把命中词的原文区间合并后的结果，见 `readableTopics`）。
+ *   调用方应该用 `label` 渲染「按「xxx」排序」。
  */
 export function rankByRelevance(docs, keywords, now) {
   if (keywords.length === 0) {
-    return { docs: docs.map((doc) => ({ ...doc, score: 0 })), maxRaw: 0, matched: [] }
+    return { docs: docs.map((doc) => ({ ...doc, score: 0 })), maxRaw: 0, matched: [], label: [] }
   }
 
   const maxWeight = keywords.reduce((max, k) => Math.max(max, k.weight), 0)
@@ -427,13 +590,31 @@ export function rankByRelevance(docs, keywords, now) {
 
   scored.sort((a, b) => b.raw - a.raw || b.mtimeMs - a.mtimeMs)
 
-  // 语料里真实存在的词，按查询权重降序 —— 给「当前话题」标签用。
-  const matched = keywords
+  // 语料里真实存在的词，按查询权重降序。
+  const present = keywords
     .filter((k) => (df.get(k.term) || 0) > 0)
     .sort((a, b) => b.weight - a.weight)
-    .map((k) => k.term)
+  const matched = present.map((k) => k.term)
 
-  return { docs: scored, maxRaw, matched }
+  // 给「当前话题」用的**可读**标签：把命中词的原文区间合并，还原出真词。
+  // 合并结果还要**真的在语料里出现过**才认 —— 否则传递性合并会把整句串起来，
+  // 见 `readableTopics` 的说明。用不了 spans 时回落成 matched 本身。
+  // ⚠️ 语料的 haystack 是**已小写**的，而标签切的是**原文**（保留大小写）——
+  // 所以比对前必须把标签也小写，否则 `BM25` 这种永远匹配不上。
+  const isPresent = (label) => {
+    const needle = label.toLowerCase()
+    return docs.some((doc) => {
+      const hay = doc.haystack
+      if (!hay) return false
+      return (hay.title || '').includes(needle)
+        || (hay.summary || '').includes(needle)
+        || (hay.body || '').includes(needle)
+    })
+  }
+  const merged = readableTopics(present, 3, isPresent)
+  const label = merged.length > 0 ? merged : matched.slice(0, 3)
+
+  return { docs: scored, maxRaw, matched, label }
 }
 
 /**
