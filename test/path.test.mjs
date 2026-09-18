@@ -288,3 +288,70 @@ test('路径：拼不出绝对路径时按钮 disabled，点了也不发请求',
   await harness.flush()
   assert.equal(calls.length, 0)
 })
+
+/**
+ * v0.10：预览头右上角那个位置从「新标签页」换成了「在本地打开」。
+ *
+ * 动机：「新标签页」开的是官方文档预览，但面板里已经有就地预览（重复度高、
+ * 用得少）；而「用默认应用打开这篇文档」原本只藏在路径面包屑的悬停提示里。
+ * 把值钱的那个放到显眼处。双击列表行仍能开新标签页 —— 所以这条要同时断言
+ * **头部不再有「新标签页」**。
+ */
+test('预览头：右上角是「在本地打开」，点击打开这篇文档', async () => {
+  const calls = []
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
+      : listPayload()),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const headBtns = byClass(nodes, 'knit-btn')
+  const labels = headBtns.map(textOf)
+  assert.ok(labels.includes('在本地打开'), '头部有「在本地打开」按钮，实际：' + labels.join(' / '))
+  assert.ok(!labels.includes('新标签页'), '「新标签页」已从头部移除，实际：' + labels.join(' / '))
+
+  const localBtn = headBtns.find((n) => textOf(n) === '在本地打开')
+  assert.notEqual(localBtn.props.disabled, true, '有服务时不禁用')
+  // tooltip 里带完整相对路径 —— 与路径面包屑同一套提示
+  assert.match(String(localBtn.props.title), /a\.md/, 'tooltip 里带相对路径')
+  localBtn.props.onClick()
+  await harness.flush()
+  assert.deepEqual(calls[0], { path: '/Users/me/proj/a.md' }, '打开的是这篇文档的绝对路径')
+})
+
+test('预览头：没有 remote.session 时「在本地打开」给出提示，不是白点一下', async () => {
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
+      : listPayload()),
+  })
+  const { KnitBody } = boot({}).exports.__test   // 不给 openWorkspacePath
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const localBtn = byClass(nodes, 'knit-btn').find((n) => textOf(n) === '在本地打开')
+  assert.ok(localBtn, '按钮仍然渲染（位置稳定）')
+  // 「禁用」只在**拿不到绝对路径**时用；拿得到路径但没有服务，走「点了给可见提示」——
+  // 与路径面包屑同一条规矩（见「路径：没有 remote.session 服务时给出提示」）
+  assert.notEqual(localBtn.props.disabled, true, '路径拿得到 → 不禁用')
+
+  localBtn.props.onClick()
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.ok(byClass(nodes, 'knit-notice').length >= 1, '应给出可见提示而不是白点一下')
+})

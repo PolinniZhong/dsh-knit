@@ -3,6 +3,47 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.0] - 2026-09-18
+
+**把「新标签页」换成「在本地打开」。** 排序算法、宿主半边、`knit_docs` 工具**零改动** —— 纯客户端。
+
+### 为什么
+
+看到豆包文档工具栏的「打开 ▾」（用本机应用打开当前文档），问我们是不是也该这么做。
+
+查完的结论是：**这个能力我们早就有，只是藏起来了** —— 预览头那行路径面包屑一直可点
+（`ctx.remote.session.openWorkspacePath`，官方对这个 API 的定义是
+「hands a path to the local opener and leaves the effect on the machine」），
+悬停提示写着「用系统默认应用打开这篇文档」。但它是面包屑的外观，没人知道能点。
+
+同时「新标签页」重复度高：它开的是官方文档预览，而面板里已经有就地预览。
+（不算严格冗余 —— 官方预览有 PDF 渲染器和渲染方式切换，而且我们刻意不接管 `.md`
+路由以保留官方产物卡 —— 但确实用得少。双击列表行仍保留这个入口。）
+
+**于是：把值钱的那个放到显眼处，把鸡肋的那个让位。**
+
+### 改了
+
+- 预览头右上角：`[全屏] [新标签页] [✕]` → `[在本地打开] [全屏] [✕]`
+- 新按钮文案中英各一条（`preview.openLocalBtn`），tooltip 复用 `preview.openLocal`（带完整相对路径）
+- **路径面包屑保持可点** —— 已有的快捷方式不动
+- 「新标签页」能力**没有删**：双击列表行 / 媒体卡仍走它（`onOpenTab`）
+- 顺手清掉 `PreviewPanel` 上已成死 prop 的 `onOpenTab`，以及词典里没人用的
+  `preview.newTab` / `preview.newTabTitle`
+
+### 被否决的方案（都查过官方 API，不是猜的）
+
+| 方案 | 为什么不做 |
+|---|---|
+| **豆包式「文档应用选择器」**（Typora / Obsidian / 预览…） | DSH **没有**这个能力可复用。官方 `open-in-app` 是给**工作区文件夹**的（路由写死校验「an absolute path naming an existing **directory**」），应用目录还是一张编译期表、全是开发工具 —— **没有 Typora / Obsidian**。要做就得自己写应用目录 + 一条**启动本机进程**的宿主路由 + 跨平台分支。那是新的风险等级（Knit 现在全是只读接口），收益却是猜的 |
+| **复用官方 `open-in-app` 做「打开工作区 ▾」** | 能做（`GET /open-in-app/apps` 实测返回 `["finder","cursor","vscode","terminal"]`，图标免费），但它是**文件夹级**，跟要的「打开这篇文档」不是一回事，且与已有的「点工作区路径打开文件夹」重叠 |
+| **官方文档预览的「打开方式」** | 名字像，但 `candidates = matchingDocumentPreviews(definitions, file.path)` —— 是 **DSH 内部渲染器**切换（Markdown / 纯文本 / PDF），**不是本机应用** |
+
+### 注意事项
+
+- ⚠️ **纯客户端改动：硬刷新浏览器即可**（`Cmd + Shift + R`），不需要重启 DSH
+- 测试 **217/217**（新增 2 条：按钮存在且点击打开本文档；没有 `remote.session` 时给可见提示）
+
 ## [0.9.0] - 2026-09-18
 
 **改 `knit_docs` 对自己排名的说法。** 算法、面板、客户端**零改动**。

@@ -81,9 +81,8 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreen': '退出全屏',
       'preview.fullscreenTitle': '全屏阅读',
       'preview.exitFullscreenTitle': '退出全屏（Esc）',
-      'preview.newTab': '新标签页',
-      'preview.newTabTitle': '在新标签页打开',
       'preview.openLocal': '{path}\n用系统默认应用打开这篇文档',
+      'preview.openLocalBtn': '在本地打开',
       'preview.close': '收起预览',
       'preview.resizeTitle': '拖动调整高度',
       'preview.rawFallback': '原生 Markdown 渲染不可用，下面是纯文本。请看控制台的 [knit] 日志。',
@@ -171,9 +170,8 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreen': 'Exit fullscreen',
       'preview.fullscreenTitle': 'Read fullscreen',
       'preview.exitFullscreenTitle': 'Exit fullscreen (Esc)',
-      'preview.newTab': 'New tab',
-      'preview.newTabTitle': 'Open in a new tab',
       'preview.openLocal': '{path}\nOpen this document in your default app',
+      'preview.openLocalBtn': 'Open locally',
       'preview.close': 'Close preview',
       'preview.resizeTitle': 'Drag to resize',
       'preview.rawFallback': 'Native Markdown rendering is unavailable — showing plain text. Check the [knit] logs in the console.',
@@ -987,10 +985,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
     /**
      * 列表下方的预览面板。
-     * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenTab:Function,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
+     * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenLocal:Function|null,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, onClose, onOpenTab, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, onClose, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
 
@@ -1048,7 +1046,16 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: onToggleFullscreen,
             title: fullscreen ? t('preview.exitFullscreenTitle') : t('preview.fullscreenTitle'),
           }, fullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')),
-          h('button', { className: 'knit-btn', onClick: onOpenTab, title: t('preview.newTabTitle') }, t('preview.newTab')),
+          // 「在本地打开」＝ 之前那个「新标签页」的位置（v0.10）。
+          // 「新标签页」开的是官方文档预览，但面板里已经有就地预览，重复度高、用得少；
+          // 而「用默认应用打开这篇文档」原本只藏在路径面包屑的悬停提示里 ——
+          // 把值钱的那个放到显眼处，把鸡肋的那个让位（双击列表行仍能开新标签页）。
+          h('button', {
+            className: 'knit-btn',
+            onClick: () => { if (onOpenLocal) onOpenLocal() },
+            disabled: !onOpenLocal,
+            title: onOpenLocal ? t('preview.openLocal', { path: preview.rel }) : preview.rel,
+          }, t('preview.openLocalBtn')),
           h('button', { className: 'knit-preview-close', onClick: onClose, title: t('preview.close') }, '✕')),
         h('div', {
           className: `knit-preview-body${isMedia ? ' is-media' : ''}`,
@@ -1548,7 +1555,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // 拿不到绝对路径就不给点（而不是点了没反应）
         onOpenLocal: previewAbsPath ? openPreviewLocal : null,
         onClose: closePreview,
-        onOpenTab: () => onOpenTab(null),
         onToggleFullscreen: () => setFullscreen((v) => !v),
         onResizeStart,
       }) : null)

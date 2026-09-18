@@ -186,7 +186,8 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
 | The **All** view splits into **two stacked sections**: docs (max 4, with "View all →" when truncated) and images & video (**never truncated**, count only) | ✅ |
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
-| Double-click opens in a new tab | ✅ |
+| **"Open locally"**: opens the previewed document in your default app (the path breadcrumb in the preview header is clickable too) | ✅ |
+| Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
 | **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout) | ✅ |
