@@ -329,6 +329,133 @@ test('渲染：单击展开预览，再点收起', async () => {
   assert.equal(panelOf(nodes), undefined, '再点同一条应收起')
 })
 
+test('渲染：预览头显示路径面包屑（目录 + 文件名），不再重复正文标题', async () => {
+  installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: 'sub/需求 文档.md', title: '需求', text: '# 需求\n正文', truncated: false }
+    : listPayload()))
+
+  const { exports } = loadClientModule()
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-doc')[1].props.onClick()      // 第二条是 sub/需求 文档.md
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.equal(byExactClass(nodes, 'knit-preview-head').length, 1)
+  assert.equal(byExactClass(nodes, 'knit-preview-dir').map(textOf).join(''), 'sub/')
+  assert.equal(byExactClass(nodes, 'knit-preview-name').map(textOf).join(''), '需求 文档.md')
+  // 头部不再放标题：正文 H1 已经写了，重复会让「列表 / 头 / 正文」出现三遍同一个词
+  assert.equal(byClass(nodes, 'knit-preview-title').length, 0)
+  // 长目录被省略号截掉时，完整路径靠 tooltip 悬停仍能看到（与列表行的 row.tooltip 同一套）
+  const pathBtn = byExactClass(nodes, 'knit-preview-path')[0]
+  assert.match(String(pathBtn.props.title), /sub\/需求 文档\.md/, 'tooltip 里带完整相对路径')
+  assert.equal(pathBtn.props.type, 'button', '路径是可点的')
+  assert.ok(pathBtn.props.onClick, '路径带打开本地的回调')
+})
+
+test('渲染：无目录时预览头不渲染空的目录段', async () => {
+  installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: '技术方案.md', title: '技术方案', text: '正文', truncated: false }
+    : listPayload()))
+
+  const { exports } = loadClientModule()
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-doc')[0].props.onClick()      // 技术方案.md，没有目录
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.equal(byExactClass(nodes, 'knit-preview-dir').length, 0)
+  assert.equal(byExactClass(nodes, 'knit-preview-name').map(textOf).join(''), '技术方案.md')
+})
+
+test('渲染：滚动正文进入阅读态（背景转纯阅读底色），换一篇复位', async () => {
+  installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
+    : listPayload()))
+
+  const { exports } = loadClientModule()
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.equal(byToken(nodes, 'reading').length, 0, '刚展开还是分层灰')
+  const scrollBody = (top) => {
+    byExactClass(nodes, 'knit-preview-body')[0].props.onScroll({ target: { scrollTop: top } })
+    nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  }
+
+  scrollBody(1)
+  assert.equal(byToken(nodes, 'reading').length, 0, '1px 抖动不该换背景')
+
+  scrollBody(40)
+  assert.equal(byToken(nodes, 'reading').length, 1, '真的滚动了才进阅读态')
+
+  // 换一篇 → 新文档重新从分层灰开始（面板仍一眼可辨是另一层）
+  byClass(nodes, 'knit-doc')[1].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byToken(nodes, 'reading').length, 0, '换一篇后复位')
+})
+
+test('渲染：阅读态存在模块级，面板重新挂载后仍然是纯阅读底色', async () => {
+  // 用独立 sessionId，避免模块级集合在用例之间串味
+  const sid = 's-durable'
+  installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
+    : listPayload()))
+
+  const { exports } = loadClientModule()
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  byExactClass(nodes, 'knit-preview-body')[0].props.onScroll({ target: { scrollTop: 40 } })
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  assert.equal(byToken(nodes, 'reading').length, 1)
+
+  // 模拟宿主把 tab body 重新挂载：hook 槽位清零 = 组件 state 全丢
+  // （用户反馈「鼠标移出去以后就没有了」，就是这一类的重挂载）
+  harness.reset()
+  harness.seed(['', 'time'])
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  assert.equal(byToken(nodes, 'knit-preview').length, 0, '重挂载后预览本身当然要先重新展开')
+
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  assert.equal(byToken(nodes, 'reading').length, 1, '读过这一篇的事实不该随重挂载丢掉')
+})
+
+test('splitRelPath：拆目录与文件名（无目录 / 多级 / 空值）', () => {
+  const { splitRelPath } = loadClientModule().exports.__test
+  assert.deepEqual(splitRelPath('技术方案.md'), { dir: '', name: '技术方案.md' })
+  assert.deepEqual(splitRelPath('sub/需求 文档.md'), { dir: 'sub/', name: '需求 文档.md' })
+  assert.deepEqual(splitRelPath('a/b/c.md'), { dir: 'a/b/', name: 'c.md' })
+  assert.deepEqual(splitRelPath(''), { dir: '', name: '' })
+  assert.deepEqual(splitRelPath(null), { dir: '', name: '' })
+  assert.deepEqual(splitRelPath(undefined), { dir: '', name: '' })
+})
+
 test('渲染：拿不到 ui-primitives 时降级为 pre 并**显式说明**', async () => {
   installFetch((url) => (url.includes('/api/doc')
     ? { ok: true, rel: '技术方案.md', title: '技术方案', text: '纯文本正文', truncated: false }
@@ -903,8 +1030,31 @@ test('样式：类型切换的选中态不再用品牌色描边，与列表行�
   const rule = source.match(/\.knit-type-btn\.active\{([^}]*)\}/)
   assert.ok(rule, '必须还有 .knit-type-btn.active 这条规则')
   assert.ok(!rule[1].includes('--knit-accent'), `选中态不许再出现品牌色：${rule[1]}`)
-  assert.match(rule[1], /background:var\(--dsw-alias-interactive-bg-active/,
-    '选中态用 DSH 的中性选中底色，与列表行同一套')
+  // 中性灰用的是「降档后的」那一套（用户觉得 DSH 默认档太灰），但仍然是中性色
+  assert.match(rule[1], /background:var\(--knit-active-bg/,
+    '选中态用中性选中底色，与列表行同一套')
+})
+
+test('样式：悬停 / 选中的灰底各降一档（悬停 −60% / 选中 −40%），两个主题都给了值', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // 两个令牌都要定义：浅色一套 + 暗色主题覆盖一套
+  assert.match(css, /--knit-hover-bg:rgba\(38,49,72,\.024\)/, '浅色悬停 = DSH 的 40%')
+  assert.match(css, /--knit-active-bg:rgba\(38,49,72,\.061\)/, '浅色选中 = DSH 的 60%')
+  const dark = css.match(/body\[data-ds-dark-theme\] \.knit-root\{([^}]*)\}/)
+  assert.ok(dark, '暗色主题必须也覆盖这两个令牌，否则暗色下不跟着降')
+  assert.match(dark[1], /--knit-hover-bg:rgba\(255,255,255,\.031\)/)
+  assert.match(dark[1], /--knit-active-bg:rgba\(255,255,255,\.085\)/)
+
+  // 列表行是用户点名要改的两处
+  assert.match(css, /\.knit-doc:hover\{background:var\(--knit-hover-bg/)
+  assert.match(css, /\.knit-doc\.active\{[^}]*background:var\(--knit-active-bg/)
+  // 缩略图占位底色不是悬停态，不能跟着降（降了就看不出格子边界了）
+  assert.match(css, /\.knit-media-thumbbox\{[^}]*background:var\(--dsw-alias-interactive-bg-hover/)
 })
 
 test('样式：媒体网格靠 CSS 变量收列数与格子边长，下限与 JS 常量同源', async () => {
@@ -957,6 +1107,45 @@ test('样式：每个 --knit-* 引用都必须有定义或 fallback', async () =
   assert.deepEqual([...new Set(missing)], [],
     '这些变量没定义又没 fallback，会让整条声明失效')
   assert.ok(defined.has('--knit-accent'), '品牌色变量必须定义在 .knit-root 上')
+})
+
+test('样式：滚动条交给 DSH 的全局样式，只覆盖令牌、不重写伪元素', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+
+  // 只看真实规则，注释里提到这个伪元素不算
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // 重写它就会绕开 DSH 主题的 8px + 令牌色滚动条；
+  // 之前写死了 rgba(255,255,255,.14) 的滑块，在白底上完全隐形（用户反馈「没有滑动条」）
+  assert.ok(!css.includes('::-webkit-scrollbar'),
+    '不要重写滚动条伪元素，交给 DSH 全局样式')
+  // 正文区提到 l2，与官方文档预览面板（dsh-client-ui-sidebar-documentpreview 的 body）同档
+  assert.match(css, /--dsh-scrollbar-thumb:var\(--dsw-alias-scrollbar-bg-l2\)/)
+  assert.match(css, /--dsh-scrollbar-thumb-hover:var\(--dsw-alias-scrollbar-hover-l2\)/)
+})
+
+test('样式：预览面板靠 bg-module-platform 分层，头部对齐官方预览', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // 浅色主题下 bg-layer-1/2/3 解析出来全是 #fff —— 用 layer-2 分层等于没分
+  assert.match(css, /\.knit-preview\{[^}]*background:var\(--dsw-alias-bg-module-platform/)
+  assert.ok(!/\.knit-preview\{[^}]*bg-layer-2/.test(css),
+    '别用 bg-layer-2 分层：浅色主题下它和 bg-layer-1 都是 #fff')
+  // 头部对齐官方 .dhJKeW_header：38px + border-l3
+  assert.match(css, /\.knit-preview-head\{[^}]*height:38px/)
+  assert.match(css, /\.knit-preview-head\{[^}]*border-bottom:\.5px solid var\(--dsw-alias-border-l3/)
+  // 全屏时要去掉圆角与柔影（那时没有「浮在列表上」的隐喻）
+  assert.match(css, /\.knit-root\.fullscreen \.knit-preview\{[^}]*border-radius:0/)
+  // 阅读态：过渡到纯阅读底色，而不是继续用分层的灰
+  assert.match(css, /\.knit-preview\.reading\{background:var\(--dsw-alias-bg-base/)
+  assert.match(css, /\.knit-preview\{[^}]*transition:background-color/)
 })
 
 test('媒体：点类型按钮切到「图片与视频」会带 kind=media 重拉并记住偏好', async () => {

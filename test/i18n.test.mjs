@@ -276,8 +276,7 @@ test('错误码：完全没有 code 时退回通用文案', async () => {
   assert.match(textOf(byClass(en.nodes, 'knit-msg')[0]), /The host returned a failure/)
 
   const zh = await renderPanel('zh', () => ({ ok: false }))
-  assert.match(textOf(byClass(zh.nodes, 'knit-msg')[0]), /宿主返回失败/)
-})
+  assert.match(textOf(byClass(zh.nodes, 'knit-msg')[0]), /宿主返回失败/)})
 
 /* ── 注册层面的文案 ─────────────────────────────────── */
 
@@ -341,4 +340,24 @@ test('冒烟：中英环境下渲染同一份数据都不抛错，且文案确�
   assert.notEqual(zhText, enText, '两种语言渲染出的文案不该完全一样')
   assert.ok(!/Refresh|Sorted by/.test(zhText), `中文环境混进了英文：${zhText}`)
   assert.ok(!/刷新|按/.test(enText), `英文环境混进了中文：${enText}`)
+})
+
+/* ── 文案洁癖：词典里不出现表情装饰 ───────────────────── */
+
+test('词典：不出现 🤖 之类的表情字符（用户明确要求删掉）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('../src/client/client.js', import.meta.url), 'utf8')
+
+  // 用户原话：「🤖 这个图标删除」—— 排序依据那行原本顶着这个表情。
+  // 只扫词典（ZH / EN 两段），因为组件的 🆕 是**有意的**新文档标记，不在词典里。
+  for (const name of ['ZH', 'EN']) {
+    const body = source.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n    \\}`))
+    assert.ok(body, `没找到 ${name} 词典`)
+    // 只拦表情符号区（U+1F300–U+1FAFF），放行 → 这类排版符号
+    const found = [...body[1]].filter((ch) => {
+      const cp = ch.codePointAt(0)
+      return cp >= 0x1f300 && cp <= 0x1faff
+    })
+    assert.deepEqual(found, [], `${name} 词典里出现了表情字符：${found.join(' ')}`)
+  }
 })

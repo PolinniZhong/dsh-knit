@@ -309,7 +309,9 @@ test('即时响应：面板已挂着时，点浮层某篇立刻展开预览，�
 
   await harness.flush()                     // 只等文档接口
   panel = harness.render(h(KnitBody, { sessionId: 's-1' }))
-  assert.match(textOf(byExactClass(panel, 'knit-preview')[0]), /目标/, '正文应已渲染')
+  // 预览头现在显示路径面包屑（文件名）而不是标题 —— 见「预览头显示路径面包屑」那条用例
+  assert.match(textOf(byExactClass(panel, 'knit-preview')[0]), /target\.md/, '预览头应指向被点的那一篇')
+  assert.equal(byExactClass(panel, 'knit-preview-note').length, 0, '正文应已到 ready，不该还停在 loading')
 })
 
 test('即时响应：面板还没挂时，信号留成挂起值，挂载第一帧就取走', async () => {

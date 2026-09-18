@@ -58,7 +58,7 @@ export function loadClientModule(options = {}) {
     .replace(
       "module.exports.inject = ['slots', 'locale']",
       'module.exports.__test = { KnitBody, OfficialTabBody, BetterSidebarTabBody, '
-        + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, '
+        + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, splitRelPath, '
         + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, openLocalPath, '
         + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
         + 'MIN_RATIO, MAX_RATIO, ALL_DOC_CAP, MEDIA_MAX_ITEMS, MEDIA_MIN_PX, MEDIA_VIEW_ROWS }\n'

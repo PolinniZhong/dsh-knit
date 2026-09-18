@@ -9,7 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { loadClientModule, createHarness, byClass, textOf, makeLocale } from './harness.mjs'
+import { loadClientModule, createHarness, byClass, byExactClass, textOf, makeLocale } from './harness.mjs'
 
 const harness = createHarness()
 const React = globalThis.__knitReact
@@ -205,4 +205,86 @@ test('路径：成功时不残留上一次的错误提示', async () => {
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   assert.equal(byClass(nodes, 'knit-notice').length, 0, '再成功，提示应清掉')
+})
+
+/* ── 预览头那行路径：点它打开的是这篇文档本身 ────────── */
+
+test('路径：点预览头的路径，打开的是这篇文档的绝对路径', async () => {
+  const calls = []
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
+      : listPayload()),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byExactClass(nodes, 'knit-preview-path')[0].props.onClick()
+  await harness.flush()
+
+  assert.equal(calls.length, 1, '应调用一次')
+  assert.deepEqual(calls[0], { path: '/Users/me/proj/a.md' }, '用宿主给的绝对 path')
+})
+
+test('路径：宿主没给 path 时用 root + rel 兜底', async () => {
+  const calls = []
+  const payload = listPayload({
+    docs: [{ rel: 'sub/b.md', name: 'b.md', title: 'B', summary: 's', mtimeMs: Date.now(), score: null }],
+  })
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'sub/b.md', title: 'B', text: '正文', truncated: false }
+      : payload),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byExactClass(nodes, 'knit-preview-path')[0].props.onClick()
+  await harness.flush()
+
+  assert.deepEqual(calls[0], { path: '/Users/me/proj/sub/b.md' }, 'root + rel 拼出来')
+})
+
+test('路径：拼不出绝对路径时按钮 disabled，点了也不发请求', async () => {
+  const calls = []
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'sub/b.md', title: 'B', text: '正文', truncated: false }
+      : listPayload({
+        root: '',
+        docs: [{ rel: 'sub/b.md', name: 'b.md', title: 'B', summary: 's', mtimeMs: Date.now(), score: null }],
+      })),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const pathBtn = byExactClass(nodes, 'knit-preview-path')[0]
+  assert.equal(pathBtn.props.disabled, true, 'root 与 path 都拿不到 → 不给点')
+  pathBtn.props.onClick()                     // 回调里也有守卫，不该抛也不该发请求
+  await harness.flush()
+  assert.equal(calls.length, 0)
 })

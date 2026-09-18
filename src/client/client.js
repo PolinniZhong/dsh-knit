@@ -54,8 +54,8 @@ window.__ModuleLoader__.load({
       'filter.placeholder': '过滤标题 / 摘要 / 路径',
       'filter.aria': '过滤文档',
 
-      'topic.relevance': '🤖 按「{topic}」排序',
-      'topic.relevancePlain': '🤖 相关性排序',
+      'topic.relevance': '按「{topic}」排序',
+      'topic.relevancePlain': '相关性排序',
       'topic.needsConversation': '对话内容还不足，暂按最新排序',
       'topic.time': '按修改时间倒序',
 
@@ -83,6 +83,7 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreenTitle': '退出全屏（Esc）',
       'preview.newTab': '新标签页',
       'preview.newTabTitle': '在新标签页打开',
+      'preview.openLocal': '{path}\n用系统默认应用打开这篇文档',
       'preview.close': '收起预览',
       'preview.resizeTitle': '拖动调整高度',
       'preview.rawFallback': '原生 Markdown 渲染不可用，下面是纯文本。请看控制台的 [knit] 日志。',
@@ -143,8 +144,8 @@ window.__ModuleLoader__.load({
       'filter.placeholder': 'Filter title / summary / path',
       'filter.aria': 'Filter documents',
 
-      'topic.relevance': '🤖 Sorted by “{topic}”',
-      'topic.relevancePlain': '🤖 Sorted by relevance',
+      'topic.relevance': 'Sorted by “{topic}”',
+      'topic.relevancePlain': 'Sorted by relevance',
       'topic.needsConversation': 'Not enough conversation yet — sorted by time',
       'topic.time': 'Sorted by modified time',
 
@@ -172,6 +173,7 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreenTitle': 'Exit fullscreen (Esc)',
       'preview.newTab': 'New tab',
       'preview.newTabTitle': 'Open in a new tab',
+      'preview.openLocal': '{path}\nOpen this document in your default app',
       'preview.close': 'Close preview',
       'preview.resizeTitle': 'Drag to resize',
       'preview.rawFallback': 'Native Markdown rendering is unavailable — showing plain text. Check the [knit] logs in the console.',
@@ -312,6 +314,8 @@ window.__ModuleLoader__.load({
 
     /** 「全部」视图里文档区的固定上限。 */
     const ALL_DOC_CAP = 4
+    /** 滚动超过这个像素数就算「用户在读了」，进入阅读态（背景转纯阅读底色）。 */
+    const READING_SCROLL_PX = 4
     /**
      * 媒体网格一屏最多摆几个（4 列 × 2 行）。
      * 超出不再隐藏，而是整块等比缩小 —— 见 mediaLayoutFor 的 scaled 分支。
@@ -390,10 +394,19 @@ window.__ModuleLoader__.load({
      填充改用 DSH 选中态的半透明令牌，不自己混色 —— color-mix 在旧内核上
      会让整条声明失效（invalid at computed-value time），不是渐进增强。 */
   --knit-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#4176e6);
-  /* 选中态的灰底一律直接用 DSH 的中性令牌（列表行、类型切换、排序切换共用一套），
-     所以这里不再需要自备一个 accent 填充令牌。 */
+  /* 悬停 / 选中的灰底：在 DSH 两个令牌的**透明度上各降一档**
+     （悬停 −60% → 保留 40%；选中 −40% → 保留 60%）。
+     起因是用户觉得默认那档「太灰了」，读文档时对比度被吃掉。
+     两个主题各给一套显式值，所以这不违反「不要硬编码不跟主题」这条：
+     浅色是 rgba(38,49,72,α)（即 DSH 的 #263148），暗色是白色低透明度。 */
+  --knit-hover-bg:rgba(38,49,72,.024);   /* DSH .0588 × 0.4 */
+  --knit-active-bg:rgba(38,49,72,.061);  /* DSH .1020 × 0.6 */
   display:flex;flex-direction:column;height:100%;min-height:0;
   color:var(--dsw-alias-label-primary,#e8eaed);font-size:13px}
+body[data-ds-dark-theme] .knit-root{
+  --knit-hover-bg:rgba(255,255,255,.031);  /* DSH .0784 × 0.4 */
+  --knit-active-bg:rgba(255,255,255,.085); /* DSH .1412 × 0.6 */
+}
 .knit-head{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;flex:none}
 .knit-head .knit-root-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-caption,#80868b);
@@ -407,15 +420,15 @@ window.__ModuleLoader__.load({
   height:24px;padding:0 9px;border-radius:6px;cursor:pointer;
   background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6);
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));font-size:11px}
-.knit-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06));
+.knit-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
 .knit-seg{display:inline-flex;flex:none;border-radius:7px;overflow:hidden;
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1))}
 .knit-seg-btn{height:22px;padding:0 10px;cursor:pointer;font-size:11px;border:none;
   background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6)}
-.knit-seg-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}
-.knit-seg-btn.active{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1));
+.knit-seg-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-seg-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
 .knit-filter{flex:1;min-width:0;height:24px;padding:0 9px;border-radius:7px;font-size:11px;
   background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
@@ -426,17 +439,21 @@ window.__ModuleLoader__.load({
   color:var(--dsw-alias-label-caption,#80868b);
   border-bottom:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 滚动条**不要自己画**：DSH 主题里已有全局样式
+   （::-webkit-scrollbar 宽 8px ＋ --dsh-scrollbar-thumb，见 dsh-client-ui-theme）。
+   曾经在这里写死 6px 宽 ＋ rgba(255,255,255,.14) 的滑块 —— 白色 14% 在白底上完全隐形，
+   用户的原话是「没有一个右侧的滑动条」。删掉即继承主题默认（l1），与侧栏列表一致。
+   ⚠️ CSS 注释里不要出现反引号：这段是模板字符串，反引号会把它提前截断。 */
 .knit-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px;outline:none}
 .knit-list:focus-visible{box-shadow:inset 0 0 0 1px var(--knit-accent)}
-.knit-list::-webkit-scrollbar{width:6px}
-.knit-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}
 .knit-doc{padding:10px 11px;border-radius:10px;cursor:pointer;
   border:.5px solid transparent;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.03));
   transition:background .18s,border-color .18s,transform .18s,opacity .18s}
-.knit-doc:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06));
+.knit-doc:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.1));transform:translateX(-2px)}
+/* 选中（正在预览）保留品牌色描边，与「键盘光标」的中性描边区分开 */
 .knit-doc.active{border-color:var(--knit-accent);
-  background:var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.1))}
+  background:var(--knit-active-bg,rgba(255,255,255,.085))}
 /* .knit-doc.cursor 故意不设样式：键盘焦点靠「移动即预览」的预览面板表达，
    再加描边会与 .active 的整块蓝色背景重复，显得突兀 */
 .knit-row1{display:flex;align-items:center;gap:8px;margin-bottom:5px}
@@ -454,25 +471,61 @@ window.__ModuleLoader__.load({
   background:rgba(255,120,120,.12);border:.5px solid rgba(255,120,120,.3);color:#ffb4b4}
 .knit-badge{font-size:10px;margin-right:3px}
 
-/* ── 列表下方的预览面板 ─────────────────────────────── */
-.knit-preview{flex:none;display:flex;flex-direction:column;min-height:0;
-  border-top:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1));
-  background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.02))}
-.knit-resize{flex:none;height:7px;cursor:ns-resize;background:transparent;position:relative}
-.knit-resize::after{content:'';position:absolute;left:50%;top:2px;transform:translateX(-50%);
-  width:34px;height:3px;border-radius:2px;background:var(--dsw-alias-border-l4,rgba(255,255,255,.14))}
-.knit-resize:hover::after{background:var(--knit-accent)}
-.knit-preview-head{display:flex;align-items:center;gap:8px;padding:6px 12px 8px;flex:none;
-  border-bottom:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.06))}
-.knit-preview-title{flex:1;min-width:0;font-size:12px;font-weight:600;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.knit-preview-body{flex:1;min-height:0;overflow-y:auto;padding:10px 14px 16px;font-size:12.5px}
-.knit-preview-body::-webkit-scrollbar{width:6px}
-.knit-preview-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}
+/* ── 列表下方的预览面板 ───────────────────────────────
+   要让人一眼看出「这是另一层，不是列表的续行」，靠三件事：
+   ① 换一个**明暗主题下都不同**的表面令牌；
+   ② 顶部圆角 + 更强的上边界；
+   ③ 一层向上的柔影。
+   ⚠️ 不要用 bg-layer-2 来做层级：浅色主题下 bg-layer-1/2/3 解析出来全是 #fff，
+      换过去等于没换（实测官方 theme 变量）。bg-module-platform 才两边都有差
+      （浅 #f5f6f7 / 深 #353638）。 */
+.knit-preview{position:relative;flex:none;display:flex;flex-direction:column;min-height:0;
+  border-top:.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.14));
+  border-top-left-radius:12px;border-top-right-radius:12px;
+  background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.03));
+  box-shadow:0 -8px 24px rgba(0,0,0,.06);
+  transition:background-color .28s ease}
+body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
+/* 用户在滚正文 = 在认真读 → 背景过渡到**纯阅读底色**（浅 #fff / 深 #151517）。
+   灰底本来是为了分层，但读起来对比度弱；给个过渡就两者兼得。
+   注意：圆角与柔影保留，所以「这是另一层」仍然看得出来。 */
+.knit-preview.reading{background:var(--dsw-alias-bg-base,#fff)}
+/* 拖拽把手：**绝对定位、不占布局高度**。
+   它原来是一条 11px 的普通 flex 行，把 38px 的头整体往下推 —— 用户看到的就是
+   「文档名和那几个按钮偏下」。改成浮在头顶的窄条后，头里的内容才真正上下居中。
+   高度取 6px：头里的按钮高 24px、在 37.5px 内容区里居中 → 顶边在 6.75px，
+   所以 6px 的把手**不会盖住按钮**（盖住会吃掉点击）。 */
+.knit-resize{position:absolute;top:0;left:0;right:0;height:6px;z-index:2;
+  cursor:ns-resize;background:transparent;
+  display:flex;align-items:center;justify-content:center}
+.knit-resize::after{content:'';width:44px;height:3px;border-radius:2px;
+  background:var(--dsw-alias-border-l3,rgba(255,255,255,.2));transition:background .15s,width .15s}
+.knit-resize:hover::after{background:var(--knit-accent);width:64px}
+/* 头对齐官方文档预览面板（.dhJKeW_header）：38px 高 + border-l3，
+   里面放路径面包屑而不是标题 —— 正文 H1 已经写了标题，重复只添乱。 */
+.knit-preview-head{box-sizing:border-box;display:flex;align-items:center;gap:4px;
+  height:38px;padding:0 6px 0 12px;flex:none;
+  border-bottom:.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.14))}
+/* 路径面包屑：**可点** —— 用系统默认应用打开这篇本地文档（阅读时多一个入口）。
+   目录可收缩并出省略号，文件名不收缩，所以长路径下仍然看得见是哪个文件。 */
+.knit-preview-path{flex:1 1 auto;min-width:0;display:flex;align-items:center;
+  margin-right:6px;font-size:12px;white-space:nowrap;overflow:hidden;
+  background:transparent;border:none;padding:0;font-family:inherit;text-align:left;
+  color:inherit;cursor:pointer}
+.knit-preview-path:disabled{cursor:default}
+.knit-preview-path:hover:not(:disabled) .knit-preview-name{text-decoration:underline}
+.knit-preview-dir{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  color:var(--dsw-alias-label-tertiary,rgba(255,255,255,.4))}
+.knit-preview-name{flex:0 0 auto;color:var(--dsw-alias-label-primary,#e8eaed)}
+/* 正文区把滚动条提到 l2 —— 与官方文档预览面板同一档（那边的 .body 也覆盖这两个变量）。
+   不重写 ::-webkit-scrollbar，只覆盖变量，所以宽度/圆角/悬停都跟 DSH 完全一致。 */
+.knit-preview-body{--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);
+  flex:1;min-height:0;overflow-y:auto;padding:10px 14px 16px;font-size:12.5px}
 .knit-preview-close{flex:none;width:24px;height:24px;border-radius:6px;cursor:pointer;
   display:inline-flex;align-items:center;justify-content:center;font-size:13px;
   background:transparent;border:none;color:var(--dsw-alias-label-secondary,#9aa0a6)}
-.knit-preview-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));
+.knit-preview-close:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-raw{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.6;
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -488,9 +541,9 @@ window.__ModuleLoader__.load({
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:11px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   transition:background .15s,color .15s}
-.knit-type-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));
+.knit-type-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   color:var(--dsw-alias-label-primary,#e8eaed)}
-.knit-type-btn.active{background:var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.1));
+.knit-type-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
 
 /* ── 图片与视频：方形缩略图网格 ─────────────────────
@@ -512,12 +565,14 @@ window.__ModuleLoader__.load({
   border:.5px solid var(--dsw-alias-border-l2,rgba(255,255,255,.1));
   transition:border-color .15s,box-shadow .15s}
 .knit-media-card:hover .knit-media-thumbbox{border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22))}
-/* 正在预览 → 品牌色描边；键盘移动 → 只有中性描边，别让它看起来像「选中了」 */
-.knit-media-card.active .knit-media-thumbbox{
-  border-color:var(--knit-accent);box-shadow:0 0 0 1.5px var(--knit-accent)}
+/* 键盘移动 → 只有中性描边。必须排在 .active 之前：键盘光标默认常驻第一项，
+   若排在后面会把「正在预览」的品牌色描边盖成灰色，点第一张图就看不到选中态。 */
 .knit-media-card.cursor .knit-media-thumbbox{
   border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22));
   box-shadow:0 0 0 1.5px var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.1))}
+/* 正在预览 → 品牌色描边（排在 cursor 之后，确保同时命中时以「选中」为准） */
+.knit-media-card.active .knit-media-thumbbox{
+  border-color:var(--knit-accent);box-shadow:0 0 0 1.5px var(--knit-accent)}
 /* 等比缩小态（一屏硬塞 8 个以上）下格子太小，文件名与时间会挤成一团 —— 整块让位给缩略图 */
 .knit-media-meta{margin-top:5px;display:var(--knit-media-label,block)}
 .knit-media-name{display:flex;align-items:center;gap:3px;font-size:11.5px;line-height:1.3;
@@ -582,7 +637,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
   width:28px;height:28px;padding:0;border:none;border-radius:8px;cursor:pointer;
   background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6);
   transition:background .15s}
-.knit-entry:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08))}
+.knit-entry:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
 .knit-entry:active{transform:scale(.94)}
 
 /* 全屏阅读：藏掉头部与列表，只留预览 */
@@ -591,7 +646,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 .knit-root.fullscreen .knit-types,
 .knit-root.fullscreen .knit-topic,
 .knit-root.fullscreen .knit-list{display:none}
-.knit-root.fullscreen .knit-preview{flex:1 1 auto;max-height:none}
+/* 全屏时预览铺满整个面板：圆角与向上柔影是「浮在列表上」的隐喻，这里没有列表，去掉 */
+.knit-root.fullscreen .knit-preview{flex:1 1 auto;max-height:none;
+  border-top:none;border-radius:0;box-shadow:none}
 `
 
     /**
@@ -722,6 +779,39 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         out.push(seg)
       }
       return out.join('/')
+    }
+
+    /**
+     * 把工作区相对路径拆成「目录 / 文件名」，给预览头做面包屑。
+     *
+     * 官方文档预览面板就是这么做的（路径靠右、目录用 tertiary、文件名用 primary），
+     * 好处是**文件名永远可见**、长目录靠左被裁掉 —— 而预览头如果直接重复正文的 H1，
+     * 用户会看到「列表行标题 / 预览头标题 / 正文标题」三遍同一个词，
+     * 反而分不清哪块是列表、哪块是详情。
+     *
+     * @param {string} rel - 工作区相对路径，如 `a/b/c.md`
+     * @returns {{dir: string, name: string}} 目录（含结尾斜杠）与文件名
+     */
+    function splitRelPath(rel) {
+      const path = String(rel == null ? '' : rel)
+      const cut = path.lastIndexOf('/')
+      if (cut < 0) return { dir: '', name: path }
+      return { dir: path.slice(0, cut + 1), name: path.slice(cut + 1) }
+    }
+
+    /**
+     * 把工作区根与相对路径拼成绝对路径（拿不到宿主给的 path 时的兜底）。
+     *
+     * @param {string} root - 工作区根（宿主返回的绝对路径）
+     * @param {string} rel - 工作区相对路径
+     * @returns {string} 绝对路径；拼不出来就返回空串
+     */
+    function joinPath(root, rel) {
+      const base = String(root == null ? '' : root).replace(/\/+$/, '')
+      const tail = String(rel == null ? '' : rel).replace(/^\/+/, '')
+      if (!base) return ''
+      if (!tail) return base
+      return `${base}/${tail}`
     }
 
     /**
@@ -900,8 +990,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenTab:Function,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, onClose, onOpenTab, onToggleFullscreen, onResizeStart }) {
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, onClose, onOpenTab, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
+      const previewPath = splitRelPath(preview.rel)
 
       // 图片/视频不读正文，直接用同源字节地址渲染；Markdown 才走加载 / MarkdownText / 降级。
       const body = preview.status === 'loading'
@@ -933,12 +1024,25 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                     h('pre', { className: 'knit-raw' }, preview.text))
 
       return h('div', {
-        className: 'knit-preview',
+        className: `knit-preview${reading ? ' reading' : ''}`,
         style: fullscreen ? undefined : { maxHeight: `${Math.round(ratio * 100)}%` },
       },
         fullscreen ? null : h('div', { className: 'knit-resize', onPointerDown: onResizeStart, title: t('preview.resizeTitle') }),
         h('div', { className: 'knit-preview-head' },
-          h('div', { className: 'knit-preview-title', title: preview.rel }, preview.title || preview.rel),
+          // 路径面包屑，**可点**：用系统默认应用打开这篇本地文档 —— 阅读时多一个
+          // 「跳到本地」的入口。不放标题：正文 H1 已经写了，重复会让
+          // 「列表行 / 预览头 / 正文」出现三遍同一个词，反而分不清哪块是详情。
+          h('button', {
+            type: 'button',
+            className: 'knit-preview-path',
+            title: onOpenLocal ? t('preview.openLocal', { path: preview.rel }) : preview.rel,
+            disabled: !onOpenLocal,
+            onClick: () => { if (onOpenLocal) onOpenLocal() },
+          },
+          previewPath.dir
+            ? h('span', { className: 'knit-preview-dir' }, previewPath.dir)
+            : null,
+          h('span', { className: 'knit-preview-name' }, previewPath.name)),
           h('button', {
             className: 'knit-btn',
             onClick: onToggleFullscreen,
@@ -946,7 +1050,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           }, fullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')),
           h('button', { className: 'knit-btn', onClick: onOpenTab, title: t('preview.newTabTitle') }, t('preview.newTab')),
           h('button', { className: 'knit-preview-close', onClick: onClose, title: t('preview.close') }, '✕')),
-        h('div', { className: `knit-preview-body${isMedia ? ' is-media' : ''}` },
+        h('div', {
+          className: `knit-preview-body${isMedia ? ' is-media' : ''}`,
+          onScroll: onScrollBody,
+        },
           !isMedia && preview.truncated ? h('div', { className: 'knit-preview-note' }, t('preview.truncated')) : null,
           body))
     }
@@ -981,6 +1088,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 「全部」的媒体区只给两行，所以列数得跟着面板宽度走（量不到就按默认 3 列）。
       // 放在 fullscreen 之后，保持前几个 hook 的顺序不变 —— 测试按顺序预置状态。
       const [listWidth, setListWidth] = React.useState(0)
+
+      // 阅读态：记「哪一篇被滚过」。真正的存储是**模块级**的 readingDocs（见其定义），
+      // 组件里只留一个自增计数器用来触发重渲染 —— 这样即便宿主把 tab body
+      // 重新挂载（用户反馈「鼠标移出去以后就没有了」，组件 state 会归零），
+      // 阅读态也不会丢。放在最后，不动前面任何 hook 的槽位。
+      const [readingTick, setReadingTick] = React.useState(0)
 
       React.useEffect(() => {
         const host = listRef.current
@@ -1100,7 +1213,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * Markdown 才进 loading 去拉正文。
        */
       const previewFor = React.useCallback((doc) => {
-        const base = { rel: doc.rel, title: doc.title || doc.name, text: '', truncated: false }
+        const base = { rel: doc.rel, title: doc.title || doc.name, path: doc.path || '', text: '', truncated: false }
         if (isMedia(doc)) {
           return { ...base, kind: doc.kind, src: mediaUrl(sessionId, doc.rel), status: 'ready' }
         }
@@ -1188,7 +1301,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         const apply = (target) => {
           setNotice('')
           // 悬停浮层只列 Markdown，这里固定按文档走 loading→拉正文。
-          setPreview({ rel: target.rel, title: target.title, kind: KIND_DOC, status: 'loading', text: '', truncated: false })
+          setPreview({ rel: target.rel, title: target.title, path: target.path || '', kind: KIND_DOC, status: 'loading', text: '', truncated: false })
         }
         if (pendingPreview) {
           const queued = pendingPreview
@@ -1201,6 +1314,31 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 预览进入 loading 时去宿主取正文
       const previewRel = preview && preview.rel
       const previewStatus = preview && preview.status
+
+      /** 阅读态 = 当前这一篇被滚过。换一篇自然为 false（派生，不用复位 effect）。 */
+      const reading = Boolean(previewRel) && readingDocs.has(readingKey(sessionId, previewRel))
+
+      /** 一开始滚正文就进入阅读态（阈值 4px，避免 1px 抖动就触发）；进了就不再退回。 */
+      const onScrollBody = React.useCallback((event) => {
+        const el = event && event.target
+        if (!el || typeof el.scrollTop !== 'number' || el.scrollTop <= READING_SCROLL_PX) return
+        const key = readingKey(sessionId, previewRel)
+        if (readingDocs.has(key)) return
+        readingDocs.add(key)
+        setReadingTick((n) => n + 1)      // 只是为了让这次写入反映到界面上
+      }, [sessionId, previewRel])
+      void readingTick
+
+      /** 这篇文档在磁盘上的绝对路径：宿主给的 path 优先，拿不到就用 root + rel 拼。 */
+      const previewAbsPath = preview
+        ? (preview.path || joinPath(state.root, preview.rel))
+        : ''
+
+      /** 点预览头那行路径 → 用系统默认应用打开本地文档。 */
+      const openPreviewLocal = React.useCallback(async () => {
+        setNotice((await openLocalPath(previewAbsPath)) || '')
+      }, [previewAbsPath])
+
       React.useEffect(() => {
         if (!previewRel || previewStatus !== 'loading') return undefined
         let alive = true
@@ -1405,6 +1543,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         pathImages,
         fullscreen,
         ratio,
+        reading,
+        onScrollBody,
+        // 拿不到绝对路径就不给点（而不是点了没反应）
+        onOpenLocal: previewAbsPath ? openPreviewLocal : null,
         onClose: closePreview,
         onOpenTab: () => onOpenTab(null),
         onToggleFullscreen: () => setFullscreen((v) => !v),
@@ -1762,6 +1904,27 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     let pendingPreview = null
     /** @type {Set<Function>} */
     const previewSubscribers = new Set()
+
+    /**
+     * 已经进入过「阅读态」的文档，key 见 `readingKey`。
+     *
+     * **故意放在模块级而不是组件 state**：用户反馈「滚过之后背景变白，但鼠标移出去
+     * 就没有了」—— 组件 state 会随宿主重挂载归零，本模块级集合不会。
+     * 语义是「这一篇在这个会话里被读过」，所以重挂载、切 tab 回来都仍然算读过。
+     *
+     * @type {Set<string>}
+     */
+    const readingDocs = new Set()
+
+    /**
+     * 阅读态的 key：同一会话里的同一篇文档算一个。
+     * @param {string} sessionId - 会话 id
+     * @param {string} rel - 工作区相对路径
+     * @returns {string} key
+     */
+    function readingKey(sessionId, rel) {
+      return `${sessionId || ''}\u0000${rel || ''}`
+    }
 
     /**
      * 请求在面板里打开某一篇。面板挂着就立刻生效，没挂就留一份挂起。
