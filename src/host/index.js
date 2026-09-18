@@ -516,6 +516,7 @@ export async function scan(root, limit, options = {}) {
   const sessionId = options.sessionId || ''
   let keywords = NO_KEYWORDS
   let mode = 'time'
+  let matched = []
 
   if (wantRelevance) {
     keywords = keywordsFor(options.session, sessionId)
@@ -523,9 +524,17 @@ export async function scan(root, limit, options = {}) {
     mode = keywords.length > 0 ? 'relevance' : 'time'
   }
 
-  const ordered = mode === 'relevance'
-    ? rankByRelevance(pool, keywords, Date.now()).docs
-    : pool.map((doc) => ({ ...doc, score: null }))
+  let ordered
+  if (mode === 'relevance') {
+    const ranked = rankByRelevance(pool, keywords, Date.now())
+    ordered = ranked.docs
+    // `matched` 是**语料里真实存在**的词。候选词里有相当一部分是跨词边界的碎片
+    // （「个插」「件挺」这种），它们一个文档都匹配不上 —— 拿它们当「当前话题」
+    // 会把面板那行显示成乱码，所以 topic 与 keywords 都用 matched。
+    matched = ranked.matched
+  } else {
+    ordered = pool.map((doc) => ({ ...doc, score: null }))
+  }
 
   return {
     ok: true,
@@ -535,8 +544,8 @@ export async function scan(root, limit, options = {}) {
     truncated,
     sessionId,
     mode,
-    topic: mode === 'relevance' ? topicLabel(keywords) : '',
-    keywords: mode === 'relevance' ? keywords.slice(0, 8).map((k) => k.term) : [],
+    topic: mode === 'relevance' ? topicLabel(matched) : '',
+    keywords: mode === 'relevance' ? matched.slice(0, 8) : [],
     docs: ordered.slice(0, limit).map(publicDoc),
   }
 }

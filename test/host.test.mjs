@@ -156,11 +156,40 @@ test('extractKeywords: 中文取到有意义的词，滤掉虚词', () => {
 })
 
 test('extractKeywords: 最新消息只出现一次的词也保留，旧消息的要重复才要', () => {
-  const kws = extractKeywords(['最新话题甲甲甲', '很久以前的话题乙乙乙'], 5)
+  // 旧消息刻意用**不重复**的音节：n-gram 是滑窗，重复音节会把自己的 2-gram
+  // 数成两次，那样测的就不是「门槛」而是「重叠计数」了（见下一条用例）。
+  const kws = extractKeywords(['最新话题甲甲甲', '很久以前的话题乙丙丁'], 5)
   assert.ok(kws.length > 0, '应取到词')
   // 旧消息里的词只出现一次、且不在最新消息里 → 整段滤掉
-  assert.ok(kws.every((k) => !k.term.includes('乙')), `不该出现旧消息的词：${kws.map((k) => k.term).join('/')}`)
+  assert.ok(
+    kws.every((k) => !/[乙丙丁]/.test(k.term)),
+    `不该出现只在旧消息里露过一次的词：${kws.map((k) => k.term).join('/')}`,
+  )
   assert.ok(kws.some((k) => k.term.includes('甲')), `应含最新消息的词：${kws.map((k) => k.term).join('/')}`)
+})
+
+test('extractKeywords: 重叠的 n-gram 会把「只出现一次」数成两次（已知行为）', () => {
+  // 「乙乙乙」里 2-gram「乙乙」占两个重叠窗口 → seen = 2，于是过得了中文那道门槛。
+  // 这是滑窗式 n-gram 的固有性质（不是 v0.6 引入的），记在这里免得以后被当成回归。
+  // 真实语料里重复音节的概率远低于这里，所以影响有限；
+  // 而即便漏进来，语料里不存在的词也会被 IDF 归零，不影响排序。
+  const kws = extractKeywords(['别的话题', '很久以前的话题乙乙乙'], 30)
+  assert.ok(kws.some((k) => k.term === '乙乙'), '重叠窗口应当计入两次')
+})
+
+test('extractKeywords: 丢掉首尾是虚词的跨词碎片，但保住真词的构词成分', () => {
+  // 碎片：n-gram 把相邻两个词的字粘起来，首/尾落在纯虚词上
+  const fragments = extractKeywords(['把图片和视频都放进来'], 30).map((k) => k.term)
+  assert.ok(!fragments.includes('图片和'), `尾字是虚词的 3-gram 应被丢掉：${fragments.join('/')}`)
+  assert.ok(!fragments.includes('和视频'), `首字是虚词的 3-gram 应被丢掉：${fragments.join('/')}`)
+
+  // 真词：以「上/下/中」这类**构词成分**开头（它们在 CN_STOP_CHARS 里，但不在窄集里）。
+  // 各自单独作为**最新**那条消息 —— 中文 n-gram 要「出现 2 次」或「在最新消息里」
+  // 才过门槛，塞进旧消息里会被门槛拦掉，那测的就不是首尾判定了。
+  const up = extractKeywords(['上传这张截图'], 30).map((k) => k.term)
+  assert.ok(up.includes('上传'), `「上传」是真词，应保留：${up.join('/')}`)
+  const ctx = extractKeywords(['注意上下文里的路径'], 30).map((k) => k.term)
+  assert.ok(ctx.includes('上下文'), `「上下文」是真词，应保留：${ctx.join('/')}`)
 })
 
 test('extractKeywords: 最新消息的中文片段会进入候选（当下话题的最强信号）', () => {
@@ -191,9 +220,94 @@ test('rankByRelevance: 没有关键词时全部 0 分且不打乱顺序', () => 
     { rel: 'a.md', mtimeMs: 2, haystack: { title: '', summary: '', body: '' } },
     { rel: 'b.md', mtimeMs: 1, haystack: { title: '', summary: '', body: '' } },
   ]
-  const { docs: ranked } = rankByRelevance(docs, [], Date.now())
+  const { docs: ranked, matched } = rankByRelevance(docs, [], Date.now())
   assert.deepEqual(ranked.map((d) => d.rel), ['a.md', 'b.md'])
   assert.ok(ranked.every((d) => d.score === 0))
+  assert.deepEqual(matched, [], '没有关键词就没有 matched')
+})
+
+/* ── v0.6：BM25 的三条新行为 ─────────────────────────── */
+
+/** 造一条文档：haystack 口径与宿主一致（先截 2500 再小写）。 */
+function bm25Doc(rel, { title = '', summary = '', body = '' }, mtimeMs) {
+  return {
+    rel,
+    mtimeMs,
+    haystack: {
+      title: title.toLowerCase(),
+      summary: summary.toLowerCase(),
+      body: body.slice(0, 2500).toLowerCase(),
+    },
+  }
+}
+
+test('rankByRelevance: IDF 让高频词不再霸榜（v0.6 核心行为）', () => {
+  const now = Date.now()
+  // 「knit」出现在**每一篇**（df = N）→ idf 接近 0；「排序」只出现在一篇 → idf 高。
+  // 旧引擎按命中次数算，满篇 knit 的那篇必赢 —— 这正是评测集里两个陷阱用例失败的原因。
+  // ⚠️ 项目名必须真的铺开在多数文档里，否则 df=1，测的就不是 IDF 了。
+  const docs = [
+    bm25Doc('noise.md', { title: 'knit', body: 'knit '.repeat(40) }, now),
+    bm25Doc('topic.md', { title: '排序', body: 'knit 排序 相关性排序 关键词 排序 命中' }, now),
+    bm25Doc('other.md', { title: '媒体', body: 'knit 的图片与视频浏览' }, now),
+  ]
+  const kws = extractKeywords(['knit 的排序是不是不准', 'knit 的相关性排序到底怎么算'])
+  const { docs: ranked } = rankByRelevance(docs, kws, now)
+  assert.equal(ranked[0].rel, 'topic.md', `高频词霸榜了：${ranked.map((d) => `${d.rel}=${d.score}`).join('/')}`)
+})
+
+test('rankByRelevance: 长度归一化压住「长文档堆词」（v0.6 核心行为）', () => {
+  const now = Date.now()
+  // 两篇都命中 3 次，但一篇是长文 —— 旧引擎只看命中次数，两者同分。
+  const docs = [
+    bm25Doc('short.md', { title: '排序', body: '排序 排序 排序' }, now),
+    bm25Doc('long.md', { title: '归档', body: `排序 排序 排序${'填充'.repeat(700)}` }, now),
+  ]
+  const kws = [{ term: '排序', weight: 100 }]
+  const { docs: ranked } = rankByRelevance(docs, kws, now)
+  assert.equal(ranked[0].rel, 'short.md', '短而聚焦的文档应当赢过长而堆词的')
+  assert.ok(ranked[1].score < 100, '长文档应当被长度归一化压低')
+})
+
+test('rankByRelevance: 语料里没有的词不贡献分数（df = 0 → idf = 0）', () => {
+  const now = Date.now()
+  const docs = [
+    bm25Doc('a.md', { title: '排序', body: '相关性排序' }, now),
+    bm25Doc('b.md', { title: '媒体', body: '图片与视频' }, now),
+  ]
+  // 一个语料里根本不存在、但权重极高的词，不该把任何一篇抬起来
+  const { docs: ranked, maxRaw, matched } = rankByRelevance(
+    docs, [{ term: 'zqxwv', weight: 9999 }], now,
+  )
+  assert.equal(maxRaw, 0, '没有词命中时 maxRaw 必须是 0')
+  assert.ok(ranked.every((d) => d.score === 0))
+  assert.deepEqual(matched, [], 'df = 0 的词不算 matched')
+})
+
+test('rankByRelevance: 字段全空（media 的 summary/body）不产生 NaN', () => {
+  const now = Date.now()
+  // kind=media 时每篇的 summary 与 body 都是空串 → avgdl 为 0。
+  // 不做短路的话这里会除零，NaN 会顺着 maxRaw 污染全部文档的分数。
+  const docs = [
+    bm25Doc('shot.png', { title: 'knit-screenshot.png' }, now),
+    bm25Doc('clip.mp4', { title: 'knit-clip.mp4' }, now),
+  ]
+  const { docs: ranked, maxRaw } = rankByRelevance(docs, [{ term: 'knit', weight: 10 }], now)
+  assert.ok(Number.isFinite(maxRaw), `maxRaw 不是有限数：${maxRaw}`)
+  assert.ok(ranked.every((d) => Number.isFinite(d.raw)), 'raw 里出现了 NaN/Infinity')
+  assert.ok(ranked.every((d) => Number.isInteger(d.score) && d.score >= 0 && d.score <= 100))
+})
+
+test('rankByRelevance: matched 只回语料里真实存在的词，且按权重降序', () => {
+  const now = Date.now()
+  const docs = [bm25Doc('a.md', { title: '排序', body: '相关性排序' }, now)]
+  // 三个词：两个语料里有，一个没有
+  const { matched } = rankByRelevance(docs, [
+    { term: '排序', weight: 10 },
+    { term: 'zzzz', weight: 900 },
+    { term: '相关性', weight: 50 },
+  ], now)
+  assert.deepEqual(matched, ['相关性', '排序'], '只留命中语料的词，且按权重降序')
 })
 
 test('topicLabel: 用、连接前几个词', () => {

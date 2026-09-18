@@ -51,20 +51,55 @@ Newer messages weigh more: 3 / 2 / 1 / 1 …
 
 - **ASCII words** — high value, one occurrence is enough (`chokidar`, `mtime`)
 - **Chinese 2/3-grams** — either occurring twice, or appearing in the newest message
+- **Drop fragments that straddle a word boundary.** Chinese has no word boundaries, so
+  n-grams glue the last character of one word to the first of the next (「图片和」, 「个插」,
+  「的排」). They share one trait — **the first or last character is a pure function word** —
+  and are dropped. Leave them in and they fill every candidate slot, pushing the real words
+  (「图片」, 「排序」) out of the query entirely
 - stop-word filtering plus greedy de-overlap (picking「相关性排序」drops「相关性」and「排序」)
 
-**3. Score the documents.** Weighted hits per keyword per document:
+**3. Score the documents — BM25.**
 
 ```
-title ×4  +  summary ×2  +  first 2500 chars of body ×1
-each keyword caps at 6 hits (so long docs can't farm score)
+IDF per term first: rarer in the corpus means more valuable
+                    ln(1 + (N - df + 0.5) / (df + 0.5))
+then a weighted sum over fields: title ×4  +  summary ×2  +  first 2500 chars of body ×1
+each field saturated and length-normalised (k1 = 1.2, b = 0.3 / 0.5 / 0.75)
 plus a 10% recency nudge (relevance still dominates)
 ```
 
+**Why BM25 and not "hits × weight"** (the original approach, since replaced):
+
+- with no IDF, a term that appears **everywhere** (the project name) is worth as much as a
+  rare one — so the frequent term discriminates nothing and dilutes the rare ones
+- with no length normalisation, **a long document wins by piling up hits**
+- capping hits at 6 was a hand-drawn knee; `k1` / `b` exist precisely for this
+
+Measured on `test/eval/fixture.mjs` (21 cases, both engines on the same corpus):
+
+| | top-1 | MRR |
+|---|---|---|
+| old (weighted hits) | 76.2% | 0.830 |
+| **BM25** | **95.2%** | **0.976** |
+
+That eval runs inside `npm test`, and the baseline is **recomputed each run** from the old
+engine frozen in `test/eval/legacy.mjs` — so "the new engine must be clearly better" is
+verified automatically rather than asserted against a hard-coded number.
+
+**About the "sorted by「xxx」" line**: it shows terms that **actually exist in the corpus**.
+Some candidates are fragments that match no document at all, and showing those as the topic
+renders as gibberish.
+
 All of it is string arithmetic — **no embeddings, no model calls**.
 
-**And the honest boundary**: with only one or two messages there are too few keywords, so it
-falls back to sorting by modification time and says so in the panel — it does not pretend to rank.
+**And the honest boundaries**:
+
+- **With only one or two messages** there are too few keywords, so it falls back to sorting by
+  modification time and says so in the panel — it does not pretend to rank
+- **With only three to five documents IDF barely does anything**: `df` only takes a few values,
+  so its dynamic range collapses. The more documents, the better this ranking gets
+- **It can only rank documents that share vocabulary with the conversation**: if no term matches,
+  every document scores the same and the order degrades to time
 
 ---
 
@@ -90,7 +125,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 
 | | |
 |---|---|
-| **Sorted by relevance to the current conversation** (local keyword matching, no model) | ✅ |
+| **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
@@ -173,7 +208,7 @@ knit/
 ├── assets/               # icon source (path inlined into client.js)
 ├── src/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw
-│   ├── host/relevance.js # the relevance engine (pure functions)
+│   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   └── client/client.js  # dual-host registration + panel UI
 └── test/                 # 162 tests
 ```
