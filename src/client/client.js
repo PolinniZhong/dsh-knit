@@ -68,6 +68,17 @@ window.__ModuleLoader__.load({
       'list.empty': '这个工作区里还没有 Markdown 文档。',
       'list.emptyMedia': '这个工作区里还没有图片或视频。',
       'list.noMatch': '没有匹配「{query}」的文档。',
+      // 文档列表这个 listbox 的无障碍名字（原先硬编码在 JSX 里，英文界面下会漏出中文）
+      'list.aria': '最近文档',
+
+      // 相对时间。⚠️ 这六条原先**硬编码在 relTime() 里**，英文界面下会漏出中文
+      // （2026-09-19 被真机截图抓出来的）。**加时间粒度时必须同时加中英两条。**
+      'time.justNow': '刚刚',
+      'time.minutesAgo': '{n}分钟前',
+      'time.hoursAgo': '{n}小时前',
+      'time.yesterday': '昨天',
+      'time.daysAgo': '{n}天前',
+      'time.monthDay': '{month}月{day}日',
 
       'media.play': '播放视频',
 
@@ -166,6 +177,18 @@ window.__ModuleLoader__.load({
       'list.empty': 'No Markdown documents in this workspace yet.',
       'list.emptyMedia': 'No images or videos in this workspace yet.',
       'list.noMatch': 'No documents match “{query}”.',
+      // Accessible name of the document listbox (was hardcoded in JSX before)
+      'list.aria': 'Recent documents',
+
+      // Relative time. ⚠️ These six used to be **hardcoded inside relTime()** and leaked
+      // Chinese into the English UI (caught by a real-machine screenshot, 2026-09-19).
+      // **Add both languages whenever you add a granularity.**
+      'time.justNow': 'just now',
+      'time.minutesAgo': '{n} min ago',
+      'time.hoursAgo': '{n} h ago',
+      'time.yesterday': 'yesterday',
+      'time.daysAgo': '{n} d ago',
+      'time.monthDay': '{month}/{day}',
 
       'media.play': 'Play video',
 
@@ -881,22 +904,27 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
     /**
      * 人类可读的相对时间。
+     *
+     * ⚠️ **文案必须走 `t()`。** 这六条原先硬编码中文，英文界面下会漏出「3 分钟前」——
+     * 2026-09-19 的真机截图把它抓出来了（`test/i18n.test.mjs` 有守卫：
+     * 英文渲染出来的整棵树里不许出现汉字）。
+     *
      * @param {number} ms - 文件 mtime（epoch ms）
      * @param {number} now - 当前时间
-     * @returns {string} 刚刚 / X分钟前 / X小时前 / 昨天 / X天前 / 月日
+     * @returns {string} 刚刚 / X分钟前 / X小时前 / 昨天 / X天前 / 月日（按当前语言）
      */
     function relTime(ms, now) {
       const diff = Math.max(0, now - ms)
       const min = Math.floor(diff / 60000)
-      if (min < 1) return '刚刚'
-      if (min < 60) return `${min}分钟前`
+      if (min < 1) return t('time.justNow')
+      if (min < 60) return t('time.minutesAgo', { n: min })
       const hour = Math.floor(min / 60)
-      if (hour < 24) return `${hour}小时前`
+      if (hour < 24) return t('time.hoursAgo', { n: hour })
       const day = Math.floor(hour / 24)
-      if (day === 1) return '昨天'
-      if (day < 30) return `${day}天前`
+      if (day === 1) return t('time.yesterday')
+      if (day < 30) return t('time.daysAgo', { n: day })
       const d = new Date(ms)
-      return `${d.getMonth() + 1}月${d.getDate()}日`
+      return t('time.monthDay', { month: d.getMonth() + 1, day: d.getDate() })
     }
 
     /**
@@ -1714,7 +1742,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         tabIndex: 0,
         onKeyDown: onListKeyDown,
         role: 'listbox',
-        'aria-label': '最近文档',
+        'aria-label': t('list.aria'),
       }, body),
       preview ? h(PreviewPanel, {
         preview,
@@ -2253,7 +2281,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
         bsCtx.effect(() => bs.registerTab({
           id: BS_TAB_ID,
-          title: () => 'Knit 最近文档',
+          title: () => t('guide.title'),
           icon: KnitGlyph,
           order: 30,
           single: true,                       // 同类型只开一个

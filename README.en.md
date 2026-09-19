@@ -5,7 +5,7 @@
 >
 > **Your agent has the same problem.** It gets the same ranking as a tool — the ranked documents plus the passage that matched in each.
 
-![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](docs/screenshot.png)
+![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
 *Screenshot from a real machine, not a mock-up: a workspace with 34 documents — the list, an inline
 preview, and the references bar.*

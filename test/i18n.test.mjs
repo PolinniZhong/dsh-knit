@@ -17,9 +17,10 @@ const h = React.createElement
 /**
  * 造一个假上下文，用于把模块 apply 起来（真实运行时由 DSH 调用）。
  * @param {string} locale - 活动语言
+ * @param {{betterSidebar?: boolean}} [extra] - 额外提供哪些可选服务
  * @returns {{ctx: object, log: object, registered: object}} 上下文与记录
  */
-function contextFor(locale) {
+function contextFor(locale, extra = {}) {
   const log = { tabs: [], bsTabs: [], slots: [], effects: [] }
   const { locale: localeService, registered } = makeLocale({ active: locale })
 
@@ -30,6 +31,9 @@ function contextFor(locale) {
 
   const services = { slots, locale: localeService }
   services.sidebarRightTabs = { register(def) { log.tabs.push(def); return () => {} } }
+  if (extra.betterSidebar) {
+    services.betterSidebar = { registerTab(def) { log.bsTabs.push(def); return () => {} } }
+  }
 
   const ctx = {
     slots,
@@ -51,11 +55,12 @@ function contextFor(locale) {
  * 装载模块并 apply 到指定语言。
  * @param {string} locale - 活动语言
  * @param {object} [options] - 传给 loadClientModule
+ * @param {{betterSidebar?: boolean}} [extra] - 额外提供哪些可选服务
  * @returns {{exports: object, log: object, registered: object}} 结果
  */
-function boot(locale, options) {
+function boot(locale, options, extra) {
   const loaded = loadClientModule(options)
-  const { ctx, log, registered } = contextFor(locale)
+  const { ctx, log, registered } = contextFor(locale, extra)
   loaded.exports.apply(ctx)
   return { exports: loaded.exports, log, registered, markdownCalls: loaded.markdownCalls }
 }
@@ -340,6 +345,121 @@ test('冒烟：中英环境下渲染同一份数据都不抛错，且文案确�
   assert.notEqual(zhText, enText, '两种语言渲染出的文案不该完全一样')
   assert.ok(!/Refresh|Sorted by/.test(zhText), `中文环境混进了英文：${zhText}`)
   assert.ok(!/刷新|按/.test(enText), `英文环境混进了中文：${enText}`)
+})
+
+/* ── 硬编码中文的守卫（2026-09-19 加的）──────────────────
+ *
+ * 起因：真机截图暴露「英文界面 + 中文『3 分钟前』」——`relTime()` 把那六条时间文案
+ * 硬编码在函数里，没进词典。同一批还查出两处：文档列表的 `aria-label`、
+ * better-sidebar 的 tab 标题。
+ *
+ * 上面那条冒烟用例**当时没抓住它**，因为它只硬编码地查了 `刷新|按` 两个词 ——
+ * 写死几个词等于给未来留了个洞。所以这里换成**通用判据**：
+ * 英文环境渲染出的整棵树里，文字与无障碍属性都不许出现汉字。
+ *
+ * ⚠️ 语料必须保持 ASCII（`listPayload()` 的标题是 'A' / 'B'）：
+ *    文档自带的中文标题会把这条用例误报成失败，而那是**数据**、不是**文案**。
+ */
+
+/**
+ * 收集渲染树里所有**直接**文本子节点（不走子树，避免重复）。
+ * @param {object[]} nodes - 扁平节点
+ * @returns {string[]} 文本片段
+ */
+function ownTexts(nodes) {
+  return nodes.flatMap((n) => (n.children || []).filter((c) => typeof c === 'string'))
+}
+
+/**
+ * 挑出含汉字的片段，失败信息里就能直接看出漏了哪一条。
+ * @param {string[]} texts - 文本片段
+ * @returns {string[]} 含汉字的片段
+ */
+function cjkIn(texts) {
+  return texts.filter((s) => /[\u3400-\u9fff]/.test(s))
+}
+
+const MIN = 60 * 1000
+
+/**
+ * 造一份**把相对时间六个分支全走一遍**的列表载荷。
+ *
+ * ⚠️ 这份语料不能省。第一版守卫用的是 `listPayload()`，它两篇文档只落在
+ * `justNow` 与 `yesterday` 两个分支上 —— 于是「把 `分钟前` 硬编码回去」
+ * 这种回归**测不出来**（我实测过：补丁打上去，守卫照样全绿）。
+ * 真机截图里漏出来的恰恰就是 `分钟前` 那一条。
+ *
+ * @returns {object} 载荷
+ */
+function timePayload() {
+  const now = Date.now()
+  const ages = [
+    ['now.md', 0],
+    ['min.md', 5 * MIN],
+    ['hour.md', 5 * 60 * MIN],
+    ['yest.md', 25 * 60 * MIN],
+    ['days.md', 3 * 24 * 60 * MIN],
+    ['month.md', 40 * 24 * 60 * MIN],
+  ]
+  return {
+    ok: true,
+    root: '/p',
+    total: ages.length,
+    mode: 'time',
+    topic: '',
+    docs: ages.map(([rel, age]) => ({
+      path: `/p/${rel}`, rel, name: rel, title: rel, summary: 's', mtimeMs: now - age, score: null,
+    })),
+  }
+}
+
+test('守卫：英文环境渲染出的整棵树里一个汉字都没有', async () => {
+  // 用 timePayload：六个时间分支都要真的渲染出来，否则守卫是「没覆盖的空转绿灯」
+  const { nodes } = await renderPanel('en', () => timePayload())
+  const bad = cjkIn(ownTexts(nodes))
+  assert.deepEqual(bad, [], `英文渲染里混进了中文（说明有文案没走 t()）：${bad.join(' / ')}`)
+})
+
+test('守卫：英文环境下无障碍与提示属性里也没有汉字', async () => {
+  const { nodes } = await renderPanel('en', () => timePayload())
+  const attrs = ['aria-label', 'title', 'placeholder', 'alt']
+  const bad = []
+  for (const n of nodes) {
+    for (const a of attrs) {
+      const v = n.props[a]
+      if (typeof v === 'string' && /[\u3400-\u9fff]/.test(v)) bad.push(`${a}="${v}"`)
+    }
+  }
+  assert.deepEqual(bad, [], `英文环境的属性里混进了中文：${bad.join(' / ')}`)
+})
+
+test('守卫：相对时间的六个分支都随语言（原来是硬编码中文）', async () => {
+  const en = await renderPanel('en', () => timePayload())
+  const enTimes = byClass(en.nodes, 'knit-time').map(textOf)
+  assert.equal(enTimes.length, 6, `六个分支都该渲染出来，实际只有 ${enTimes.length} 条`)
+  assert.deepEqual(
+    enTimes.slice(0, 5),
+    ['just now', '5 min ago', '5 h ago', 'yesterday', '3 d ago'],
+  )
+  // 第六档是「月/日」，具体日期随当天变，只校验形状
+  assert.match(enTimes[5], /^\d{1,2}\/\d{1,2}$/, `英文的月日应形如 8/10，实际是 ${enTimes[5]}`)
+
+  const zh = await renderPanel('zh', () => timePayload())
+  const zhTimes = byClass(zh.nodes, 'knit-time').map(textOf)
+  assert.deepEqual(
+    zhTimes.slice(0, 5),
+    ['刚刚', '5分钟前', '5小时前', '昨天', '3天前'],
+  )
+  assert.match(zhTimes[5], /^\d{1,2}月\d{1,2}日$/, `中文的月日应形如 8月10日，实际是 ${zhTimes[5]}`)
+})
+
+test('守卫：better-sidebar 的 tab 标题随语言（复用 guide.title，不再写死）', () => {
+  const en = boot('en', undefined, { betterSidebar: true })
+  assert.equal(en.log.bsTabs.length, 1, '应注册一个 better-sidebar tab')
+  assert.equal(en.log.bsTabs[0].title(), 'Knit — recent documents')
+
+  const zh = boot('zh', undefined, { betterSidebar: true })
+  assert.equal(zh.log.bsTabs[0].title(), 'Knit 最近文档')
 })
 
 /* ── 文案洁癖：词典里不出现表情装饰 ───────────────────── */

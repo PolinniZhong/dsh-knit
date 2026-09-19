@@ -5,7 +5,7 @@
 >
 > **你的 agent 也一样。** 同一份排序也给它当工具用 —— 它问「哪几篇相关」，拿回排名**加每篇里命中的那段原文**。
 
-![Knit 面板真机截图：右侧栏按相关性列出工作区文档，就地展开 Markdown 预览，预览头下方是引用条](docs/screenshot.png)
+![Knit 面板真机截图：右侧栏按相关性列出工作区文档，就地展开 Markdown 预览，预览头下方是引用条](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
 *真机截图（不是原型）：一个含 34 篇文档的工作区 —— 列表 + 就地预览 + 引用条。*
 *引用条是 v0.12 加的：展开就能看到「这篇被谁引用」，点一项直接跳过去。*
