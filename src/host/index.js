@@ -19,6 +19,8 @@ import { join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
 import { registerKnitDocsTool } from './tool.js'
+// v0.12：引用关系。`links.js` **不反过来 import 本文件**（依赖由这里注入），所以没有环。
+import { buildLinkGraph, linksOf } from './links.js'
 
 export const name = 'dsh-knit'
 
@@ -844,6 +846,21 @@ export function apply(ctx) {
           return
         }
 
+        if (url.pathname === `${ROUTE_PREFIX}/api/links`) {
+          // v0.12：某篇的「谁引用了它 / 它引用了谁」。
+          // 形态逐字照抄 /api/doc —— 缺 rel 走同一个错误码，不新增读文件原语：
+          // 图只用 collectDocs / readDocument 建，两者本身已强制「必须在工作区内」。
+          const rel = url.searchParams.get('rel') || ''
+          if (!rel) {
+            sendJson(res, 400, { ok: false, code: ERROR_CODES.missingRel })
+            return
+          }
+          const graph = await buildLinkGraph(root, { list: collectDocs, read: readDocument })
+          const payload = linksOf(graph, rel)
+          sendJson(res, payload.ok ? 200 : 404, payload)
+          return
+        }
+
         sendJson(res, 404, { ok: false, code: ERROR_CODES.notFoundRoute })
       } catch (error) {
         sendJson(res, 500, { ok: false, code: ERROR_CODES.internal, detail: String((error && error.message) || error) })
@@ -852,7 +869,7 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links`)
       return () => unregister()
     }, 'dsh-knit: host route')
   })

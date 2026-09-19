@@ -1177,3 +1177,183 @@ test('媒体：媒体视图一个媒体都没有时给出专属空态', async ()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   assert.match(byClass(nodes, 'knit-msg').map(textOf).join(''), /还没有图片或视频/)
 })
+
+/* ── v0.12 引用条 ───────────────────────────────────── */
+
+/** 列表 / 正文 / 引用 三路分流。 */
+function linksResponder(linksPayload) {
+  return (url) => {
+    if (url.includes('/api/links')) return linksPayload
+    if (url.includes('/api/doc')) {
+      return { ok: true, rel: '技术方案.md', title: '技术方案', text: '# 技术方案\n\n正文。', truncated: false }
+    }
+    return listPayload()
+  }
+}
+
+const LINKS_PAYLOAD = {
+  ok: true,
+  rel: '技术方案.md',
+  incoming: [{ rel: 'sub/需求 文档.md', title: '需求' }],
+  outgoing: [{ rel: 'CHANGELOG.md', title: '变更' }],
+  incomingTotal: 3,
+  outgoingTotal: 1,
+  limited: false,
+}
+
+/** 打开第一篇文档，把预览与引用条都跑完。 */
+async function openFirstDoc(nodes) {
+  let ns = nodes
+  ns = harness.render(h(KnitBodyForLinks(), { sessionId: 's1' }))
+  await harness.flush()
+  ns = harness.render(h(KnitBodyForLinks(), { sessionId: 's1' }))
+  byClass(ns, 'knit-doc')[0].props.onClick()
+  ns = harness.render(h(KnitBodyForLinks(), { sessionId: 's1' }))
+  await harness.flush()
+  return harness.render(h(KnitBodyForLinks(), { sessionId: 's1' }))
+}
+
+/** `harness.seed` 的槽位与既有用例保持一致（notice / sort）。 */
+function KnitBodyForLinks() {
+  harness.reset()
+  harness.seed(['', 'time'])
+  return loadClientModule().exports.__test.KnitBody
+}
+
+test('引用条：打开一篇会请求 /api/links，默认折叠只给计数', async () => {
+  const { calls } = installFetch(linksResponder(LINKS_PAYLOAD))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const linksCall = calls.find((u) => u.includes('/api/links'))
+  assert.ok(linksCall, '应请求引用关系')
+  assert.ok(linksCall.includes(encodeURIComponent('技术方案.md')), `rel 应被编码：${linksCall}`)
+  assert.equal(byClass(nodes, 'knit-link-row').length, 0, '默认折叠，不该有列表项')
+  const summary = byClass(nodes, 'knit-links-summary').map(textOf).join('')
+  assert.match(summary, /被引用 3/)
+  assert.match(summary, /引用了 1/)
+})
+
+test('引用条：展开后列出两侧，超出的给「还有 N 篇」', async () => {
+  installFetch(linksResponder(LINKS_PAYLOAD))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-links-head')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.equal(byClass(nodes, 'knit-link-row').length, 2, '被引用 1 条 + 引用 1 条')
+  assert.deepEqual(byClass(nodes, 'knit-link-name').map(textOf), ['需求', '变更'])
+  assert.deepEqual(byClass(nodes, 'knit-link-path').map(textOf),
+    ['sub/需求 文档.md', 'CHANGELOG.md'], '副行给相对路径，方便认人')
+  // incomingTotal 3 而只列了 1 条 → 提示还有 2 篇
+  assert.match(byClass(nodes, 'knit-links-note').map(textOf).join(''), /还有 2 篇/)
+})
+
+test('引用条：点一项就切到那一篇，且**不重新拉列表**（订阅制，不走轮询）', async () => {
+  const { calls } = installFetch(linksResponder(LINKS_PAYLOAD))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-links-head')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-link-row')[0].props.onClick()
+  // ⚠️ **刻意不 flush**：订阅制是**同步**送达的，点完立刻就该是新那篇。
+  // 如果这一跳要经过列表接口，就必须等一次 fetch + flush，这条断言会红。
+  // （不数 `/api/recent` 次数 —— 这个 harness 的 useEffect 不跟踪依赖，
+  //   每次 flush 都会重跑所有 effect，数次数测不出「有没有走轮询」。）
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.match(
+    byClass(nodes, 'knit-preview-name').map(textOf).join(''),
+    /需求 文档\.md/,
+    '点完立刻切到那一篇，中间不该有 fetch（AGENTS.md §6.4：即时信号别藏在轮询里）',
+  )
+
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.ok(
+    calls.some((u) => u.includes('/api/doc') && u.includes(encodeURIComponent('sub/需求 文档.md'))),
+    '随后应真的去取那一篇的正文',
+  )
+})
+
+test('引用条：「没有被引用」与「读取失败」是两句不同的话（不都显示成空白）', async () => {
+  installFetch(linksResponder({
+    ok: true, rel: '技术方案.md', incoming: [], outgoing: [],
+    incomingTotal: 0, outgoingTotal: 0, limited: false,
+  }))
+  let { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-links-head')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  const emptyText = byClass(nodes, 'knit-links-empty').map(textOf).join('')
+  assert.match(emptyText, /没有被引用/)
+  assert.match(emptyText, /没有引用别的文档/)
+
+  // 失败态：服务端返回错误码 → 走另一句文案，且**不给展开按钮**
+  installFetch(linksResponder({ ok: false, code: 'knit/not-found' }))
+  ;({ KnitBody } = loadClientModule().exports.__test)
+  harness.reset()
+  harness.seed(['', 'time'])
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byClass(nodes, 'knit-links-head').length, 0, '失败态没有可展开的头')
+  assert.match(byClass(nodes, 'knit-links').map(textOf).join(''), /引用关系读取失败/)
+})
+
+test('引用条：图片/视频不请求 /api/links（图里只有 .md，请求必然 404）', async () => {
+  const { calls } = installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byClass(nodes, 'knit-media-card')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.ok(!calls.some((u) => u.includes('/api/links')), '媒体不该请求引用关系')
+  assert.equal(byClass(nodes, 'knit-links').length, 0, '媒体不显示引用条')
+})

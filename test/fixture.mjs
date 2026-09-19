@@ -23,9 +23,13 @@ const FAKE_MP4 = Buffer.alloc(4096, 0x21)
 /**
  * 建样本工作区。文件名刻意与旧断言一致（README.md / package.json / docs/screenshot.png），
  * 断言语义不用改；mtime 用 utimes 定死，排序断言不再看运气。
+ *
+ * @param {Array<[string, string|Buffer]>} [extra] - 追加的 `[rel, 内容]`。
+ *   v0.12 的引用关系用例需要能自己造带链接的文件 —— **样本一律从这里要**，
+ *   不许去借仓库里的真实文件（AGENTS.md §6.8）。
  * @returns {string} 工作区绝对路径；进程退出时自动清理
  */
-export function makeWorkspace() {
+export function makeWorkspace(extra = []) {
   const dir = mkdtempSync(join(tmpdir(), 'knit-fixture-'))
   const base = Date.now() - 120_000
   const files = [
@@ -35,6 +39,7 @@ export function makeWorkspace() {
     ['package.json', '{\n  "name": "sample"\n}\n'],
     ['docs/screenshot.png', PADDED_PNG],
     ['docs/clip.mp4', FAKE_MP4],
+    ...extra,
   ]
   files.forEach(([rel, content], i) => {
     const abs = join(dir, rel)

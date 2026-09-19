@@ -15,8 +15,20 @@ import { stat } from 'node:fs/promises'
 import { apply } from '../src/host/index.js'
 import { makeWorkspace } from './fixture.mjs'
 
-/** 测试自带样本工作区（临时目录），里面有 docs/screenshot.png 当媒体样本。 */
-const PROJECT_ROOT = makeWorkspace()
+/**
+ * 测试自带样本工作区（临时目录），里面有 docs/screenshot.png 当媒体样本。
+ *
+ * v0.12 追加了几个**带引用**的文件给 `/api/links` 用。刻意包含一组
+ * **同名但不同目录**的 `SKILL.md` —— 那是真实语料里最大的误报源
+ * （`SKILL.md` 有 20 个、`01_公众号正文.md` 有 12 个）。
+ */
+const PROJECT_ROOT = makeWorkspace([
+  ['docs/hub.md', '# hub\n\n见 `docs/notes.md` 与 README.md\n'],
+  ['docs/leaf.md', '# leaf\n\n见 [笔记](docs/notes.md)\n'],
+  ['x/SKILL.md', '# x 的 skill\n'],
+  ['y/SKILL.md', '# y 的 skill\n'],
+  ['amb.md', '# amb\n\n见 `SKILL.md`（同名两处，不该产生边）\n'],
+])
 
 /**
  * 起一个挂着 Knit 路由的回环 server（伪造 cordis 的 webServer / sessions / effect）。
@@ -125,6 +137,72 @@ test('HTTP 端到端：媒体列表、/raw 整文件、Range 206、安全拒绝'
 
     // 非 GET：405
     r = await fetch(`${base}/api/recent?sessionId=s`, { method: 'POST' })
+    assert.equal(r.status, 405)
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：/api/links 的引用关系、缺参与越界、不泄漏内部结构', async () => {
+  const { base, close } = await startKnitServer()
+  try {
+    // 正常：hub 与 leaf 都引用了 docs/notes.md，所以它被引用 2 次、自己不引用别人
+    let r = await fetch(`${base}/api/links?sessionId=s&rel=${encodeURIComponent('docs/notes.md')}`)
+    let body = await r.json()
+    assert.equal(r.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.rel, 'docs/notes.md')
+    assert.equal(body.incomingTotal, 2, 'hub 与 leaf 各一条')
+    assert.deepEqual(body.incoming.map((d) => d.rel).sort(), ['docs/hub.md', 'docs/leaf.md'])
+    assert.equal(body.outgoingTotal, 0)
+    assert.deepEqual(body.outgoing, [])
+    assert.ok(body.incoming.every((d) => d.rel && d.title), '每项要有 rel 与 title')
+
+    // 不泄漏内部结构（与 knit_docs 同一条纪律）
+    for (const k of ['out', 'in', 'titles', 'signature', 'parsed', 'skipped', 'haystack']) {
+      assert.ok(!(k in body), `不该泄漏 ${k}`)
+    }
+
+    // 反向：hub 自己引用了 notes 与 README
+    r = await fetch(`${base}/api/links?sessionId=s&rel=${encodeURIComponent('docs/hub.md')}`)
+    body = await r.json()
+    assert.equal(r.status, 200)
+    assert.equal(body.outgoingTotal, 2)
+    assert.deepEqual(body.outgoing.map((d) => d.rel).sort(), ['README.md', 'docs/notes.md'])
+    assert.deepEqual(body.incoming, [])
+
+    // 🔴 误报回归：同名两处 SKILL.md 时，只写 basename 必须不产生边
+    r = await fetch(`${base}/api/links?sessionId=s&rel=${encodeURIComponent('x/SKILL.md')}`)
+    body = await r.json()
+    assert.equal(r.status, 200)
+    assert.equal(body.incomingTotal, 0, '歧义 basename 不许产生边')
+
+    // 缺 rel → 400，且是既有错误码
+    r = await fetch(`${base}/api/links?sessionId=s`)
+    body = await r.json()
+    assert.equal(r.status, 400)
+    assert.deepEqual(body, { ok: false, code: 'knit/missing-rel' })
+
+    // 未知 rel → 404。**越界路径也走这里** —— 图里只有工作区内的 rel，
+    // 所以这个路由**没有**按路径读文件的口子，套不出工作区外的内容。
+    for (const bad of ['nope.md', '../outside.md', '/etc/passwd.md']) {
+      r = await fetch(`${base}/api/links?sessionId=s&rel=${encodeURIComponent(bad)}`)
+      body = await r.json()
+      assert.equal(r.status, 404, `${bad} 应 404`)
+      assert.deepEqual(body, { ok: false, code: 'knit/not-found' })
+    }
+
+    // 安全响应头：JSON 路由与 /api/recent、/api/doc 一致 —— 都走 sendJson，设 `nosniff`。
+    // ⚠️ **CSP（含 `sandbox`）只有媒体路由 `/api/raw` 才设** —— 那是给浏览器渲染
+    // 图片/视频/SVG 用的，JSON 不吃这一套。我第一版按「所有路由都该有 CSP」写，
+    // 是**断言错了**，不是代码缺了防护。
+    r = await fetch(`${base}/api/links?sessionId=s&rel=${encodeURIComponent('docs/notes.md')}`)
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(r.headers.get('cache-control'), 'no-store')
+    assert.match(r.headers.get('content-type') || '', /application\/json/)
+
+    // 非 GET → 405（前置守卫覆盖新路由）
+    r = await fetch(`${base}/api/links?sessionId=s&rel=x.md`, { method: 'POST' })
     assert.equal(r.status, 405)
   } finally {
     await close()

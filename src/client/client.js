@@ -85,6 +85,15 @@ window.__ModuleLoader__.load({
       'preview.openLocalBtn': '在本地打开',
       'preview.close': '收起预览',
       'preview.resizeTitle': '拖动调整高度',
+      // v0.12 引用条。⚠️ 不放任何表情符号（test/i18n.test.mjs 有守卫）。
+      'links.summary': '被引用 {in} · 引用了 {out}',
+      'links.incoming': '被引用',
+      'links.outgoing': '引用了',
+      'links.noneIn': '没有被引用',
+      'links.noneOut': '没有引用别的文档',
+      'links.more': '还有 {count} 篇',
+      'links.failed': '引用关系读取失败',
+      'links.incomplete': '工作区较大，结果可能不完整',
       'preview.rawFallback': '原生 Markdown 渲染不可用，下面是纯文本。请看控制台的 [knit] 日志。',
       'code.copy': '复制',
       'code.copied': '已复制',
@@ -174,6 +183,14 @@ window.__ModuleLoader__.load({
       'preview.openLocalBtn': 'Open locally',
       'preview.close': 'Close preview',
       'preview.resizeTitle': 'Drag to resize',
+      'links.summary': 'Referenced by {in} · links to {out}',
+      'links.incoming': 'Referenced by',
+      'links.outgoing': 'Links to',
+      'links.noneIn': 'Not referenced by anything',
+      'links.noneOut': 'Links to no other document',
+      'links.more': '{count} more',
+      'links.failed': 'Could not read references',
+      'links.incomplete': 'Large workspace — results may be incomplete',
       'preview.rawFallback': 'Native Markdown rendering is unavailable — showing plain text. Check the [knit] logs in the console.',
       'code.copy': 'Copy',
       'code.copied': 'Copied',
@@ -283,6 +300,9 @@ window.__ModuleLoader__.load({
     const LIST_API = '/knit/api/recent'
     const DOC_API = '/knit/api/doc'
     const RAW_API = '/knit/api/raw'
+    // v0.12：某篇的「谁引用了它 / 它引用了谁」。与上面三条一样是**同源相对地址**，
+    // 所以仍然满足「客户端零网络出口」那条守卫（test/security.test.mjs）。
+    const LINKS_API = '/knit/api/links'
 
     /** 轮询间隔。 */
     const POLL_MS = 5000
@@ -528,6 +548,32 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 .knit-raw{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.6;
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .knit-preview-note{font-size:11px;color:var(--dsw-alias-label-caption,#80868b);padding:2px 0 8px}
+
+/* ── 引用条（v0.12）────────────────────────────────────
+   夹在预览头与正文之间的一层。全用中性令牌：它是「信息」，不是「操作」。
+   注意 CSS 里不要写反引号 —— 这段样式是模板字符串，一个反引号就会把它截断。 */
+.knit-links{flex:none;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));
+  font-size:11px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-links-state{padding:5px 12px;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-links-head{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;
+  padding:5px 12px;background:transparent;border:none;cursor:pointer;text-align:left;
+  font:inherit;color:inherit}
+.knit-links-head:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-links-arrow{flex:none;width:10px;font-size:9px;opacity:.75}
+.knit-links-summary{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.knit-links-note{padding:2px 12px 6px;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-links-body{padding:0 12px 8px;max-height:180px;overflow:auto}
+.knit-links-group + .knit-links-group{margin-top:6px}
+.knit-links-label{font-weight:600;color:var(--dsw-alias-label-caption,#80868b);margin-bottom:2px}
+.knit-links-empty{color:var(--dsw-alias-label-caption,#80868b);padding:1px 0}
+.knit-links-list{list-style:none;margin:0;padding:0}
+.knit-link-row{box-sizing:border-box;display:block;width:100%;text-align:left;padding:2px 4px;
+  border:none;background:transparent;border-radius:4px;cursor:pointer;font:inherit;color:inherit}
+.knit-link-row:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-link-name{display:block;color:var(--dsw-alias-label-primary,#e8eaed);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.knit-link-path{display:block;font-size:10px;color:var(--dsw-alias-label-caption,#80868b);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── 类型切换（文档 / 图片与视频 / 全部）────────────── */
 /* 选中态与下面的列表行、上面的排序切换共用一套中性灰填充，**不要品牌色描边**：
@@ -988,9 +1034,75 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenLocal:Function|null,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, onClose, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
+
+      /* ── v0.12 引用条 ────────────────────────────────────
+       * 位置：预览头**下面**、正文**上面** —— 一条可折叠的窄条。
+       *
+       * 为什么不塞进正文：正文是 Markdown 渲染的，插进去会**被滚动带走**，
+       * 还容易跟渲染器打架。预览头也放不下（38px 里已经有面包屑 + 三个按钮 + 拖拽把手）。
+       *
+       * 默认**折叠**，只显示两个计数，展开才占高度。空态与失败态文案**分开** ——
+       * 「没有被引用」是一个结论，「读取失败」是另一个，不能都显示成空白。
+       */
+      const linkItems = (title, items, emptyText) => h('div', { className: 'knit-links-group' },
+        h('div', { className: 'knit-links-label' }, title),
+        items.length === 0
+          ? h('div', { className: 'knit-links-empty' }, emptyText)
+          : h('ul', { className: 'knit-links-list' },
+            items.map((item) => h('li', { key: item.rel },
+              h('button', {
+                type: 'button',
+                className: 'knit-link-row',
+                title: item.rel,
+                onClick: () => onOpenLink(item),
+              },
+              h('span', { className: 'knit-link-name' }, item.title),
+              h('span', { className: 'knit-link-path' }, item.rel))))))
+
+      const linksBar = (() => {
+        if (!links || !onToggleLinks) return null
+        if (links.status === 'loading') {
+          return h('div', { className: 'knit-links' },
+            h('div', { className: 'knit-links-state' }, t('preview.loading')))
+        }
+        if (links.status !== 'ready') {
+          return h('div', { className: 'knit-links' },
+            h('div', { className: 'knit-links-state' }, t('links.failed')))
+        }
+        const incoming = links.incoming || []
+        const outgoing = links.outgoing || []
+        return h('div', { className: `knit-links${linksExpanded ? ' is-open' : ''}` },
+          h('button', {
+            type: 'button',
+            className: 'knit-links-head',
+            'aria-expanded': linksExpanded ? 'true' : 'false',
+            onClick: onToggleLinks,
+            title: links.rel,
+          },
+          h('span', { className: 'knit-links-arrow' }, linksExpanded ? '▾' : '▸'),
+          h('span', { className: 'knit-links-summary' },
+            t('links.summary', { in: links.incomingTotal || 0, out: links.outgoingTotal || 0 }))),
+          links.limited
+            ? h('div', { className: 'knit-links-note' }, t('links.incomplete'))
+            : null,
+          linksExpanded
+            ? h('div', { className: 'knit-links-body' },
+              linkItems(t('links.incoming'), incoming, t('links.noneIn')),
+              linkItems(t('links.outgoing'), outgoing, t('links.noneOut')),
+              (links.incomingTotal > incoming.length || links.outgoingTotal > outgoing.length)
+                ? h('div', { className: 'knit-links-note' },
+                  t('links.more', {
+                    count: Math.max(
+                      (links.incomingTotal || 0) - incoming.length,
+                      (links.outgoingTotal || 0) - outgoing.length,
+                    ),
+                  }))
+                : null)
+            : null)
+      })()
 
       // 图片/视频不读正文，直接用同源字节地址渲染；Markdown 才走加载 / MarkdownText / 降级。
       const body = preview.status === 'loading'
@@ -1057,6 +1169,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             title: onOpenLocal ? t('preview.openLocal', { path: preview.rel }) : preview.rel,
           }, t('preview.openLocalBtn')),
           h('button', { className: 'knit-preview-close', onClick: onClose, title: t('preview.close') }, '✕')),
+        // v0.12 引用条：夹在头与正文之间，不参与正文滚动
+        linksBar,
         h('div', {
           className: `knit-preview-body${isMedia ? ' is-media' : ''}`,
           onScroll: onScrollBody,
@@ -1101,6 +1215,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 重新挂载（用户反馈「鼠标移出去以后就没有了」，组件 state 会归零），
       // 阅读态也不会丢。放在最后，不动前面任何 hook 的槽位。
       const [readingTick, setReadingTick] = React.useState(0)
+
+      // v0.12 引用关系。`null` = 还没请求；请求回来是 `{status, incoming, outgoing, …}`。
+      // **只跟着 previewRel 走**，绝不进列表轮询路径 —— 那份解析要读全库，
+      // 塞进「每 5 秒一次」会把面板拖垮（SDD §3.5）。
+      const [links, setLinks] = React.useState(null)
+      const [linksExpandedTick, setLinksExpandedTick] = React.useState(0)
 
       React.useEffect(() => {
         const host = listRef.current
@@ -1321,6 +1441,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 预览进入 loading 时去宿主取正文
       const previewRel = preview && preview.rel
       const previewStatus = preview && preview.status
+      /**
+       * 只有 Markdown 有引用关系 —— 链接图里只有 `.md`，所以对图片/视频请求
+       * 必然拿到 `knit/not-found`，面板会把它显示成「读取失败」。
+       * **与其显示一个假的失败，不如压根不请求、也不显示这一条。**
+       */
+      const previewIsDoc = !preview || (preview.kind !== 'image' && preview.kind !== 'video')
 
       /** 阅读态 = 当前这一篇被滚过。换一篇自然为 false（派生，不用复位 effect）。 */
       const reading = Boolean(previewRel) && readingDocs.has(readingKey(sessionId, previewRel))
@@ -1371,6 +1497,51 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         run()
         return () => { alive = false }
       }, [previewRel, previewStatus, sessionId])
+
+      /**
+       * v0.12：引用关系。**只在打开某一篇时请求一次**，换篇重取。
+       *
+       * 两条刻意的选择：
+       *  - 不依赖 `previewStatus` —— 引用关系与「正文读没读出来」无关
+       *  - 不进列表轮询 —— 全库解析很贵，只在用户真打开一篇时才发生
+       * 服务端按签名缓存，所以连续换篇不会重复解析。
+       */
+      React.useEffect(() => {
+        if (!previewRel || !previewIsDoc) {
+          setLinks(null)
+          return undefined
+        }
+        let alive = true
+        setLinks({ status: 'loading' })
+        const run = async () => {
+          try {
+            const url = `${LINKS_API}?sessionId=${encodeURIComponent(sessionId)}&rel=${encodeURIComponent(previewRel)}`
+            const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
+            const data = await res.json()
+            if (!alive) return
+            setLinks(data && data.ok
+              ? { status: 'ready', ...data }
+              : { status: 'error', error: hostMessage(data) })
+          } catch (error) {
+            if (!alive) return
+            setLinks({ status: 'error', error: String((error && error.message) || error) })
+          }
+        }
+        run()
+        return () => { alive = false }
+      }, [previewRel, previewIsDoc, sessionId])
+
+      /** 展开 / 收起引用条。真相在模块级 `expandedLinks`，组件只留计数器（理由同阅读态）。 */
+      const toggleLinks = React.useCallback(() => {
+        if (!previewRel) return
+        const key = readingKey(sessionId, previewRel)
+        if (expandedLinks.has(key)) expandedLinks.delete(key)
+        else expandedLinks.add(key)
+        setLinksExpandedTick((n) => n + 1)
+      }, [previewRel, sessionId])
+      const linksExpanded = Boolean(previewRel)
+        && expandedLinks.has(readingKey(sessionId, previewRel))
+      void linksExpandedTick
 
       // 相对路径图片解析器：按当前文档所在目录解析。MarkdownText 按引用身份 memo，
       // 所以必须 useMemo 住，否则每帧都会重解析整篇 markdown。
@@ -1552,6 +1723,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         ratio,
         reading,
         onScrollBody,
+        // v0.12 引用条
+        links,
+        linksExpanded,
+        onToggleLinks: toggleLinks,
+        // 点引用列表里的一项 → 就地预览那一篇。
+        // **走订阅制 requestPreview，不碰列表** —— 用户点一下就该立刻有反应
+        // （AGENTS.md §6.4 的教训：即时信号别藏在轮询里）。
+        onOpenLink: (item) => requestPreview(item),
         // 拿不到绝对路径就不给点（而不是点了没反应）
         onOpenLocal: previewAbsPath ? openPreviewLocal : null,
         onClose: closePreview,
@@ -1921,6 +2100,17 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @type {Set<string>}
      */
     const readingDocs = new Set()
+
+    /**
+     * 已经**展开过引用条**的文档，key 见 `readingKey`（同一个 key 约定）。
+     *
+     * 与 `readingDocs` 同一条理由（见 `AGENTS.md` §6.9）：**「用户做过的事」不能只放
+     * 组件 state** —— 宿主重挂载会把它清零，用户就得再点一次。
+     * 语义是「这一篇在这个会话里被展开过」。
+     *
+     * @type {Set<string>}
+     */
+    const expandedLinks = new Set()
 
     /**
      * 阅读态的 key：同一会话里的同一篇文档算一个。

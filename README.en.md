@@ -3,7 +3,7 @@
 > Your agent writes 20 documents a day. You can't find the one you just saw.
 > Knit puts them next to the conversation — whatever you're talking about, the relevant doc is on top.
 >
-> **Your agent has the same problem.** It gets the same ranking as a tool — so it reads one doc instead of five.
+> **Your agent has the same problem.** It gets the same ranking as a tool — the ranked documents plus the passage that matched in each.
 
 ![Screenshot from a real machine: the Knit sidebar listing the workspace documents, with a Markdown preview expanded in place](docs/screenshot.png)
 
