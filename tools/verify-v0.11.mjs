@@ -27,6 +27,9 @@ import { fileURLToPath } from 'node:url'
 /** 工作区：本文件在 `knit/tools/`，上两级就是项目根。 */
 const WORKSPACE = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/** 包根：`knit/` 自己。宿主半边源码在 `knit/src/host/`（**不在** WORKSPACE 下）。 */
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
 /** 会话根目录。 */
 const SESSIONS_ROOT = join(homedir(), '.dsh', 'sessions')
 
@@ -155,19 +158,40 @@ if (wanted) {
     process.exit(2)
   }
 } else {
-  const sessionDir = findSessionDir()
-  if (!sessionDir) {
-    console.error(`找不到工作区对应的会话目录：${SESSIONS_ROOT}（脚本所在工作区 ${WORKSPACE}）`)
-    console.error('提示：如果要在**别的项目**里验，显式传会话 id：')
-    console.error('  node tools/verify-v0.11.mjs <sessionId>')
+  /**
+   * 不给 id 时的默认选择：**最近的主会话，但优先取「别的项目」里的那个。**
+   *
+   * 两个理由：
+   *   1. ② 的验收**必须**在别的项目里做 —— 本仓库的 `AGENTS.md` 点名了答案，
+   *      在这里问什么都测不到排序工具（见 §6.10）。
+   *   2. 本工作区的「最近会话」很可能就是**你正在跑脚本的这个长会话**
+   *      （实测它已经有 997 次工具调用），拿它判定毫无意义。
+   *
+   * 所以先排除本工作区，实在没有别的才退回本工作区。
+   */
+  const ownDir = findSessionDir()
+  const all = allSessionDirs()
+    .flatMap((dir) => listMainSessions(dir).map((s) => ({ ...s, dir })))
+    .sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0))
+
+  if (all.length === 0) {
+    console.error(`全库都没有主会话：${SESSIONS_ROOT}`)
     process.exit(2)
   }
-  const latest = listMainSessions(sessionDir)[0]
-  if (!latest) {
-    console.error(`工作区 ${sessionDir} 下还没有主会话`)
-    process.exit(2)
+
+  const outside = all.filter((s) => s.dir !== ownDir)
+  const latest = outside[0] || all[0]
+  found = { session: latest, dir: latest.dir }
+
+  console.log('（没给会话 id —— 自动选了最近的主会话，优先「别的项目」里的那个）')
+  console.log('最近的会话：')
+  for (const [i, s] of all.slice(0, 4).entries()) {
+    const mark = s === latest ? '← 判定这一个' : ''
+    const own = s.dir === ownDir ? '（本工作区）' : ''
+    console.log(`  ${i + 1}. ${s.id}  ${new Date(s.mtimeMs).toLocaleString('zh-CN')} ${own} ${mark}`)
   }
-  found = { session: latest, dir: sessionDir }
+  console.log('  要换一个：node tools/verify-v0.11.mjs <会话 id>')
+  console.log()
 }
 
 const picked = found.session
@@ -260,6 +284,55 @@ if (usedLine) console.log(`实际用到  ${usedLine}`)
 console.log(`工具清单  ${sessionTools === null
   ? '(日志里没有 request/header，取不到)'
   : `${sessionTools.length} 个，knit_docs ${toolRegistered ? '在 ✓' : '不在 ✗'}`}`)
+
+/**
+ * 宿主新鲜度 —— 「运行中的宿主到底加载了哪一版宿主半边」。
+ *
+ * 这个问题每次都要问一遍（宿主半边不热加载），而答案**不用猜**：
+ * `link:` 插件在宿主启动时读磁盘，所以只要**宿主启动时间晚于 `src/host/*.js`
+ * 的 mtime**，跑的就是当前代码。
+ *
+ * `dsh-web.log` 里是一次**完整启动序列**（各插件的 `apply` → 路由注册 →
+ * 末行 `dsh web: http://127.0.0.1:3080/…`），所以它的 mtime 就是这次启动的时间。
+ *
+ * ⚠️ 这是**推断**（日志按大小轮转，mtime 未必精确等于启动时刻），
+ * 所以两个时间都打出来，让人自己看一眼。
+ */
+function hostFreshness() {
+  const log = join(homedir(), 'Library', 'Application Support',
+    'io.github.hairyf.deepseek-harness-desktop', 'logs', 'dsh-web.log')
+  let bootMs
+  try {
+    bootMs = statSync(log).mtimeMs
+  } catch {
+    return null
+  }
+  let newest = 0
+  let newestName = ''
+  try {
+    for (const name of readdirSync(join(PACKAGE_ROOT, 'src', 'host'))) {
+      if (!name.endsWith('.js')) continue
+      const m = statSync(join(PACKAGE_ROOT, 'src', 'host', name)).mtimeMs
+      if (m > newest) {
+        newest = m
+        newestName = name
+      }
+    }
+  } catch {
+    return null
+  }
+  if (newest === 0) return null
+  return { bootMs, newest, newestName, fresh: bootMs > newest }
+}
+
+const fresh = hostFreshness()
+if (fresh) {
+  const at = (ms) => new Date(ms).toLocaleString('zh-CN')
+  console.log(`宿主新鲜度 ${fresh.fresh
+    ? '✅ 宿主启动晚于宿主半边改动 —— 跑的是当前代码'
+    : '⚠️ 宿主启动**早于**宿主半边改动 —— 需要重启 DSH（§4.2）'}`)
+  console.log(`           启动 ${at(fresh.bootMs)}　最新改动 ${at(fresh.newest)}（src/host/${fresh.newestName}）`)
+}
 if (asked.length) {
   console.log()
   asked.forEach((q, i) => {
