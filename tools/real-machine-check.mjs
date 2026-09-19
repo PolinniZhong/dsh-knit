@@ -149,7 +149,11 @@ for (const [query, want] of [['扩展名白名单都放行什么', '扩展名白
 }
 
 console.log('\n' + (failures === 0 ? '全部通过 ✔' : `${failures} 项失败 ✘`))
-console.log('\n⚠️ 本脚本验不了的两件事（要重启 DSH）：')
+console.log('\n⚠️ 本脚本验不了的两件事，各自去哪儿看：')
 console.log('   1. 运行中的宿主是否已加载新代码')
+console.log('      → `node tools/verify-v0.11.mjs` 会自证（`宿主新鲜度` 那行：')
+console.log('        比对 dsh-web.log 的启动时刻与 src/host/*.js 的 mtime）')
 console.log('   2. agent 拿到结果后还会不会自己 glob 一遍')
+console.log('      → 四轮真机已结案：**工具在「要事实答案」时压根不会被调用**，')
+console.log('        所以这条用这个工具形态演示不了。见 AGENTS.md §6.10')
 process.exit(failures === 0 ? 0 : 1)
