@@ -5,10 +5,12 @@
 >
 > **Your agent has the same problem.** It gets the same ranking as a tool — the ranked documents plus the passage that matched in each.
 
-![Screenshot from a real machine: the Knit sidebar listing the workspace documents, with a Markdown preview expanded in place](docs/screenshot.png)
+![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](docs/screenshot.png)
 
-*Screenshot from a real machine, not a mock-up: a workspace with 16 documents, the list plus an
-inline preview.*
+*Screenshot from a real machine, not a mock-up: a workspace with 34 documents — the list, an inline
+preview, and the references bar.*
+*The references bar is new in v0.12: expand it to see which documents reference this one, and click
+one to jump straight there.*
 *The top line follows whatever you're talking about; when there isn't enough conversation yet it
 falls back to newest-first and states its basis.*
 
