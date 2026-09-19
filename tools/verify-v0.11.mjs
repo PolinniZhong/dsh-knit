@@ -109,25 +109,68 @@ function resultText(event) {
   return out.join('\n')
 }
 
+/**
+ * 列出 `~/.dsh/sessions/` 下所有工作区的会话目录。
+ *
+ * **为什么要全库搜**：② 必须在一个「文档多、但没有 AGENTS.md 点名」的**别的项目**里验，
+ * 而脚本原先只在**自己所在的工作区**里找会话 —— 指定的 id 明明存在却报「找不到」。
+ * 这是实测踩出来的 bug（2026-09-19）。
+ *
+ * @returns {string[]} 会话目录绝对路径
+ */
+function allSessionDirs() {
+  try {
+    return readdirSync(SESSIONS_ROOT)
+      .map((name) => join(SESSIONS_ROOT, name))
+      .filter((dir) => statSync(dir).isDirectory())
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 按 id 全库解析一个会话。
+ *
+ * @param {string} wanted - 会话 id（带或不带 `session-` 前缀都行）
+ * @returns {{session: object, dir: string}|null} 命中的会话与其工作区目录
+ */
+function findSessionById(wanted) {
+  for (const dir of allSessionDirs()) {
+    const hit = listMainSessions(dir, true)
+      .find((s) => s.id === wanted || s.id === `session-${wanted}`)
+    if (hit) return { session: hit, dir }
+  }
+  return null
+}
+
 /* ── 主流程 ─────────────────────────────────────────── */
 
 const wanted = process.argv[2]
-const sessionDir = findSessionDir()
-if (!sessionDir) {
-  console.error(`找不到工作区对应的会话目录：${SESSIONS_ROOT}（工作区 ${WORKSPACE}）`)
-  process.exit(2)
+
+let found = null
+if (wanted) {
+  found = findSessionById(wanted)
+  if (!found) {
+    console.error(`全库找不到会话 ${wanted}（已搜过 ${SESSIONS_ROOT} 下所有工作区）`)
+    process.exit(2)
+  }
+} else {
+  const sessionDir = findSessionDir()
+  if (!sessionDir) {
+    console.error(`找不到工作区对应的会话目录：${SESSIONS_ROOT}（脚本所在工作区 ${WORKSPACE}）`)
+    console.error('提示：如果要在**别的项目**里验，显式传会话 id：')
+    console.error('  node tools/verify-v0.11.mjs <sessionId>')
+    process.exit(2)
+  }
+  const latest = listMainSessions(sessionDir)[0]
+  if (!latest) {
+    console.error(`工作区 ${sessionDir} 下还没有主会话`)
+    process.exit(2)
+  }
+  found = { session: latest, dir: sessionDir }
 }
 
-const sessions = listMainSessions(sessionDir, Boolean(wanted))
-const picked = wanted
-  ? sessions.find((s) => s.id === wanted || s.id === `session-${wanted}`)
-  : sessions[0]
-
-if (!picked) {
-  console.error(`找不到会话 ${wanted || '(最近)'}；可用：\n  ` + sessions.slice(0, 5).map((s) => s.id).join('\n  '))
-  process.exit(2)
-}
-
+const picked = found.session
 const events = readEvents(picked.file)
 
 // 按 callId 关联 call ↔ result
@@ -146,31 +189,143 @@ for (const event of events) {
 
 const knitCalls = order.map((id) => calls.get(id)).filter((c) => c && c.name === 'knit_docs')
 
+/**
+ * 用户真正问了什么。**「没调工具」有两种完全不同的原因**：
+ *   - 问题本身是「查一个事实」→ agent 的反射是 grep，不是挑文档（工具没错，问题形状不对）
+ *   - 问题确实需要挑文档 → 那才是工具的可发现性问题
+ * 不把提问打出来，这两种就分不开。
+ */
+const asked = []
+for (const event of events) {
+  if (event.type !== 'user/message') continue
+  const d = event.data || {}
+  if ((d.source || {}).kind !== 'user') continue
+  const c = d.content
+  const text = typeof c === 'string'
+    ? c
+    : Array.isArray(c) ? c.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : ''
+  if (text.trim()) asked.push(text.trim())
+}
+
+/** agent 实际用了什么工具 —— 「0 次 knit_docs」的对照组证据。 */
+const usedTools = new Map()
+for (const id of order) {
+  const name = calls.get(id) && calls.get(id).name
+  if (name) usedTools.set(name, (usedTools.get(name) || 0) + 1)
+}
+const usedLine = [...usedTools.entries()].sort((a, b) => b[1] - a[1])
+  .map(([n, c]) => `${n}×${c}`).join('  ')
+
+/**
+ * 工作区路径：**从日志里取，不要解码会话目录名。**
+ * 目录名把 `/` 和名字里的字面 `-` 都写成 `-`（`…Native-05_LoreFlow-Copilot`），
+ * 有歧义，反解会错。运行时上下文那条 plugin 消息里带的是**真路径**。
+ */
+let sessionCwd = null
+/** 这次请求实际挂给模型的工具名 —— 用来区分「工具没挂上」和「挂了但没被选」。 */
+let sessionTools = null
+for (const event of events) {
+  const d = event.data || {}
+  if (event.type === 'request/header' && d.header && Array.isArray(d.header.tools)) {
+    sessionTools = d.header.tools.map((t) => t && t.name).filter(Boolean)
+  }
+  if (event.type === 'user/message' && (d.source || {}).kind === 'plugin') {
+    const c = d.content
+    const text = typeof c === 'string'
+      ? c
+      : Array.isArray(c) ? c.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : ''
+    const m = /session workspace: "([^"]+)"/.exec(text)
+    if (m) sessionCwd = m[1]
+  }
+}
+
+const workspacePath = sessionCwd || found.dir.split('/').pop()
+const workspaceName = workspacePath.split('/').pop()
+
+/** 在 Knit 自己的仓库里验 ② 是**结构性无效**的（AGENTS.md 点名了每篇文档）。 */
+const inKnitRepo = workspaceName === '08_Knit'
+
+/** `knit_docs` 当时到底挂上了没有 —— 决定「没调」该怎么解释。 */
+const toolRegistered = sessionTools === null ? null : sessionTools.includes('knit_docs')
+
 console.log('═'.repeat(72))
 console.log('Knit v0.11 ② 真机验收')
 console.log('═'.repeat(72))
 console.log(`会话      ${picked.id}`)
+// 工作区用会话目录名还原（`--Users-…-05_LoreFlow-Copilot--` 这种转义名）
+console.log(`工作区    ${workspacePath}`)
 console.log(`日志      ${picked.file}`)
 console.log(`工具调用  ${order.length} 次，其中 knit_docs ${knitCalls.length} 次`)
+if (usedLine) console.log(`实际用到  ${usedLine}`)
+console.log(`工具清单  ${sessionTools === null
+  ? '(日志里没有 request/header，取不到)'
+  : `${sessionTools.length} 个，knit_docs ${toolRegistered ? '在 ✓' : '不在 ✗'}`}`)
+if (asked.length) {
+  console.log()
+  asked.forEach((q, i) => {
+    const first = q.split('\n').map((s) => s.trim()).filter(Boolean)[0] || ''
+    console.log(`你问的第 ${i + 1} 句  ${first.length > 96 ? first.slice(0, 96) + '…' : first}`)
+  })
+}
 console.log()
 
 if (knitCalls.length === 0) {
   console.log('❌ **这个会话里 agent 一次都没调 `knit_docs`** —— 验不了 ②。')
   console.log()
-  console.log('先别怪工具。**在 Knit 自己的仓库里，这个结果很可能是必然的**：')
+  console.log('但「没调」有三种原因，先分清是哪一种：')
   console.log()
-  console.log('  项目根的 `AGENTS.md` 会进 agent 的系统提示词，而它的 §2「必读顺序」')
-  console.log('  和 §8「目录结构」把**几乎每篇文档都点名了**。agent 一看就知道去哪，')
-  console.log('  不需要任何文档发现工具 —— Knit 想解决的问题已经被 AGENTS.md 解决了。')
+
+  if (toolRegistered === false) {
+    console.log('【原因 C · 工具根本没挂上 —— 先修安装，别谈 ②】')
+    console.log()
+    console.log('  这次请求的工具清单里**没有 `knit_docs`**，所以 agent 不可能调到它。')
+    console.log('  多半是宿主半边没生效（DSH 没重启）或 profile 里插件被禁用。')
+    console.log()
+    console.log('  先查：')
+    console.log('    curl -s "http://127.0.0.1:3080/knit/api/raw?rel=nope.png"')
+    console.log('      → {"ok":false,"code":"knit/not-found"} = 新代码在跑')
+    console.log('      → 空 body 的 404                        = 旧代码还在跑，**重启 DSH**')
+    console.log('    dsh plugin --profile web list | grep knit')
+    console.log()
+    console.log('  → 这不是 ② 的结论。**修完安装再重跑。**')
+  } else if (inKnitRepo) {
+    console.log('【原因 A · 这个工作区里 ② 结构上就验不了】')
+    console.log()
+    console.log('  你在 **Knit 自己的仓库**里验的。项目根的 `AGENTS.md` 会进 agent 的')
+    console.log('  系统提示词，而它的 §2「必读顺序」和 §8「目录结构」把**几乎每篇文档')
+    console.log('  都点名了**。agent 一看就知道去哪，不需要任何文档发现工具 ——')
+    console.log('  Knit 想解决的问题，在这个仓库里已经被 AGENTS.md 解决了。')
+    console.log()
+    console.log('  实测印证：一次这样的会话里，agent 的第一个动作就是')
+    console.log('    glob {"pattern": "01_ Knit PRD/Knit_SDD-v0.8*"}')
+    console.log('  它**已经知道确切文件名**，后面全是 read。')
+    console.log()
+    console.log('  → 这不是 ❌ 无效，是「测不了」。**换工作区重来。**')
+  } else {
+    console.log('【原因 B · 问题形状不对 —— agent 把它当「查事实」而不是「挑文档」】')
+    console.log()
+    console.log(`  这个工作区（${workspaceName}）不是 Knit 仓库，`)
+    console.log('  所以「AGENTS.md 点名」解释不了上面那份工具清单。')
+    console.log()
+    console.log('  真正的机制是：**`knit_docs` 的触发条件是「给我一个候选清单」，')
+    console.log('  不是「帮我查一个事实」。** 问「当初为什么决定 X」，agent 的反射是')
+    console.log('  grep 一个关键词、拿到精确答案；它不会想到去要一个**排序过的文档列表**。')
+    console.log()
+    console.log('  所以上面 `实际用到` 那行如果全是 grep / bash / read，')
+    console.log('  那是**工具可发现性**的问题（v0.7–v0.9 的老问题），')
+    console.log('  **不是 ② 的判定** —— ② 只在 `knit_docs` 被调用的前提下才有意义。')
+    console.log()
+    console.log('  → 换个**「要清单 + 要大意」**的问法，别问事实：')
+    console.log('     「这个项目里讲 <主题> 的是哪几篇？各自侧重什么？」')
+  }
+
   console.log()
-  console.log('  实测印证：一次这样的会话里，agent 的第一个动作就是')
-  console.log('    glob {"pattern": "01_ Knit PRD/Knit_SDD-v0.8*"}')
-  console.log('  它**已经知道确切文件名**，后面全是 read。')
-  console.log()
-  console.log('要验 ②，得去一个「**文档多、但没有 AGENTS.md 点名**」的工作区：')
-  console.log('  1. 换一个有大量 .md、且 AI 事先不知道文件名的真实项目')
-  console.log('  2. 在新会话里问一个**需要看内容**的问题（不是「文档在哪」）')
-  console.log('  3. 再跑一次这个脚本')
+  console.log('─'.repeat(72))
+  console.log('重来的操作：')
+  console.log('  1. **重启 DSH**（宿主半边改了必须重启，见 AGENTS.md §4.2）')
+  console.log('  2. 换一个「文档多、AGENTS.md 没点名」的真实项目开新会话')
+  console.log('  3. 问一个**要清单 + 要大意**的问题（不是「X 在哪」「为什么决定 Y」）')
+  console.log('  4. 再跑：node tools/verify-v0.11.mjs')
   console.log()
   console.log('（验证脚本本身没问题 —— 它如实报告了「没调工具」这个事实。）')
   process.exit(1)
