@@ -16,10 +16,11 @@ import {
   clampLimit,
   agentScope,
   renderToolText,
+  pickSnippet,
   knitDocsDefinition,
   registerKnitDocsTool,
 } from '../src/host/tool.js'
-import { scan, apply } from '../src/host/index.js'
+import { scan, apply, readDocument } from '../src/host/index.js'
 
 const PROJECT_ROOT = makeWorkspace()
 
@@ -332,4 +333,140 @@ test('renderToolText: 没有话题时不写空引号', () => {
   })
   assert.match(text, /to the current conversation/)
   assert.ok(!text.includes('「」'))
+})
+
+/* ── v0.11 ②：命中段落 ───────────────────────────────── */
+
+test('pickSnippet: 空输入 / 空命中词 → 空串', () => {
+  assert.equal(pickSnippet('', ['a']), '')
+  assert.equal(pickSnippet('正文。', []), '')
+  assert.equal(pickSnippet(null, ['a']), '')
+  assert.equal(pickSnippet('正文。', ['', '  ']), '', '空词被过滤后也应当是空串')
+})
+
+test('pickSnippet: 一块都没命中 → 空串（**不编造**）', () => {
+  // 关键：不能退化成「随便给第一段」—— 那会让模型以为这里有相关内容
+  assert.equal(pickSnippet('第一段。\n\n第二段。\n\n第三段。', ['不存在的词']), '')
+})
+
+test('pickSnippet: 选**含命中词的那一段**，不是第一段', () => {
+  const text = '开头这段无关。\n\n中段才讲 BM25 的加权方式。\n\n结尾也无关。'
+  const snippet = pickSnippet(text, ['bm25'])
+  assert.match(snippet, /BM25/, '要含命中词')
+  assert.ok(!snippet.includes('开头这段无关'), '不能给第一段')
+  assert.ok(!snippet.includes('结尾也无关'), '不能给最后一段')
+})
+
+test('pickSnippet: 保留**原文大小写**（不是 haystack 的小写）', () => {
+  // 这是设计的硬约束：README 承诺「打 BM25 就显示 BM25」
+  const snippet = pickSnippet('前段。\n\n这里讲 BM25 与 IDF。\n\n后段。', ['bm25', 'idf'])
+  assert.match(snippet, /BM25/)
+  assert.match(snippet, /IDF/)
+  assert.ok(!snippet.includes('bm25'), '不能是小写')
+})
+
+test('pickSnippet: 跳过与标题重复的块', () => {
+  // 真机试跑时发现：H1 里含全部命中词 ⇒「命中最多」的块就是标题本身，
+  // 而标题第 1 行已经给过了，再给一次是纯浪费。
+  const text = '# BM25 入门\n\n这一节才展开讲 BM25 的饱和函数。\n'
+  const withTitle = pickSnippet(text, ['bm25'], { title: 'BM25 入门' })
+  assert.match(withTitle, /饱和函数/, '应当跳到正文那一块')
+  assert.ok(!withTitle.includes('入门'), '不能是标题本身')
+
+  // 不传 title 时没有这个排除（纯函数不猜）
+  assert.match(pickSnippet(text, ['bm25']), /入门/)
+})
+
+test('pickSnippet: 超长块**以命中词为中心**截，不是从头截', () => {
+  const head = '甲'.repeat(400)
+  const text = `${head}这里有 BM25。${'乙'.repeat(400)}`
+  const snippet = pickSnippet(text, ['bm25'])
+  assert.ok(snippet.length <= 205, `应当截断，实际 ${snippet.length}`)
+  assert.match(snippet, /BM25/, '命中词必须还在截断结果里')
+  assert.match(snippet, /^…/, '左边被截掉要有省略号')
+  assert.match(snippet, /…$/, '右边被截掉要有省略号')
+})
+
+test('pickSnippet: 只看评分窗口内的正文（2500 字之后不算）', () => {
+  // 与 index.js 的 HAYSTACK_CHARS 对齐；否则会出现「排上来但段落里没有命中词」
+  const text = `${'甲'.repeat(3000)}\n\nBM25 在很后面。`
+  assert.equal(pickSnippet(text, ['bm25']), '')
+})
+
+test('execute: 传了 read 时结果带 snippet；没命中词的篇**不带这个字段**', async () => {
+  const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
+  const withRead = await knitDocsDefinition(scan, readDocument).execute({ query: 'sidebar', limit: 3 }, exec)
+  const readme = withRead.docs.find((d) => d.rel === 'README.md')
+  assert.ok(readme, '样本里应当有 README.md')
+  assert.match(String(readme.snippet), /sidebar/, '命中的那篇要带段落')
+
+  // 一块都没命中的篇：**字段缺省**，而不是空串 —— 让「没有命中」在输出里表现为
+  // 「没有 match 行」，而不是一行空的 `match: `
+  const others = withRead.docs.filter((d) => d.rel !== 'README.md')
+  assert.ok(others.length > 0, '样本里有其他文档')
+  for (const doc of others) {
+    assert.equal('snippet' in doc, false, `${doc.rel} 不该有 snippet 字段`)
+  }
+})
+
+test('execute: 不传 read → 行为与 v0.10 一致（向后兼容）', async () => {
+  const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
+  const out = await knitDocsDefinition(scan).execute({ query: 'sidebar', limit: 3 }, exec)
+  for (const doc of out.docs) {
+    assert.equal('snippet' in doc, false, '没给 read 就不该带段落')
+  }
+})
+
+test('execute: read 抛错时**不影响**整次调用（只是少一段）', async () => {
+  const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
+  const boom = async () => { throw new Error('读盘炸了') }
+  const out = await knitDocsDefinition(scan, boom).execute({ query: 'sidebar', limit: 3 }, exec)
+  assert.ok(out.docs.length > 0, '排序结果照常返回')
+  for (const doc of out.docs) assert.equal('snippet' in doc, false)
+})
+
+test('execute: read 返回失败信封时也只是少一段，不抛', async () => {
+  const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
+  const denied = async () => ({ ok: false, code: 'knit/outside-workspace' })
+  const out = await knitDocsDefinition(scan, denied).execute({ query: 'sidebar', limit: 3 }, exec)
+  assert.ok(out.docs.length > 0)
+  for (const doc of out.docs) assert.equal('snippet' in doc, false)
+})
+
+test('execute: 时间序（无命中词）时不抽段落', async () => {
+  const exec = fakeExec(fakeSession([]))   // 没有对话 ⇒ mode=time
+  const out = await knitDocsDefinition(scan, readDocument).execute({ limit: 3 }, exec)
+  assert.equal(out.mode, 'time')
+  for (const doc of out.docs) assert.equal('snippet' in doc, false, '时间序没有命中词可抽')
+})
+
+test('renderToolText: 有段落时多一行 `match:`，且不破坏既有的行格式', () => {
+  const text = renderToolText({
+    mode: 'relevance',
+    topic: '排序',
+    docs: [
+      { rel: 'a.md', title: '甲', summary: '摘要甲', mtimeMs: 1, snippet: '命中段落甲' },
+      { rel: 'b.md', title: '乙', summary: '摘要乙', mtimeMs: 2 },
+    ],
+  })
+  const lines = text.split('\n')
+  assert.match(lines[1], /^1\. a\.md — 甲$/, '第一行格式不变')
+  assert.equal(lines[2], '   摘要甲', '摘要行格式不变')
+  assert.equal(lines[3], '   match: 命中段落甲', '段落行带 match: 前缀')
+  assert.equal(lines[4], '2. b.md — 乙', '第二篇序号正确')
+  assert.ok(!text.includes('match: \n'), '没有段落时不该出现空的 match 行')
+})
+
+test('renderToolText: 段落用 SNIPPET_CHARS 截，**不是**摘要那个 90', () => {
+  // 踩过的坑：段落提取是 200 字，若复用只认 90 的 oneLine 会被二次截断，
+  // 而且测试不会报错（输出仍是合法的短文本）。
+  const long = '丙'.repeat(200)
+  const text = renderToolText({
+    mode: 'relevance',
+    topic: '',
+    docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1, snippet: long }],
+  })
+  const matchLine = text.split('\n').find((l) => l.startsWith('   match: '))
+  assert.ok(matchLine, '应当有 match 行')
+  assert.ok(matchLine.length > 120, `段落不该被截到 90，实际 ${matchLine.length - 10}`)
 })

@@ -112,6 +112,15 @@ for (const [query, wantTopic] of cases) {
   ok(`  ↳ 话题是「${wantTopic}」`, text.includes(`「${wantTopic}`), first.match(/「[^」]*」/)?.[0] || '(无)')
 }
 
+// v0.11 ②：命中段落。这一条**只有在真实 apply() 里把 readDocument 注入进去**才会出现 ——
+// 单测传的是替身，这里传的是 `index.js` 的真实注册路径，所以它守的是「接线」而不是算法。
+{
+  const { text } = await call({ query: '扩展名白名单都放行什么', limit: 3 }, agent, 'snippet')
+  const matchLine = text.split('\n').find((l) => l.includes('match: '))
+  ok('命中段落：结果里出现 `match:` 行（证明 readDocument 真的注入了）', Boolean(matchLine),
+    matchLine ? matchLine.trim().slice(0, 100) + '…' : '(没有 match 行)')
+}
+
 const noQuery = await call({ limit: 2 }, agent, 'q_time')
 ok('不传 query 且对话为空 → 如实退回时间序',
   noQuery.text.startsWith('Not enough conversation') && noQuery.text.includes('of 4 Markdown documents'),

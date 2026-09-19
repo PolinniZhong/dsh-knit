@@ -86,7 +86,11 @@ test('HTTP 端到端：媒体列表、/raw 整文件、Range 206、安全拒绝'
     assert.match(r.headers.get('content-type'), /image\/png/)
     assert.equal(r.headers.get('accept-ranges'), 'bytes')
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
+    // v0.11 ③：`sandbox` 这一半原来只写在源码里、没有断言 —— 而它是 SVG 脚本失效的
+    // 关键（`default-src 'none'` 管外链，`sandbox` 管内联脚本上下文）。
+    // 「安全说明里声称的都指向真实检查」这条要求把它抓出来了。
     assert.match(r.headers.get('content-security-policy') || '', /default-src 'none'/)
+    assert.match(r.headers.get('content-security-policy') || '', /sandbox/)
     assert.equal(Number(r.headers.get('content-length')), realSize)
     assert.equal((await r.arrayBuffer()).byteLength, realSize)
 

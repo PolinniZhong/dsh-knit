@@ -864,7 +864,7 @@ export function apply(ctx) {
   // 两条路互不依赖：没有 tools 服务时，浏览器那半边照常工作。
   ctx.inject(['tools'], (toolCtx) => {
     toolCtx.effect(
-      () => registerKnitDocsTool(toolCtx, scan),
+      () => registerKnitDocsTool(toolCtx, scan, readDocument),
       'dsh-knit: knit_docs tool',
     )
     console.log(`[${name}] agent tool ready: knit_docs`)

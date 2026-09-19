@@ -2,6 +2,8 @@
 
 > Your agent writes 20 documents a day. You can't find the one you just saw.
 > Knit puts them next to the conversation — whatever you're talking about, the relevant doc is on top.
+>
+> **Your agent has the same problem.** It gets the same ranking as a tool — so it reads one doc instead of five.
 
 ![Screenshot from a real machine: the Knit sidebar listing the workspace documents, with a Markdown preview expanded in place](docs/screenshot.png)
 
@@ -217,6 +219,10 @@ as one of its tabs. Each host is an independent optional dependency; missing one
   `nosniff` plus `default-src 'none'; sandbox`
 
 The relevance figure only affects ordering — it is **never displayed and never sent anywhere**.
+
+> Every claim above is guarded by an automated check, listed one by one in
+> **[SECURITY.md](SECURITY.md)** — each property points at a test that actually exists.
+> `npm test` verifies that the table itself has not rotted.
 
 ---
 

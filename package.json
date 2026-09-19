@@ -1,8 +1,8 @@
 {
   "name": "dsh-knit",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
-  "description": "Find the doc your agent just wrote. Lists the DSH workspace's Markdown, images and video in the sidebar, ranked by relevance to the current conversation, with inline preview. Zero model calls, zero network.",
+  "description": "Find the doc your agent just wrote. Lists the DSH workspace's Markdown, images and video in the sidebar, ranked by relevance to the current conversation, with inline preview — and hands the same ranking to the agent as a tool, so it reads one doc instead of five. Zero model calls, zero network.",
   "main": "./src/host/index.js",
   "exports": {
     ".": "./src/host/index.js",
@@ -16,10 +16,11 @@
     "test",
     "cordis.patch.yml",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs"
+    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs test/security.test.mjs"
   },
   "dsh": {
     "bundle": {

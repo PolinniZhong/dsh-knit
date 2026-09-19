@@ -42,6 +42,23 @@ export const MAX_LIMIT = 20
 const SUMMARY_CHARS = 90
 
 /**
+ * 命中段落的上限（v0.11）。
+ *
+ * 取值依据是实测：`knit_docs` 一次输出约 710 字符，而**一篇文档平均 12,930 字符**。
+ * 每篇多 200 字 ≈ 一篇文档的 7.7%，而它想省掉的是整整一次 `read`。
+ * 见 `Knit_SDD-v0.11-knit_docs命中段落.md` §一。
+ */
+const SNIPPET_CHARS = 200
+
+/**
+ * 只在原文的**前 2500 字**里找命中段落。
+ *
+ * 必须与 `index.js` 的 `HAYSTACK_CHARS` 一致 —— 评分只看这个窗口，
+ * 若在这里找窗口外的内容，会出现「排上来了、但段落里没有命中词」的自相矛盾。
+ */
+const SNIPPET_WINDOW = 2500
+
+/**
  * 模型面向的描述。**必须短** —— 它会进每一次请求的系统提示词。
  *
  * v0.8 加过「Reports how many exist in total」，**但真机验证显示没用**：
@@ -109,6 +126,10 @@ const OUTPUT_SCHEMA = {
           title: { type: 'string' },
           summary: { type: 'string' },
           mtimeMs: { type: 'integer' },
+          // v0.11：命中的那一小段**原文**（不是整篇）。**可选** ——
+          // 时间序模式没有命中词，抽不出来就不带这个字段，
+          // 而不是给个空串假装有。
+          snippet: { type: 'string' },
         },
         required: ['rel', 'title', 'summary', 'mtimeMs'],
       },
@@ -157,9 +178,99 @@ export function agentScope(exec) {
  * @param {unknown} text - 摘要
  * @returns {string} 单行摘要
  */
-function oneLine(text) {
+/**
+ * 压成单行并截断。
+ *
+ * ⚠️ **截断上限是参数，不是常量** —— v0.11 加命中段落时踩过一次：
+ * 段落提取出来是 200 字，若复用只认 `SUMMARY_CHARS`(90) 的 `oneLine`，
+ * 会被二次截掉一半，而且**测试不会报错**（输出仍然是合法的短文本）。
+ *
+ * @param {unknown} text - 任意文本
+ * @param {number} cap - 上限字符数
+ * @returns {string} 单行文本
+ */
+function flatten(text, cap) {
   const flat = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
-  return flat.length > SUMMARY_CHARS ? `${flat.slice(0, SUMMARY_CHARS)}…` : flat
+  return flat.length > cap ? `${flat.slice(0, cap)}…` : flat
+}
+
+function oneLine(text) {
+  return flatten(text, SUMMARY_CHARS)
+}
+
+/**
+ * 从**原文**里挑出「命中的那一段」，给模型判断「要不要读整篇」用（v0.11）。
+ *
+ * 三条设计约束，每条都有原因：
+ *
+ * 1. **在原文上切，不在 `haystack` 上切。** `haystack.body` 是 `.toLowerCase()` 过的
+ *    （`index.js:240`），在它上面切会把 `BM25` 变成 `bm25` ——
+ *    与「标签是你自己打的字，大小写原样保留」这条既有承诺直接冲突。
+ * 2. **只看前 `SNIPPET_WINDOW` 字**，与评分窗口一致，避免「排上来但段落里没命中词」。
+ * 3. **块太长时以命中词为中心截**，不是从头截 —— 否则命中那句话可能正好被截掉，
+ *    段落就白给了。
+ * 4. **跳过与标题重复的块。** 拿真实工作区试跑时发现的：一篇文档的 H1 标题里含全部命中词，
+ *    于是「命中词最多的块」就是标题本身 —— 而标题**第 1 行已经给过了**。
+ *    这种段落是纯浪费，正是要避免的「负收益」情形。
+ *
+ * 纯函数：不读盘、不看时钟、无副作用。抽不出命中段落时返回空串
+ * （**不编造** —— 「没有命中」和「命中在别处」都不该被伪装成有一段）。
+ *
+ * @param {string} text - 文档**原文**
+ * @param {string[]} terms - 命中词（来自 `scan()` 的 `keywords`，即语料里真实存在的词）
+ * @param {{title?: string}} [options] - `title` 用于排除「与标题重复」的块
+ * @returns {string} 命中段落（已压成单行、截断），或空串
+ */
+export function pickSnippet(text, terms, options = {}) {
+  const source = String(text == null ? '' : text)
+  const words = (Array.isArray(terms) ? terms : [])
+    .map((term) => String(term == null ? '' : term).trim().toLowerCase())
+    .filter(Boolean)
+  if (!source || words.length === 0) return ''
+
+  // 归一化只用于**比较**：去掉 Markdown 标题号、强调号、表格竖线，压平空白，小写
+  const norm = (s) => String(s).replace(/[#*|`>\s]+/g, ' ').trim().toLowerCase()
+  const titleNorm = norm(options.title || '')
+
+  const window = source.slice(0, SNIPPET_WINDOW)
+
+  // 按空行切块 —— 纯字符串运算，不解析 Markdown 结构
+  const blocks = window.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean)
+  if (blocks.length === 0) return ''
+
+  // 选**命中词种数最多**的那块；并列取靠前的（不给后面的块不该有的优势）
+  const scored = blocks.map((block) => {
+    const lower = block.toLowerCase()
+    let hits = 0
+    for (const word of words) if (lower.includes(word)) hits += 1
+    return { block, hits, norm: norm(block) }
+  })
+
+  // 跳过「与标题重复」的块（见 JSDoc 第 4 条）
+  const usable = scored.filter((item) => !(titleNorm && item.norm && titleNorm.includes(item.norm)))
+  if (usable.length === 0) return ''
+
+  let best = null
+  for (const item of usable) {
+    if (item.hits > 0 && (best === null || item.hits > best.hits)) best = item
+  }
+  // 一块都没命中 → 返回空串，而不是退化成「随便给第一段」
+  if (best === null) return ''
+
+  const flat = best.block.replace(/\s+/g, ' ').trim()
+  if (flat.length <= SNIPPET_CHARS) return flat
+
+  const lowerFlat = flat.toLowerCase()
+  let at = -1
+  for (const word of words) {
+    const found = lowerFlat.indexOf(word)
+    if (found >= 0 && (at < 0 || found < at)) at = found
+  }
+  const maxStart = flat.length - SNIPPET_CHARS
+  const start = at < 0 ? 0 : Math.max(0, Math.min(at - Math.floor(SNIPPET_CHARS / 3), maxStart))
+  const head = start > 0 ? '…' : ''
+  const tail = start < maxStart ? '…' : ''
+  return `${head}${flat.slice(start, start + SNIPPET_CHARS).trim()}${tail}`
 }
 
 /**
@@ -193,7 +304,13 @@ export function renderToolText(value) {
 
   const lines = docs.map((doc, index) => {
     const summary = oneLine(doc.summary)
-    return `${index + 1}. ${doc.rel} — ${doc.title}${summary ? `\n   ${summary}` : ''}`
+    // 命中段落（v0.11）：给模型判断「要不要读整篇」用。
+    // 用一个 `match:` 前缀把它和**首段摘要**区分开 —— 两者都是一行压平的文本，
+    // 不加标记的话模型分不清哪行是什么。
+    const snippet = doc.snippet ? flatten(doc.snippet, SNIPPET_CHARS) : ''
+    return `${index + 1}. ${doc.rel} — ${doc.title}`
+      + `${summary ? `\n   ${summary}` : ''}`
+      + `${snippet ? `\n   match: ${snippet}` : ''}`
   })
 
   return [head, ...lines].join('\n')
@@ -205,9 +322,35 @@ export function renderToolText(value) {
  * 形状与官方 `defineTool(...)` 的产物一致：`{ name, description, parameters, output, execute }`。
  *
  * @param {Function} scan - 宿主的扫描函数（注入进来，避免 index.js ↔ tool.js 循环 import）
+ * @param {Function} [read] - 宿主的单篇读取函数 `readDocument(root, rel)`。
+ *   **同样注入**，理由与 `scan` 一样。**可选** —— 没给就只是不带命中段落，
+ *   `knit_docs` 的其余行为一字不变（老调用方不会坏）。
  * @returns {object} 工具定义
  */
-export function knitDocsDefinition(scan) {
+export function knitDocsDefinition(scan, read) {
+  /**
+   * 给一篇文档抽命中段落。
+   *
+   * **任何失败都咽掉并返回空串** —— 抽不出段落只是少一条信息，
+   * 不该让整次工具调用失败（工具已经拿到了排序结果，那才是主要产出）。
+   *
+   * @param {string} root - 工作区根
+   * @param {string} rel - 相对路径
+   * @param {string[]} terms - 命中词
+   * @param {string} title - 这一篇的标题（用于排除「与标题重复」的块）
+   * @returns {Promise<string>} 命中段落或空串
+   */
+  async function snippetFor(root, rel, terms, title) {
+    if (typeof read !== 'function' || !rel || terms.length === 0) return ''
+    try {
+      const doc = await read(root, rel)
+      if (!doc || doc.ok !== true) return ''
+      return pickSnippet(doc.text, terms, { title })
+    } catch {
+      return ''
+    }
+  }
+
   return {
     name: TOOL_NAME,
     description: DESCRIPTION,
@@ -235,18 +378,32 @@ export function knitDocsDefinition(scan) {
         query,
       })
 
+      // 命中词用 `scan()` 的 `keywords` —— 它是**语料里真实存在**的那批词
+      // （不是原始候选），所以拿它去原文里找段落，必然找得到。
+      // 时间序模式下它是空数组 ⇒ terms 为空 ⇒ 不抽段落，正合语义。
+      const terms = Array.isArray(payload.keywords) ? payload.keywords : []
+
+      const docs = await Promise.all((payload.docs || []).map(async (doc) => {
+        const row = {
+          rel: String(doc.rel || ''),
+          title: String(doc.title || ''),
+          summary: doc.summary == null ? '' : String(doc.summary),
+          mtimeMs: Number.isFinite(doc.mtimeMs) ? Math.trunc(doc.mtimeMs) : 0,
+        }
+        const snippet = await snippetFor(root, row.rel, terms, row.title)
+        // 抽不到就**不带这个字段**，不写空串 —— 让「没有命中」和「命中但没抽出来」
+        // 在输出里都是「没有 match 行」，而不是一行空的 `match: `
+        if (snippet) row.snippet = snippet
+        return row
+      }))
+
       return {
         mode: payload.mode === 'relevance' ? 'relevance' : 'time',
         topic: typeof payload.topic === 'string' ? payload.topic : '',
         // `scan()` 的 total 是**全量池子**的条数（在 limit 切片之前），
         // 正好是这里要的「工作区一共有多少篇」。
         total: Number.isInteger(payload.total) ? payload.total : 0,
-        docs: (payload.docs || []).map((doc) => ({
-          rel: String(doc.rel || ''),
-          title: String(doc.title || ''),
-          summary: doc.summary == null ? '' : String(doc.summary),
-          mtimeMs: Number.isFinite(doc.mtimeMs) ? Math.trunc(doc.mtimeMs) : 0,
-        })),
+        docs,
       }
     },
   }
@@ -259,8 +416,9 @@ export function knitDocsDefinition(scan) {
  *
  * @param {object} ctx - cordis 上下文（带 `tools` 服务）
  * @param {Function} scan - 宿主的扫描函数
+ * @param {Function} [read] - 宿主的单篇读取函数（抽命中段落用；可选）
  * @returns {() => void} 注销函数
  */
-export function registerKnitDocsTool(ctx, scan) {
-  return ctx.tools.register(knitDocsDefinition(scan))
+export function registerKnitDocsTool(ctx, scan, read) {
+  return ctx.tools.register(knitDocsDefinition(scan, read))
 }
