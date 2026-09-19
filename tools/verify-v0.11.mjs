@@ -430,7 +430,36 @@ knitCalls.forEach((call, i) => {
     const sample = (call.text.match(/(^|\n)\s*(match: .*)/) || [])[2] || ''
     console.log(`  样例          ${sample.trim().slice(0, 90)}…`)
   }
+  /* ── 后续动作：**光是「下一个工具是 bash」判不出「照读整篇」** ──
+   * 实测反例（2026-09-19 `session-c18b5457`）：拿到 20 条 `match:` 之后
+   * 下一个工具是 `bash`，但那条 bash 只是 `pwd && ls -la` —— 一个字的正文都没读。
+   * 只看下一个工具会把这个判成「无效」。
+   *
+   * 所以按**内容读取量**判：`read` 算读正文，`bash` 里只有
+   * `sed -n` / `cat` / `head` / `tail` / `awk` 这类才算。
+   */
+  const after = order.slice(idx + 1).map((id) => calls.get(id)).filter(Boolean)
+  const argText = (c) => String(c.args == null ? '' : c.args)
+  const reads = after.filter((c) => c.name === 'read')
+  const ranged = reads.filter((c) => /"(offset|limit)"\s*:/.test(argText(c)))
+  const bashReads = after.filter((c) => c.name === 'bash' &&
+    /(^|[;&|(\s])(sed\s+-n|cat\s|head\s|tail\s|awk\s)/.test(argText(c)))
+  const contentReads = reads.length + bashReads.length
+
+  let argLimit = null
+  try {
+    const a = typeof call.args === 'string' ? JSON.parse(call.args) : call.args
+    if (a && Number.isFinite(Number(a.limit))) argLimit = Number(a.limit)
+  } catch { /* 参数不是 JSON 就不管 */ }
+  const askedForList = argLimit !== null && argLimit >= 10
+
   console.log(`  下一个工具    ${next ? next.name : '(没有，直接回答了)'}`)
+  if (after.length > 0) {
+    console.log(`  后续动作      ${after.length} 次 —— read ${reads.length}` +
+      `${reads.length ? `（带 offset/limit 的 ${ranged.length}）` : ''}，` +
+      `bash ${after.filter((c) => c.name === 'bash').length}` +
+      `${bashReads.length ? `（其中像「读正文」的 ${bashReads.length}）` : ''}`)
+  }
 
   // 只按**最近一次**判定 —— 会话里更早的调用可能发生在实现之前，
   // 拿它们下结论会误报（这个脚本第一版就犯过）。
@@ -440,16 +469,30 @@ knitCalls.forEach((call, i) => {
     return
   }
 
-  const readAfter = next && /^(read|bash|grep|glob|find)$/.test(next.name)
   if (!hasMatch) {
     console.log('  → ⚠️  这次结果里没有段落。两种可能：**跑的是旧代码**（没重启），')
     console.log('      或者这次调用发生在实现之前。重启后再问一次即可区分。')
     verdict = 'stale'
-  } else if (!readAfter) {
-    console.log('  → ✅ **有效**：拿到段落之后没有再读整篇')
+  } else if (after.length === 0) {
+    console.log('  → ✅ **有效**：拿到段落之后直接回答，没有再看别的')
     verdict = 'good'
+  } else if (contentReads === 0) {
+    console.log('  → ✅ **有效**：后续只有列目录 / grep 这类**没读正文**的动作，')
+    console.log('      `match:` 段落拦住了「读整篇」这一下')
+    verdict = 'good'
+  } else if (askedForList) {
+    console.log(`  → ⚠️ **这一轮判不了 ②**（测例混杂）：agent 要的是 \`limit: ${argLimit}\`，`)
+    console.log('     那是**一份清单**而不是候选。拿到 20 条路径之后去读其中几篇，')
+    console.log('     是问法的必然结果 —— 段落有没有省下 read，这一轮问不出来。')
+    console.log(`     要判 ② 得把 limit 收到默认的 5，并且问一件**答案只在一篇里**的事。`)
+    verdict = 'confounded'
+  } else if (contentReads <= 1 && ranged.length === reads.length) {
+    console.log('  → ✅ **部分有效**：只带 offset/limit 读了一小段，没有照读整篇')
+    verdict = 'partial'
   } else {
-    console.log(`  → ❌ **无效**：拿到段落之后仍然 \`${next.name}\`（按纪律停手，不试第三轮）`)
+    console.log(`  → ❌ **无效**：拿到段落之后仍读了 ${contentReads} 处正文` +
+      `（read ${reads.length} / bash 读片段 ${bashReads.length}）`)
+    console.log('     按 v0.9 的纪律：**如实记录、停手、不试第三轮**。')
     verdict = 'bad'
   }
   console.log()
@@ -459,8 +502,12 @@ console.log('═'.repeat(72))
 console.log('结论')
 console.log('═'.repeat(72))
 const words = {
-  good: '✅ **有效** —— 段落拦住了那次 read。按 SDD §一，这是 18 倍回报。',
+  good: '✅ **有效** —— 段落拦住了「读整篇」这一下。按 SDD §一，这是 18 倍回报。',
+  partial: '✅ **部分有效** —— 只带 offset/limit 读了一小段，没有照读整篇。',
   bad: '❌ **无效，负收益** —— agent 照读整篇。按 v0.9 的纪律：**如实记录、停手、不试第三轮**。',
+  confounded: '⚠️ **这一轮判不了 ②**（测例混杂）—— `match:` 段落是有的（机制没问题），\n'
+    + '    但 agent 要的是 `limit: N` 的**清单**，拿到之后去读其中几篇是问法的必然结果。\n'
+    + '    **这不是「无效」，也不能算「有效」** —— 换一个问法重来（见下）。',
   stale: '⚠️ **没验成** —— 最近一次 `knit_docs` 的结果里没有 `match:` 行。\n'
     + '    两种可能：**跑的还是旧代码**（宿主半边不热加载，必须重启），\n'
     + '    或者这次调用发生在实现之前。**重启 DSH，再问一次**即可区分。',
@@ -469,5 +516,7 @@ console.log(words[verdict] || '⚠️ 情况不明，人工看上面的调用序
 console.log()
 console.log('提醒：')
 console.log('  1. ② 是宿主侧改动 —— **没重启 DSH 就一定验不出东西**')
-console.log('  2. 判据的完整四种情形见 Knit_SDD-v0.11-knit_docs命中段落.md §六')
+console.log('  2. 判据的完整五种情形见 Knit_SDD-v0.11-knit_docs命中段落.md §六')
 console.log('  3. 「read 但只带 offset/limit 读一小段」算**部分有效**，比照读整篇好')
+console.log('  4. **别问「哪几篇 / 各自侧重什么」** —— 那是在要清单，agent 会开 `limit: 20`，')
+console.log('     拿到 20 条路径去翻几篇是必然的。要问**一件答案只在一篇里**的事。')
