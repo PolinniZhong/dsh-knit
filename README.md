@@ -157,6 +157,19 @@ dsh plugin --profile web add dsh-knit
 
 > 相关度**不做可视化**（不显示百分比、不画长条）—— 排序本身就是答案，名次即相关度。
 
+### 另外两档长什么样
+
+![图片与视频档真机截图：方形缩略图网格，这一屏 6 列，其中一个视频缩略图带播放三角与时长角标](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
+
+*图片与视频：方形缩略图，**列数跟着面板宽度连续变** —— 这一屏是 6 列，格子约 112px。*
+*视频取首帧当海报，中央叠播放三角、右下角叠时长。列出的就是工作区里真实的图片与 SVG 文件 ——*
+*这个工作区里正好有几张截图和两个图标，所以看起来像一屏文件缩略图。*
+
+![全部档真机截图：上区文档排成 2 列，下区图片与视频只给计数](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+
+*全部：上区文档（最多 4 条，超出时右侧给「查看全部 →」）、下区图片与视频（**不截断**，只给计数）。*
+*文档在这一档排成 **2 列**，标题 / 时间 / 摘要 / 路径**四个字段一个不少** —— 列数只改排版，不砍数据。*
+
 ---
 
 ## 也给 agent 用：`knit_docs` 工具

@@ -204,6 +204,21 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 > Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
 > the answer; position is relevance.
 
+### The other two views
+
+![Screenshot of the Images & video tab: a square thumbnail grid, six columns at this panel width, with a video thumbnail carrying a play glyph and a duration badge](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
+
+*Images & video: square thumbnails, with the **column count following the panel width continuously** —
+six columns at this width, cells about 112px. Videos show their first frame as a poster with a play
+glyph and a duration badge. These are the workspace's real image and SVG files; this particular
+workspace happens to hold several screenshots and two icon files.*
+
+![Screenshot of the All tab: documents laid out in two columns above, media with a count only below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+
+*All: documents on top (max 4, with a "View all →" link when truncated) and images & video below
+(**never truncated**, count only). Documents lay out in **two columns** here, and all four fields —
+title, time, summary, path — are still present: column count changes the layout, never the data.*
+
 ---
 
 ## What it reads, and what it doesn't
