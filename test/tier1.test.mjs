@@ -295,6 +295,103 @@ test('键盘：↑ 到顶停住，不循环', async () => {
   assert.ok(String(byClass(nodes, 'knit-doc')[0].props.className).includes('cursor'), '↑ 到顶应停住')
 })
 
+/* ── 1.5 多列键盘导航（P0 修复的守卫） ───────────────
+   真实列数要靠 ResizeObserver 量，测试环境量不到 → 永远是 1 列。
+   所以这里**直接测纯函数**，让多列分支真的被跑到（否则又是一盏空转的绿灯）。 */
+
+test('键盘：nextIndexFor —— 多列时 ←→ 跨行，且到行首/行尾停住不回绕', () => {
+  const { nextIndexFor } = loadClientModule().exports.__test
+  const at = (i, key, cols) => nextIndexFor(i, key, 5, cols)
+
+  // 单列：只认 ↑↓（←→ 不该悄悄改变行为，返回 -1 表示「这个键我不处理」）
+  assert.equal(at(0, 'ArrowDown', 1), 1)
+  assert.equal(at(0, 'ArrowUp', 1), 0, '↑ 到顶停住')
+  assert.equal(at(4, 'ArrowDown', 1), 4, '↓ 到底停住')
+  assert.equal(at(2, 'ArrowLeft', 1), -1, '单列不认 ←（避免挡掉宿主/输入框）')
+  assert.equal(at(2, 'ArrowRight', 1), -1, '单列不认 →')
+  assert.equal(at(2, 'a', 1), -1, '无关的键一律不处理')
+
+  // 2 列：0 1 / 2 3 / 4。←→ 只在本行内移动
+  assert.equal(at(0, 'ArrowRight', 2), 1, '0 → 1')
+  assert.equal(at(1, 'ArrowRight', 2), 1, '行尾再按 → 停住（不回绕到下一行）')
+  assert.equal(at(1, 'ArrowLeft', 2), 0, '1 → 0')
+  assert.equal(at(0, 'ArrowLeft', 2), 0, '行首再按 ← 停住（不跳到上一行末尾）')
+  assert.equal(at(2, 'ArrowRight', 2), 3)
+  assert.equal(at(3, 'ArrowRight', 2), 3, '末行不满时 → 停在最后一个')
+  assert.equal(at(4, 'ArrowRight', 2), 4, '末行只有一项')
+  assert.equal(at(4, 'ArrowLeft', 2), 4, '末行只有一项时 ← 也停住')
+  // ↑↓ 是「相邻项」= 视觉上横向走（DOM 顺序即阅读顺序）
+  assert.equal(at(0, 'ArrowDown', 2), 1, '2 列时 ↓ 视觉上是往右走')
+  assert.equal(at(1, 'ArrowDown', 2), 2, '再 ↓ 落到下一行行首')
+
+  // Home / End 与列数无关
+  assert.equal(at(3, 'Home', 2), 0)
+  assert.equal(at(1, 'End', 2), 4)
+
+  // 没有光标（index < 0）时按第 0 项算；空列表返回 -1
+  assert.equal(nextIndexFor(-1, 'ArrowDown', 5, 2), 1)
+  assert.equal(nextIndexFor(-1, 'ArrowUp', 5, 2), 0)
+  assert.equal(nextIndexFor(0, 'ArrowDown', 0, 2), -1, '空列表不处理')
+})
+
+test('可访问性（listbox）：容器指向 activedescendant，选项带 role/aria-selected', async () => {
+  const docCalls = []
+  installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      docCalls.push(decodeURIComponent(url.split('rel=')[1]))
+      return { ok: true, rel: 'x', title: 'x', text: '# x', truncated: false }
+    }
+    return listPayload()
+  })
+
+  const { KnitBody } = loadClientModule().exports.__test
+  let { nodes, renderAgain } = await mount(KnitBody, { sessionId: 's1' }, ['', 'time'])
+  nodes = await renderAgain(true)
+
+  const list = listNode(nodes)
+  assert.equal(list.props.role, 'listbox')
+  const active = list.props['aria-activedescendant']
+  assert.ok(active, '容器必须给出 aria-activedescendant')
+
+  const docs = byClass(nodes, 'knit-doc')
+  assert.equal(docs.length, 3)
+  for (const doc of docs) {
+    assert.equal(doc.props.role, 'option', '每个选项都要 role="option"（否则读不出「N 项中的第 i 项」）')
+    assert.ok(doc.props.id, '每个选项要有 id，才能被 aria-activedescendant 指到')
+  }
+  // 指向的 id 必须真的在列表里（不然辅助技术指到一个不存在的节点）
+  const ids = docs.map((d) => d.props.id)
+  assert.ok(ids.includes(active), `aria-activedescendant=${active} 必须是真实存在的选项 id`)
+  // 光标项 = aria-activedescendant 指向的那一项
+  const cursorNode = docs.find((d) => String(d.props.className).includes('cursor'))
+  assert.ok(cursorNode, '初次渲染 cursor 应落在第一项')
+  assert.equal(cursorNode.props.id, active, 'activedescendant 必须指向光标那一项')
+
+  // aria-selected 表达的是**正在预览**（不是光标）：没预览时全为 false
+  assert.equal(docs.filter((d) => d.props['aria-selected'] === 'true').length, 0,
+    '没打开预览时不该有 aria-selected=true')
+
+  // 按 Enter 打开预览 → 那一项变成 aria-selected=true，且仍然只有一项
+  list.props.onKeyDown(keyEvent('Enter'))
+  nodes = await renderAgain(true)
+  const after = byClass(nodes, 'knit-doc')
+  const selected = after.filter((d) => d.props['aria-selected'] === 'true')
+  assert.equal(selected.length, 1, '打开预览后恰好一项 aria-selected=true')
+  assert.equal(selected[0].props.id, cursorNode.props.id, '选中的就是当前那一项')
+})
+
+test('可访问性：选项 id 由 rel 稳定推导（同一篇跨渲染不变，中文/空格也合法）', () => {
+  const { docOptionId } = loadClientModule().exports.__test
+  const a = { rel: '01_ Knit PRD/Knit_SDD-v0.12-链接解析.md' }
+  assert.equal(docOptionId(a), docOptionId(a), '同一篇必须每次都得到同一个 id')
+  assert.notEqual(docOptionId(a), docOptionId({ rel: '01_ Knit PRD/别的.md' }))
+  assert.match(docOptionId(a), /^[A-Za-z0-9_-]+$/, 'id 只能是合法字符（会进 HTML 属性与选择器）')
+  assert.ok(docOptionId(a).length <= 120, 'id 不该过长')
+  // 折叠后可能撞车的两篇，靠哈希区分
+  assert.notEqual(docOptionId({ rel: 'a b/c.md' }), docOptionId({ rel: 'a_b/c.md' }),
+    '折叠字符相同的两篇不能拿到同一个 id')
+})
+
 test('键盘：Esc 收起预览', async () => {
   installFetch((url) => (url.includes('/api/doc')
     ? { ok: true, rel: 'x', title: 'x', text: '# x', truncated: false }

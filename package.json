@@ -1,6 +1,6 @@
 {
   "name": "dsh-knit",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "description": "Find the doc your agent just wrote. Lists the DSH workspace's Markdown, images and video in the sidebar, ranked by relevance to the current conversation, with inline preview — and hands the same ranking to the agent as a tool, returning the passage that matched in each document. Zero model calls, zero network.",
   "main": "./src/host/index.js",

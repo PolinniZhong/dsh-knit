@@ -355,75 +355,155 @@ window.__ModuleLoader__.load({
 
     /** 「全部」视图里文档区的固定上限。 */
     const ALL_DOC_CAP = 4
-    /** 滚动超过这个像素数就算「用户在读了」，进入阅读态（背景转纯阅读底色）。 */
-    const READING_SCROLL_PX = 4
     /**
-     * 媒体网格一屏最多摆几个（4 列 × 2 行）。
-     * 超出不再隐藏，而是整块等比缩小 —— 见 mediaLayoutFor 的 scaled 分支。
+     * 一屏基准：两行 × 4 列的观感（只在「媒体」这一档决定一屏铺几行时用）。
+     * **它不决定列数** —— 列数交给 CSS 的 `auto-fill`，见 mediaLayoutFor。
      */
     const MEDIA_MAX_ITEMS = 8
     /**
-     * 媒体格子（缩略图）的最小边长。低于这个值再缩就看不清了，用户明确说过
-     * 「64×64 就够了」。与 CSS 里的 --knit-media-min 同一套算术 —— 改一处必须改另一处。
+     * 媒体格子的基准边长（CSS `minmax` 的下限）。
+     *
+     * **它与条目数完全无关** —— 这是 2026-09-20 第二版修正的核心。
+     * 第一版仍然按「条目数」反推格宽：条目 ≤8 个想要 4 列满宽、超过就缩到 64px 硬塞两行。
+     * 结果**列数被条目数锁死**：实测面板从 400px 拉到 1200px，列数一直卡在 **5 列**，
+     * 只有格子从 64px 被吹到 224px。用户的原话：「要我拉到一定的宽度以后，它才从 4 个变成更多」
+     * 「它不是真的响应式」。
+     *
+     * 现在只钉一个数：**格子基准 104px**（实际渲染约 104–155px），
+     * 列数 = 浏览器按可用宽度连续数出来的（`repeat(auto-fill, minmax(104px, 1fr))`）——
+     * 拖宽约 120px 就多一列，与 AIGC 资产中心的图片网格同一套机制
+     * （它的窄屏档就是 `minmax(104px,1fr)`）。
      */
-    const MEDIA_MIN_PX = 64
-    /** 媒体视图（独立一档）一屏最多铺几行，再多就滚动 —— 免得面板被一个媒体墙顶爆。 */
-    const MEDIA_VIEW_ROWS = 3
-    /** 媒体网格的列数下限：面板再窄、媒体再少，也保持 3 列的观感（用户明确要求）。 */
-    const MEDIA_MIN_COLS = 3
+    const MEDIA_TRACK_PX = 104
+    /**
+     * 文档列表的响应式（2026-09-20 用户**三次**修正后的口径）：
+     * **默认 1 列；宽了排 2 列；多列时卡片数据不变。**
+     *
+     * 三次修正的经过（每一版都是真机体验后被打回的）：
+     *  - 第一版「把完整卡直接压窄」→ 632px 面板 4 列时标题只剩 **9 个字**
+     *    （真实标题中位数 18、最长 43），一屏还是 4 篇，只是把信息切碎了。
+     *  - 第二版「多列只留标题 + 时间」→ 用户否掉：「两行保留一行一样的列表数据，
+     *    现在大于一行后只有标题与时间了」。**多列不等于可以砍数据。**
+     *  - 第三版（当前）保留全部字段，但**上限从 4 列收到 3 列** —— 用户原话：
+     *    「大于三行体验上视觉跳动信息过载了」。即：4 列时一屏塞太密，
+     *    扫读时视线要反复跳跃，反而比 3 列更难用。
+     *
+     * 所以现在是：**每张卡片的字段与 1 列时完全一样**（标题 + 时间 + 摘要 + 路径），
+     * 只按格子宽度决定摘要是否还放得下 —— 与媒体卡「窄到 96px 以下让位给缩略图」
+     * 同一套渐进让位思路，而不是一多列就砍。
+     *
+     * ⚠️ **基准宽 205px 是「2–3 列时摘要还有意义」推出来的**：实测一行摘要每个汉字约 11.5px，
+     * 要摆下 16 个汉字以上才不算碎片。150px 那版会让 632px 直接排到 4 列（146px/格）、
+     * 标题只剩 10 字 —— 那又是第一版的坑。
+     */
+    const DOC_GRID_MIN_COLS = 1
+    /**
+     * **上限 2 列。**
+     *
+     * 演进：4 列（标题只剩 9 字）→ 3 列（用户：「大于三行视觉跳动信息过载」）→ **2 列**。
+     * 收到 2 列的依据是交互评审的实测：3 列时摘要每行只剩 **16 个汉字**
+     * （2 列是 26、1 列是 56）—— 文档卡的关键任务是**读摘要判断哪篇有用**，
+     * 而读文字的成本由「每行字数 + 换行次数」决定，不由「一屏几个卡片」决定。
+     * 3 列换来的只是「多一篇」，代价是每一篇的摘要都碎成片段。
+     *
+     * ⚠️ **别再加回 3 列**：真要提升宽面板的信息利用率，该做的是让**单列更舒展**
+     * （时间/路径移到右侧同一基线、摘要可读宽度拉满），不是继续切栏。
+     */
+    const DOC_GRID_MAX_COLS = 2
+    /** 文档格子宽度下限（CSS 里 minmax 的下限由它插入，改一处必须改另一处）。 */
+    const DOC_TRACK_PX = 205
+    /**
+     * 格子窄于这个宽度时摘要放不下有意义的内容（16 个汉字都摆不开）——
+     * 与其显示「本文件是 Agent 进」这种碎片，不如让摘要整块让位（**路径仍然保留**）。
+     */
+    const DOC_SUMMARY_MIN_PX = 185
+    /**
+     * 实际格宽低于这个值才让卡片文字让位给缩略图。
+     *
+     * ⚠️ **正常情况下这个分支永远不触发**：格子基准 104px + `1fr` 只会把格子**撑宽**，
+     * 所以任何面板宽度下实际格宽都 ≥ 100px，文件名放得下。
+     * 旧版（按条目数把格子压到 64px 那套）才会频繁让位；这里保留判据只是兜底。
+     */
+    const MEDIA_LABEL_MIN_PX = 96
     const MEDIA_GAP_PX = 10
     /** 网格左右内边距合计（.knit-media-grid 的 padding:0 12px / 8px 12px 16px）。 */
     const MEDIA_GRID_PAD_X = 24
     /** `.knit-list` 自己的左右内边距（padding:8px）—— 量到的是它，算格子要先扣掉。 */
     const LIST_PAD_X = 16
+    /** 量不到宽度时的兜底：默认右侧栏的几何（旧实现里的默认值，别改）。 */
+    const MEDIA_FALLBACK_WIDTH = 632
 
     /**
-     * 算媒体网格的列数、格子边长与是否进入「等比缩小」态。
+     * 算媒体网格当前能排几列、单格实际多宽。
      *
-     * 规则来自用户：
+     * 规则（2026-09-20 第三次修正后的口径）：
      *
-     * 1. **最少 3 列** —— 面板再窄也不掉到 1~2 列那种「一列一个」的观感；宽了才加列。
-     * 2. **一屏 8 个（4 列 × 2 行）是基准** —— 超过 8 个不再隐藏、也不再多铺行，
-     *    而是让整块网格**等比缩小**把这一屏塞满（所以格子会小于 64px，这是有意的）。
-     * 3. 不超过 8 个时以 64px 为基准、4 列满宽为上限；宽度不够就先让出一行
-     *    （列数降到 3）把格子撑回 64px。
+     * 1. **格子基准固定 104px，与条目数无关** —— 面板拖宽是**多出一列**，不是把格子吹大。
+     * 2. **列数连续增长** —— 宽约 120px 就多一列；不再像第一版那样卡在 5 列不动。
+     * 3. **纵向有多少行就铺多少行** —— 网格**不再设 maxHeight**。
      *
-     * 任何情况下 `columns*cell + gap` 都装得进可用宽度 —— 宁可格子小一点，也不能横向溢出。
+     * ⚠️ **第 3 条是 2026-09-20 第三次修正**：前两版都把高度封在「两行」，
+     * 让网格自己内部滚动。真机上第三行只能露出一点点，用户的原话是
+     * 「本来有三行，结果第三行只显示了一点点，应该纵向也完整显示」——
+     * 封顶高度是按「两行」算死的，跟面板实际有多高无关，必然截断。
+     * 现在整块交给 `.knit-list` 的滚动，与 AIGC 资产中心的做法一致。
+     *
+     * ⚠️ **这里的列数算术必须与 CSS 的 `auto-fill` 逐字同源**：CSS 那行是
+     * `repeat(auto-fill, minmax(104px, 1fr))`，所以列数是
+     * `floor((可用宽 + gap) / (104 + gap))`，**不是** `floor(可用宽 / 104)`；
+     * 少算 gap 会让 JS 与真机差一列（第一版实测踩过）。
      *
      * @param {number} width - 网格可用宽度（px，不含左右内边距）
-     * @param {number} [count] - 实际要摆几个；缺省按一屏基准（8）算
-     * @returns {{columns:number, cell:number, scaled:boolean, maxHeight:number|null}}
-     *   列数、格子边长（px，取整）、是否处于「等比缩小」态（此时卡片文字让位给缩略图）、
-     *   以及网格自身最大高度（null = 不限制，交给外层滚动）
+     * @returns {{min:number, columns:number, cell:number, scaled:boolean}}
+     *   格子基准宽（= CSS 的 minmax 下限）、当前宽度下能排几列、单格实际宽度、
+     *   是否让卡片文字让位
      */
-    function mediaLayoutFor(width, count) {
-      const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : MEDIA_MAX_ITEMS
+    function mediaLayoutFor(width) {
       const w = Number(width)
-      const usable = Number.isFinite(w) && w > 0 ? w : 632 // 量不到就按默认右侧栏的几何算
+      const usable = Number.isFinite(w) && w > 0 ? w : MEDIA_FALLBACK_WIDTH
+      /** cols 列时每格实际能有多宽（含 gap 的同一套算术）。 */
       const cellFor = (cols) => Math.floor((usable - (cols - 1) * MEDIA_GAP_PX) / cols)
-
-      /** 让格子长得下 64px 时最多能排几列（所以「格子大小」和「列数」是同一个约束）。 */
-      const colsAtMinCell = () => {
-        for (let cols = 8; cols > MEDIA_MIN_COLS; cols -= 1) {
-          if (cellFor(cols) >= MEDIA_MIN_PX) return cols
-        }
-        return MEDIA_MIN_COLS // 连 3 列 64px 都放不下：保住 3 列，允许极窄时轻微横溢
+      // 与 CSS 的 auto-fill 同一套判定：minmax(104px, …) 下能排几条。
+      const columns = Math.max(1,
+        Math.floor((usable + MEDIA_GAP_PX) / (MEDIA_TRACK_PX + MEDIA_GAP_PX)))
+      const cell = cellFor(columns)
+      // 让位判据看的是**实际格宽**，不是基准宽：窄面板只出 2 列时格子反而宽到 135px，
+      // 那时文件名放得下，不该跟着一起让位。
+      return {
+        min: MEDIA_TRACK_PX,
+        columns,
+        cell,
+        scaled: cell < MEDIA_LABEL_MIN_PX,
       }
+    }
 
-      if (n <= MEDIA_MAX_ITEMS) {
-        // 不超一屏：宽度够就是 4 列满宽；媒体少于 4 个也不缩列（否则一个缩略图独占半屏）。
-        // 面板窄到 4 列放不下 64px 时按能放下的列数走，但**永远不减到 3 列以下**。
-        const fit = Math.min(4, colsAtMinCell()) // 64px 装得下时想要 4 列满宽
-        const cols = Math.max(fit, MEDIA_MIN_COLS)
-        const cell = Math.max(MEDIA_MIN_PX, cellFor(cols))
-        return { columns: cols, cell, scaled: cell < 96, maxHeight: null }
+    /**
+     * 算文档列表能排几列、单格多宽、摘要放不放得下（见 `DOC_TRACK_PX` 上方的说明）。
+     *
+     * 与 `mediaLayoutFor` **同一套算术**（`floor((可用宽 + gap) / (基准宽 + gap))`），
+     * 只是基准宽与上限不同 —— 文档格子的下限是 205px（媒体是 104px），上限 4 列。
+     *
+     * @param {number} width - 列表可用宽度（px，不含列表左右内边距）
+     * @returns {{columns:number, cell:number, compact:boolean, summary:boolean}}
+     *   列数（1–4）、单格实际宽度、是否多列（多列时卡片改成网格里的样式）、
+     *   以及**摘要是否放得下**（放不下就整块让位，路径仍然保留）
+     */
+    function docLayoutFor(width) {
+      const w = Number(width)
+      // ⚠️ **量不到宽度就按 1 列走，不能按「默认面板 632px」算** —— 用户要的默认形态是
+      // 「一个文档一行」，而 632px 会算出 2–3 列，等于把默认值改掉了；
+      // 另外默认 1 列也不会在真实宽度到达前先闪一下多列。
+      const usable = Number.isFinite(w) && w > 0 ? w : 0
+      const columns = Math.min(DOC_GRID_MAX_COLS, Math.max(DOC_GRID_MIN_COLS,
+        Math.floor((usable + MEDIA_GAP_PX) / (DOC_TRACK_PX + MEDIA_GAP_PX))))
+      const cell = Math.floor((usable - (columns - 1) * MEDIA_GAP_PX) / columns)
+      // 多列时的卡片样子：**字段一个不少**，只把放不下的摘要让位（见 DOC_SUMMARY_MIN_PX）。
+      return {
+        columns,
+        cell,
+        compact: columns > 1,
+        summary: columns === 1 || cell >= DOC_SUMMARY_MIN_PX,
       }
-
-      // 超过一屏：加列 + 等比缩小，两行装下（上限 8 列）。此时格子允许小于 64px ——
-      // 「超过就等比缩小」是用户明确要的行为，宁可小也不多铺行。
-      const cols = Math.min(8, Math.max(MEDIA_MIN_COLS, Math.ceil(n / 2)))
-      const cell = cellFor(cols)
-      return { columns: cols, cell, scaled: true, maxHeight: cell * 2 + MEDIA_GAP_PX }
     }
 
     /* ── 样式：跟随 DSH 主题令牌，深浅色自适应 ───────────────── */
@@ -486,6 +566,14 @@ body[data-ds-dark-theme] .knit-root{
    用户的原话是「没有一个右侧的滑动条」。删掉即继承主题默认（l1），与侧栏列表一致。
    ⚠️ CSS 注释里不要出现反引号：这段是模板字符串，反引号会把它提前截断。 */
 .knit-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px;outline:none}
+/* 文档多列：**只有 2 列这一档**，由 JS 算好后加类 ——
+   不写 auto-fit，否则「几列」会有两套算法（容器一个、卡片样式一个），必然对不上。
+   ⚠️ **上限就是 2 列**，所以这里不该出现 cols-3 / cols-4（有守卫盯着）。
+   ⚠️ 类加在 .knit-multicol 上而**不是** .knit-list 上：列表是那个唯一的滚动容器
+   （媒体档与「全部」都在它里面），把 grid 写上去会连带改掉那两个视图的排版。 */
+.knit-multicol{display:flex;flex-direction:column;gap:6px}
+.knit-multicol.cols-2{display:grid;gap:8px;align-items:stretch;
+  grid-template-columns:repeat(2,minmax(0,1fr))}
 .knit-list:focus-visible{box-shadow:inset 0 0 0 1px var(--knit-accent)}
 .knit-doc{padding:10px 11px;border-radius:10px;cursor:pointer;
   border:.5px solid transparent;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.03));
@@ -495,8 +583,14 @@ body[data-ds-dark-theme] .knit-root{
 /* 选中（正在预览）保留品牌色描边，与「键盘光标」的中性描边区分开 */
 .knit-doc.active{border-color:var(--knit-accent);
   background:var(--knit-active-bg,rgba(255,255,255,.085))}
-/* .knit-doc.cursor 故意不设样式：键盘焦点靠「移动即预览」的预览面板表达，
-   再加描边会与 .active 的整块蓝色背景重复，显得突兀 */
+/* ⚠️ **但多列时必须给一个可见标记**（2026-09-20 补）：网格里 :hover 的
+   translateX 被关掉了，光标若仍然不可见，键盘用户就完全没有「我在哪」的线索。
+   用与媒体卡光标同一套中性环（不是品牌色），与 .active 的品牌描边区分开。 */
+.knit-multicol .knit-doc.cursor{
+  border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22));
+  box-shadow:0 0 0 1.5px var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.1))}
+/* 单列时 .knit-doc.cursor 故意不设样式：键盘焦点靠「移动即预览」的预览面板表达，
+   再加描边会与 .active 的整块蓝色背景重复，显得突兀。 */
 .knit-row1{display:flex;align-items:center;gap:8px;margin-bottom:5px}
 .knit-title{flex:1;min-width:0;font-weight:600;font-size:12.5px;line-height:1.4;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -506,6 +600,34 @@ body[data-ds-dark-theme] .knit-root{
 .knit-sum.empty{font-style:italic;color:var(--dsw-alias-label-caption,#80868b)}
 .knit-meta{margin-top:6px;font-size:10px;color:var(--dsw-alias-label-caption,#80868b);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── 2 列时的卡片 ─────────────────────────
+   ⚠️ **字段一个不少**：标题 + 时间 + 摘要 + 路径，与 1 列时同一套数据。
+   第一版曾在这里「只留标题 + 时间」，被用户否掉：「两行保留一行一样的列表数据，
+   现在大于一行后只有标题与时间了」。**多列不等于可以砍数据。**
+
+   变的只有排版，因为格子窄了：
+   - 时间从「和标题挤一行」改成纵向排（挤一行会把标题压到十几个字）
+   - 标题从单行省略改成**折两行**（宽度不够，截断太浪费）
+   - 摘要按格子宽度决定去留：放不下 16 个汉字就整块让位（见 DOC_SUMMARY_MIN_PX）。
+     这是**渐进让位**（与媒体卡窄到 96px 以下让位给缩略图同一个思路），
+     不是「一多列就砍」—— 路径任何时候都保留。
+
+   ⚠️ 这些规则必须排在 .knit-title / .knit-time / .knit-sum / .knit-meta **之后**：
+   选择器优先级一样，靠源码顺序取胜（和 .knit-media-card.cursor 那条同一个理）。 */
+.knit-multicol.cols-2 .knit-doc{padding:9px 10px}
+/* 标题折两行 */
+.knit-multicol.cols-2 .knit-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  white-space:normal;overflow:hidden;word-break:break-word}
+/* 行一改成纵向：格子窄时时间与标题挤一行会把标题压成十几个字 */
+.knit-multicol.cols-2 .knit-row1{display:block;margin-bottom:0}
+.knit-multicol.cols-2 .knit-time{margin-top:4px}
+/* 摘要挤不下时整块让位（JS 按格子宽决定加不加这个类）。路径不受影响。 */
+.knit-multicol.no-sum .knit-sum{display:none}
+/* 多列时的路径也折两行，别只给一行就切掉（真实路径中位数比标题还长） */
+.knit-multicol.cols-2 .knit-meta{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;word-break:break-all}
+/* 悬停不再左移：网格里位移会让整格抖动 */
+.knit-multicol.cols-2 .knit-doc:hover, .knit-doc:hover{transform:none}
 .knit-msg{padding:24px 16px;text-align:center;font-size:12px;
   color:var(--dsw-alias-label-caption,#80868b);line-height:1.7}
 .knit-notice{margin:6px 8px 0;padding:7px 10px;border-radius:7px;font-size:11px;line-height:1.5;
@@ -513,24 +635,23 @@ body[data-ds-dark-theme] .knit-root{
 .knit-badge{font-size:10px;margin-right:3px}
 
 /* ── 列表下方的预览面板 ───────────────────────────────
-   要让人一眼看出「这是另一层，不是列表的续行」，靠三件事：
-   ① 换一个**明暗主题下都不同**的表面令牌；
-   ② 顶部圆角 + 更强的上边界；
-   ③ 一层向上的柔影。
-   ⚠️ 不要用 bg-layer-2 来做层级：浅色主题下 bg-layer-1/2/3 解析出来全是 #fff，
-      换过去等于没换（实测官方 theme 变量）。bg-module-platform 才两边都有差
-      （浅 #f5f6f7 / 深 #353638）。 */
+   要让人一眼看出「这是另一层，不是列表的续行」，靠**结构**而不是底色：
+   ① 顶部圆角 + 更强的上边界；② 一层向上的柔影。
+   ⚠️ 底色**不再**参与分层（2026-09-20 起一律是纯阅读底色），理由见下面那条注释。
+   ⚠️ 也不要再拿 bg-layer-2 来做层级：浅色主题下 bg-layer-1/2/3 解析出来全是 #fff，
+      换过去等于没换（实测官方 theme 变量）。 */
+/* 预览面板的底色：**一律用纯阅读底色**（浅 #fff / 深 #151517）。
+   曾经是「先分层灰、用户一滚正文才过渡到白」，用户 2026-09-20 否掉了：
+   「下拉出现详情时背景是灰的，这个交互比较差……把它改成整个都是白」。
+   分层不靠底色了 —— 靠上边界 + 顶部圆角 + 向上柔影（下面三件仍然都在）。
+   ⚠️ 别只看浅色主题：这里必须走 bg-base，深色下它是 #151517；
+   写死 #fff 会在暗色主题里白得刺眼。 */
 .knit-preview{position:relative;flex:none;display:flex;flex-direction:column;min-height:0;
   border-top:.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.14));
   border-top-left-radius:12px;border-top-right-radius:12px;
-  background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.03));
-  box-shadow:0 -8px 24px rgba(0,0,0,.06);
-  transition:background-color .28s ease}
+  background:var(--dsw-alias-bg-base,#fff);
+  box-shadow:0 -8px 24px rgba(0,0,0,.06)}
 body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
-/* 用户在滚正文 = 在认真读 → 背景过渡到**纯阅读底色**（浅 #fff / 深 #151517）。
-   灰底本来是为了分层，但读起来对比度弱；给个过渡就两者兼得。
-   注意：圆角与柔影保留，所以「这是另一层」仍然看得出来。 */
-.knit-preview.reading{background:var(--dsw-alias-bg-base,#fff)}
 /* 拖拽把手：**绝对定位、不占布局高度**。
    它原来是一条 11px 的普通 flex 行，把 38px 的头整体往下推 —— 用户看到的就是
    「文档名和那几个按钮偏下」。改成浮在头顶的窄条后，头里的内容才真正上下居中。
@@ -614,17 +735,34 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
   color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
 
 /* ── 图片与视频：方形缩略图网格 ─────────────────────
-   列数与格子边长由 client.js 的 mediaLayoutFor 算好后用 CSS 变量传进来
-   （--knit-media-cols / --knit-media-cell），这里只留一个 3 列的兜底，
-   保证「最少 3 列」这条规则在 JS 没跑起来时也成立。
-   fallback 那一行是给不认 repeat(变量, ...) 的旧内核用的，必须写在前面。 */
+   **列数由浏览器自己数**（用户 2026-09-20 点名的机制，取自 AIGC 资产中心的图片网格）：
+   auto-fill + 固定下限 104px —— 面板拖宽约 120px 就多出一列，格子大小基本不变。
+
+   ⚠️ **1fr 是有意写的，不要改成固定轨道**。第一版把上下限都写成 JS 算的「实际格宽」，
+   结果列数被**条目数**锁死（条目 >8 个就把格宽压到 64px）：实测 400→1200px 全是 5 列，
+   只有格子从 64px 被吹到 224px —— 用户的原话是「它不是真的响应式」。
+   改成 minmax(104px, 1fr) 后列数只跟**可用宽度**有关，与有几个媒体无关。
+
+   ⚠️ 但**下限也不能省**：只写 1fr 会让只有一个媒体时那张图撑满整个面板宽度。
+
+   ⚠️ **网格不许设 maxHeight、也不自己滚动**。前两版把高度封在「两行」并给网格加
+   overflow-y:auto，真机上第三行只能露出一点点（用户原话：「本来有三行，结果第三行
+   只显示了一点点，应该纵向也完整显示」）—— 封顶高度是按「两行」算死的，与面板实际多高无关，
+   必然截断。现在有多少行就铺多少行，纵向滚动统一交给 .knit-list（与资产中心一致）。
+
+   fallback 那一行（3 列）是给不认 minmax(变量) 的旧内核用的，必须写在前面。
+   --knit-media-cell 由 JS 按当前列数下发，只用于 height 的方形兜底。
+   ⚠️ 注释里不要出现反引号 —— 这段是模板字符串，反引号会把它提前截断（见 AGENTS §6.9）。 */
 .knit-media-grid{display:grid;gap:${MEDIA_GAP_PX}px;
   --knit-media-label:block;
+  --knit-media-track:${MEDIA_TRACK_PX}px;
+  --knit-media-cell:120px;
   grid-template-columns:repeat(3,1fr);
-  grid-template-columns:repeat(var(--knit-media-cols,3),minmax(0,1fr));
-  padding:8px 12px 16px;align-content:start;min-height:0;overflow-y:auto}
-/* 分区里的网格：滚动交给 .knit-list 统一管，自己不留内边距 */
-.knit-media-grid.in-section{padding:0;overflow:visible}
+  grid-template-columns:repeat(auto-fill,minmax(var(--knit-media-track,104px),1fr));
+  padding:8px 12px 16px;align-content:start;min-height:0}
+/* 分区里的网格：不留内边距。滚动一律交给 .knit-list，网格自己**不滚** ——
+   嵌套滚动会在「全部」里变成滚动陷阱，而且封顶高度必然截断最后一行。 */
+.knit-media-grid.in-section{padding:0}
 .knit-media-card{min-width:0;cursor:pointer;border-radius:10px}
 .knit-media-thumbbox{position:relative;width:100%;height:var(--knit-media-cell,auto);aspect-ratio:1/1;
   border-radius:9px;overflow:hidden;
@@ -640,7 +778,7 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 /* 正在预览 → 品牌色描边（排在 cursor 之后，确保同时命中时以「选中」为准） */
 .knit-media-card.active .knit-media-thumbbox{
   border-color:var(--knit-accent);box-shadow:0 0 0 1.5px var(--knit-accent)}
-/* 等比缩小态（一屏硬塞 8 个以上）下格子太小，文件名与时间会挤成一团 —— 整块让位给缩略图 */
+/* 格子窄到 96px 以下时，文件名与时间会挤成一团 —— 整块让位给缩略图（mediaLayoutFor 的 scaled） */
 .knit-media-meta{margin-top:5px;display:var(--knit-media-label,block)}
 .knit-media-name{display:flex;align-items:center;gap:3px;font-size:11.5px;line-height:1.3;
   color:var(--dsw-alias-label-primary,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -971,11 +1109,77 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @param {{doc:object,now:number,active:boolean,cursor:boolean,relevance:boolean,onSelect:Function,onOpenTab:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function DocRow({ doc, now, active, cursor, relevance, onSelect, onOpenTab }) {
+    /**
+     * 键盘空间导航：算出「按这个方向键之后该到第几项」。
+     *
+     * 抽成纯函数是为了**可测**：真实宽度要靠 `ResizeObserver` 量，测试环境里量不到，
+     * 列数永远是 1 —— 那多列的分支就永远跑不到（§6.12 说的「空转的绿灯」）。
+     *
+     * 语义：
+     * - `ArrowDown` / `ArrowUp`：走**相邻项**（DOM 顺序 = 阅读顺序，多列时视觉上就是横向走）
+     * - `ArrowLeft` / `ArrowRight`：**只在多列时**跨一整行（步长 = 列数）；
+     *   到行首再按左 / 到行尾再按右时**停在本行**，不回绕 —— 回绕会让「往左」
+     *   突然跳到上一行末尾，方向感反而更差
+     * - `Home` / `End`：首项 / 末项
+     *
+     * @param {number} index - 当前下标（<0 表示还没有光标，按第 0 项算）
+     * @param {string} key - 键名
+     * @param {number} count - 条目总数
+     * @param {number} columns - 当前列数（1 = 单列，此时 ←→ 不参与）
+     * @returns {number} 目标下标；不该处理这个键时返回 -1
+     */
+    function nextIndexFor(index, key, count, columns) {
+      if (!(count > 0)) return -1
+      const here = index < 0 ? 0 : Math.min(index, count - 1)
+      const last = count - 1
+      if (key === 'ArrowDown') return Math.min(last, here + 1)
+      if (key === 'ArrowUp') return Math.max(0, here - 1)
+      if (key === 'Home') return 0
+      if (key === 'End') return last
+      const rowWidth = columns > 1 ? columns : 0
+      if (rowWidth > 0 && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+        const rowStart = Math.floor(here / rowWidth) * rowWidth
+        const rowEnd = Math.min(last, rowStart + rowWidth - 1)
+        const step = key === 'ArrowRight' ? 1 : -1
+        return Math.min(rowEnd, Math.max(rowStart, here + step))
+      }
+      return -1
+    }
+
+    /**
+     * 列表项在 DOM 里的稳定 id（供 `role="option"` + `aria-activedescendant` 使用）。
+     *
+     * ⚠️ 之前这里**只给容器加了 `role="listbox"`，选项却是裸 div** ——
+     * 屏幕阅读器读到的是「一个叫『最近文档』的列表框，里面 8 个无语义元素」：
+     * 既播报不出条目数，也播报不出当前选中项。这是多列改造之前就有的缺陷，
+     * 但多列让「当前在哪一项」更难表达，所以一起补上。
+     *
+     * ⚠️ **id 必须由 rel 稳定推导，不能用计数器** —— `aria-activedescendant` 要指向
+     * 真实存在的 id，而 id 在渲染期自增的话，同一篇文档在不同帧会拿到不同 id
+     * （渲染顺序、过滤、轮询刷新都会变），指向就会漂。用哈希则同一篇永远同一个 id。
+     * 前缀保留可读部分纯粹是为了调试时看得懂。
+     */
+    function docOptionId(doc) {
+      const rel = String(doc.rel || doc.path || '')
+      const safe = rel.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 48)
+      let hash = 2166136261
+      for (let i = 0; i < rel.length; i += 1) {
+        hash ^= rel.charCodeAt(i)
+        hash = Math.imul(hash, 16777619)
+      }
+      return `knit-opt-${safe}-${(hash >>> 0).toString(36)}`
+    }
+
+    function DocRow({ doc, now, active, cursor, relevance, onSelect, onOpenTab, optionId }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
 
       return h('div', {
         className: `knit-doc${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
+        // listbox 的选项语义：有 role 才能被读成「N 项中的第 i 项」，
+        // 有 aria-selected 才能播报「当前选中」。
+        role: 'option',
+        id: optionId,
+        'aria-selected': active ? 'true' : 'false',
         'data-knit-rel': doc.rel,
         title: t('row.tooltip', { path: doc.rel }),
         onClick: () => onSelect(doc),
@@ -1040,10 +1244,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @param {object} props - 与 DocRow 同构，外加 src
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab }) {
+    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab, optionId }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       return h('div', {
         className: `knit-media-card${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
+        // 与 DocRow 同一套 listbox 选项语义（媒体档与「全部」的媒体区都在同一个 listbox 里）
+        role: 'option',
+        id: optionId,
+        'aria-selected': active ? 'true' : 'false',
         'data-knit-rel': doc.rel,
         title: t('row.tooltip', { path: doc.rel }),
         onClick: () => onSelect(doc),
@@ -1062,7 +1270,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenLocal:Function|null,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, reading, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onToggleFullscreen, onResizeStart, onScrollBody }) {
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onToggleFullscreen, onResizeStart }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
 
@@ -1162,7 +1370,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                     h('pre', { className: 'knit-raw' }, preview.text))
 
       return h('div', {
-        className: `knit-preview${reading ? ' reading' : ''}`,
+        className: 'knit-preview',
         style: fullscreen ? undefined : { maxHeight: `${Math.round(ratio * 100)}%` },
       },
         fullscreen ? null : h('div', { className: 'knit-resize', onPointerDown: onResizeStart, title: t('preview.resizeTitle') }),
@@ -1201,7 +1409,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         linksBar,
         h('div', {
           className: `knit-preview-body${isMedia ? ' is-media' : ''}`,
-          onScroll: onScrollBody,
         },
           !isMedia && preview.truncated ? h('div', { className: 'knit-preview-note' }, t('preview.truncated')) : null,
           body))
@@ -1237,12 +1444,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 「全部」的媒体区只给两行，所以列数得跟着面板宽度走（量不到就按默认 3 列）。
       // 放在 fullscreen 之后，保持前几个 hook 的顺序不变 —— 测试按顺序预置状态。
       const [listWidth, setListWidth] = React.useState(0)
-
-      // 阅读态：记「哪一篇被滚过」。真正的存储是**模块级**的 readingDocs（见其定义），
-      // 组件里只留一个自增计数器用来触发重渲染 —— 这样即便宿主把 tab body
-      // 重新挂载（用户反馈「鼠标移出去以后就没有了」，组件 state 会归零），
-      // 阅读态也不会丢。放在最后，不动前面任何 hook 的槽位。
-      const [readingTick, setReadingTick] = React.useState(0)
 
       // v0.12 引用关系。`null` = 还没请求；请求回来是 `{status, incoming, outgoing, …}`。
       // **只跟着 previewRel 走**，绝不进列表轮询路径 —— 那份解析要读全库，
@@ -1316,27 +1517,42 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       /* ── 「全部」：按类型分上下两区 ─────────────────────
          文档区固定 4 条，多余的在分区标题给「查看全部」；
-         媒体区**不截断** —— 超过一屏基准（8 个）就整块等比缩小，而不是把剩下的藏起来。 */
+         媒体区**不截断** —— 一屏两行以外交给媒体区内部滚动（不隐藏、也不压小格子）。 */
       const docItems = kind === KIND_ALL ? visibleDocs.filter((doc) => !isMedia(doc)) : []
       const mediaItems = kind === KIND_ALL ? visibleDocs.filter(isMedia) : []
       const shownDocs = docItems.slice(0, ALL_DOC_CAP)
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
-      // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距
-      const mediaLayout = mediaLayoutFor(
-        Math.max(0, listWidth - LIST_PAD_X - MEDIA_GRID_PAD_X),
-        kind === KIND_ALL ? mediaItems.length : Math.min(visibleDocs.length, MEDIA_MAX_ITEMS))
+      // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
+      // ⚠️ 这里**不传条目数** —— 列数只跟可用宽度有关（传了就会重演「按个数锁列数」那个 bug）。
+      const mediaLayout = mediaLayoutFor(Math.max(0, listWidth - LIST_PAD_X - MEDIA_GRID_PAD_X))
+      // 文档列表的列数：**只看列表可用宽度**（扣掉 `.knit-list` 自己的左右内边距）。
+      // 1 列 = 完整卡，2–4 列 = 紧凑卡（样式由 `.knit-list.cols-N` 承担）。
+      const docLayout = docLayoutFor(Math.max(0, listWidth - LIST_PAD_X))
 
-      /** 媒体网格：列数与格子边长都由 mediaLayout 决定（CSS 只提供变量名）。 */
+      /** 媒体网格：列数由 CSS 的 auto-fill 自己数；JS 只下发「一格多宽」用于正方形兜底。
+       *  **不设 maxHeight** —— 有多少行就铺多少行，纵向滚动统一交给 `.knit-list`。 */
       const mediaGrid = (docs, inSection) => h('div', {
         className: `knit-media-grid${inSection ? ' in-section' : ''}`,
         role: 'group',
         style: {
-          '--knit-media-cols': String(mediaLayout.columns),
           '--knit-media-cell': `${mediaLayout.cell}px`,
           ...(mediaLayout.scaled ? { '--knit-media-label': 'none' } : {}),
-          ...(mediaLayout.maxHeight ? { maxHeight: `${mediaLayout.maxHeight}px` } : {}),
         },
       }, docs.map(renderEntry))
+
+      /**
+       * 文档列表的容器：**1 列时原样返回（不多一层 DOM），2–4 列时才包一层网格**。
+       * 单列不多包一层是有意的 —— 默认形态的 DOM 与列数改造之前**逐字一致**，
+       * 既有测试与既有的滚动/键盘行为都不用跟着动。
+       * `no-sum` 只在「格子窄到摘要放不下」时加（多列但格子够宽时摘要照常显示）。
+       */
+      const docsGrid = (docs) => {
+        if (docLayout.columns <= 1) return docs.map(renderEntry)
+        const cls = `knit-multicol cols-${docLayout.columns}${docLayout.summary ? '' : ' no-sum'}`
+        // ⚠️ 这层是**纯排版容器**，必须 role="presentation"（不是 group）：
+        // option 要是 listbox 的直接子级，辅助技术才会把选项算进那个集合。
+        return h('div', { className: cls, role: 'presentation' }, docs.map(renderEntry))
+      }
 
       /** 键盘与 cursor 真正能到达的条目：「全部」里文档只到上限，媒体全部可达。 */
       const navDocs = kind === KIND_ALL ? shownDocs.concat(mediaItems) : visibleDocs
@@ -1397,17 +1613,27 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         setFullscreen(false)
       }, [])
 
-      /** 键盘导航：↑↓ 移动即预览，Enter 切换，Esc 收起。 */
+      /**
+       * 键盘导航：↑↓ 逐项移动即预览，多列时 ←→ 按**屏幕位置**横移，Enter 切换，Esc 收起。
+       *
+       * ⚠️ **多列必须支持 ←→，否则「视觉空间」和「键盘空间」对不上**：
+       * 2 列网格里按 ↓ 视觉上是**往右**走（DOM 顺序即阅读顺序），
+       * 而 ←→ 原先完全不响应 —— 用户看到的是两列，键盘却只有一条线。
+       * 现在：↑↓ 走相邻项，←→ 跨一整行（rowWidth = 列数）。
+       *
+       * ⚠️ 左右键只在**多列**时生效：单列的纵向列表里 ←→ 没有空间含义，
+       * 拦截它反而会挡掉宿主或输入框的正常行为。
+       */
       const onListKeyDown = React.useCallback((event) => {
         if (navDocs.length === 0) return
         const index = navDocs.findIndex((doc) => doc.rel === cursor)
+        const last = navDocs.length - 1
 
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        // 方向键与 Home/End 全部交给纯函数算（见 nextIndexFor 的注释）
+        const target = nextIndexFor(index, event.key, navDocs.length, docLayout.columns)
+        if (target >= 0) {
           event.preventDefault()
-          const next = event.key === 'ArrowDown'
-            ? Math.min(navDocs.length - 1, index < 0 ? 0 : index + 1)
-            : Math.max(0, index < 0 ? 0 : index - 1)
-          const doc = navDocs[next]
+          const doc = navDocs[target]
           if (doc) { setCursor(doc.rel); openPreview(doc) }
           return
         }
@@ -1422,7 +1648,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           if (fullscreen) setFullscreen(false)
           else closePreview()
         }
-      }, [navDocs, cursor, fullscreen, openPreview, togglePreview, closePreview])
+      }, [navDocs, cursor, fullscreen, docLayout.columns, openPreview, togglePreview, closePreview])
 
       /** 拖拽预览面板上缘改变高度。 */
       const onResizeStart = React.useCallback((event) => {
@@ -1475,20 +1701,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * **与其显示一个假的失败，不如压根不请求、也不显示这一条。**
        */
       const previewIsDoc = !preview || (preview.kind !== 'image' && preview.kind !== 'video')
-
-      /** 阅读态 = 当前这一篇被滚过。换一篇自然为 false（派生，不用复位 effect）。 */
-      const reading = Boolean(previewRel) && readingDocs.has(readingKey(sessionId, previewRel))
-
-      /** 一开始滚正文就进入阅读态（阈值 4px，避免 1px 抖动就触发）；进了就不再退回。 */
-      const onScrollBody = React.useCallback((event) => {
-        const el = event && event.target
-        if (!el || typeof el.scrollTop !== 'number' || el.scrollTop <= READING_SCROLL_PX) return
-        const key = readingKey(sessionId, previewRel)
-        if (readingDocs.has(key)) return
-        readingDocs.add(key)
-        setReadingTick((n) => n + 1)      // 只是为了让这次写入反映到界面上
-      }, [sessionId, previewRel])
-      void readingTick
 
       /** 这篇文档在磁盘上的绝对路径：宿主给的 path 优先，拿不到就用 root + rel 拼。 */
       const previewAbsPath = preview
@@ -1562,13 +1774,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       /** 展开 / 收起引用条。真相在模块级 `expandedLinks`，组件只留计数器（理由同阅读态）。 */
       const toggleLinks = React.useCallback(() => {
         if (!previewRel) return
-        const key = readingKey(sessionId, previewRel)
+        const key = previewKey(sessionId, previewRel)
         if (expandedLinks.has(key)) expandedLinks.delete(key)
         else expandedLinks.add(key)
         setLinksExpandedTick((n) => n + 1)
       }, [previewRel, sessionId])
       const linksExpanded = Boolean(previewRel)
-        && expandedLinks.has(readingKey(sessionId, previewRel))
+        && expandedLinks.has(previewKey(sessionId, previewRel))
       void linksExpandedTick
 
       // 相对路径图片解析器：按当前文档所在目录解析。MarkdownText 按引用身份 memo，
@@ -1617,6 +1829,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           now: tick,
           active: Boolean(preview && preview.rel === doc.rel),
           cursor: doc.rel === cursor,
+          optionId: docOptionId(doc),
           onSelect: togglePreview,
           onOpenTab,
         }
@@ -1643,7 +1856,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const allSections = [
         docItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'docs' },
           sectionHead('kind.doc', shownDocs.length, docItems.length, KIND_DOC),
-          shownDocs.map(renderEntry)),
+          docsGrid(shownDocs)),
         mediaItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'media' },
           // 媒体不截断，所以只给一个标题，不给「已显示 / 总数」和「查看全部」
           h('div', { className: 'knit-section-head' },
@@ -1652,9 +1865,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           mediaGrid(mediaItems, true)),
       ]
 
-      // 媒体视图一屏最多铺 MEDIA_VIEW_ROWS 行，再多就交给滚动 —— 不让面板被媒体墙顶爆
-      const mediaViewLimit = Math.max(1, mediaLayout.columns * MEDIA_VIEW_ROWS)
-
+      // 媒体视图：一格都不隐藏 —— 一屏两行以外的部分在媒体区**内部滚动**，
+      // 既不让面板被整面媒体墙顶爆，也不会像旧版那样把剩下的条目直接切掉。
       const emptyText = kind === KIND_MEDIA ? t('list.emptyMedia') : t('list.empty')
       const body = state.status === 'loading' && state.docs.length === 0
         ? h('div', { className: 'knit-msg' }, t('list.scanning'))
@@ -1665,10 +1877,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             : visibleDocs.length === 0
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
-                ? mediaGrid(visibleDocs.slice(0, mediaViewLimit), false)
+                ? mediaGrid(visibleDocs, false)
                 : kind === KIND_ALL
                   ? allSections
-                  : visibleDocs.map(renderEntry)
+                  : docsGrid(visibleDocs)
 
       const topicText = relevance
         ? (state.topic ? t('topic.relevance', { topic: state.topic }) : t('topic.relevancePlain'))
@@ -1743,14 +1955,18 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         onKeyDown: onListKeyDown,
         role: 'listbox',
         'aria-label': t('list.aria'),
+        // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
+        // 所以用 activedescendant 把「当前项」告诉辅助技术。
+        // cursor 不在可见列表里时（被过滤/被上限截断）就不指向任何东西。
+        'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
+          ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
+          : undefined,
       }, body),
       preview ? h(PreviewPanel, {
         preview,
         pathImages,
         fullscreen,
         ratio,
-        reading,
-        onScrollBody,
         // v0.12 引用条
         links,
         linksExpanded,
@@ -2119,21 +2335,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     const previewSubscribers = new Set()
 
     /**
-     * 已经进入过「阅读态」的文档，key 见 `readingKey`。
+     * 已经**展开过引用条**的文档，key 见 `previewKey`。
      *
-     * **故意放在模块级而不是组件 state**：用户反馈「滚过之后背景变白，但鼠标移出去
-     * 就没有了」—— 组件 state 会随宿主重挂载归零，本模块级集合不会。
-     * 语义是「这一篇在这个会话里被读过」，所以重挂载、切 tab 回来都仍然算读过。
-     *
-     * @type {Set<string>}
-     */
-    const readingDocs = new Set()
-
-    /**
-     * 已经**展开过引用条**的文档，key 见 `readingKey`（同一个 key 约定）。
-     *
-     * 与 `readingDocs` 同一条理由（见 `AGENTS.md` §6.9）：**「用户做过的事」不能只放
-     * 组件 state** —— 宿主重挂载会把它清零，用户就得再点一次。
+     * **故意放在模块级而不是组件 state**：「用户做过的事」不能只放组件 state ——
+     * 宿主重挂载会把它清零，用户就得再点一次（见 `AGENTS.md` §6.9）。
      * 语义是「这一篇在这个会话里被展开过」。
      *
      * @type {Set<string>}
@@ -2141,12 +2346,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     const expandedLinks = new Set()
 
     /**
-     * 阅读态的 key：同一会话里的同一篇文档算一个。
+     * 「用户对这篇做过某件事」的 key：同一会话里的同一篇文档算一个（引用条展开态在用）。
      * @param {string} sessionId - 会话 id
      * @param {string} rel - 工作区相对路径
      * @returns {string} key
      */
-    function readingKey(sessionId, rel) {
+    function previewKey(sessionId, rel) {
       return `${sessionId || ''}\u0000${rel || ''}`
     }
 

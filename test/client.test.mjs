@@ -377,7 +377,7 @@ test('渲染：无目录时预览头不渲染空的目录段', async () => {
   assert.equal(byExactClass(nodes, 'knit-preview-name').map(textOf).join(''), '技术方案.md')
 })
 
-test('渲染：滚动正文进入阅读态（背景转纯阅读底色），换一篇复位', async () => {
+test('渲染：预览面板一展开就是纯阅读底色（不再「滚动才变白」）', async () => {
   installFetch((url) => (url.includes('/api/doc')
     ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
     : listPayload()))
@@ -393,27 +393,20 @@ test('渲染：滚动正文进入阅读态（背景转纯阅读底色），换�
   byClass(nodes, 'knit-doc')[0].props.onClick()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  assert.equal(byToken(nodes, 'reading').length, 0, '刚展开还是分层灰')
-  const scrollBody = (top) => {
-    byExactClass(nodes, 'knit-preview-body')[0].props.onScroll({ target: { scrollTop: top } })
-    nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  }
+  assert.equal(byToken(nodes, 'knit-preview').length, 1)
+  // 用户 2026-09-20：「下拉出现详情时背景是灰的，这个交互比较差……把它改成整个都是白」
+  // 底色现在写在 `.knit-preview` 的 CSS 里（bg-base），**跟滚动无关、跟换篇无关**。
+  assert.equal(byToken(nodes, 'reading').length, 0,
+    '不再有「阅读态」这个 class —— 灰变白那套已删')
+  assert.equal(byExactClass(nodes, 'knit-preview')[0].props.className, 'knit-preview',
+    '预览面板的 class 恒为 knit-preview')
 
-  scrollBody(1)
-  assert.equal(byToken(nodes, 'reading').length, 0, '1px 抖动不该换背景')
-
-  scrollBody(40)
-  assert.equal(byToken(nodes, 'reading').length, 1, '真的滚动了才进阅读态')
-
-  // 换一篇 → 新文档重新从分层灰开始（面板仍一眼可辨是另一层）
-  byClass(nodes, 'knit-doc')[1].props.onClick()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  assert.equal(byToken(nodes, 'reading').length, 0, '换一篇后复位')
+  // 正文上不该再挂 onScroll（那个 handler 是专门为「滚动才变白」加的）
+  assert.equal(byExactClass(nodes, 'knit-preview-body')[0].props.onScroll, undefined,
+    '正文不许再有 onScroll —— 它只服务于已删除的灰→白过渡')
 })
 
-test('渲染：阅读态存在模块级，面板重新挂载后仍然是纯阅读底色', async () => {
-  // 用独立 sessionId，避免模块级集合在用例之间串味
-  const sid = 's-durable'
+test('渲染：换一篇后预览面板仍是同一套底色（没有「复位回灰」这一步）', async () => {
   installFetch((url) => (url.includes('/api/doc')
     ? { ok: true, rel: 'a.md', title: 'A', text: '正文', truncated: false }
     : listPayload()))
@@ -422,28 +415,18 @@ test('渲染：阅读态存在模块级，面板重新挂载后仍然是纯阅�
   const { KnitBody } = exports.__test
   harness.reset()
   harness.seed(['', 'time'])
-  let nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
   byClass(nodes, 'knit-doc')[0].props.onClick()
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
-  byExactClass(nodes, 'knit-preview-body')[0].props.onScroll({ target: { scrollTop: 40 } })
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
-  assert.equal(byToken(nodes, 'reading').length, 1)
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  const first = byExactClass(nodes, 'knit-preview')[0].props.className
 
-  // 模拟宿主把 tab body 重新挂载：hook 槽位清零 = 组件 state 全丢
-  // （用户反馈「鼠标移出去以后就没有了」，就是这一类的重挂载）
-  harness.reset()
-  harness.seed(['', 'time'])
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
-  assert.equal(byToken(nodes, 'knit-preview').length, 0, '重挂载后预览本身当然要先重新展开')
-
-  byClass(nodes, 'knit-doc')[0].props.onClick()
-  nodes = harness.render(h(KnitBody, { sessionId: sid }))
-  assert.equal(byToken(nodes, 'reading').length, 1, '读过这一篇的事实不该随重挂载丢掉')
+  byClass(nodes, 'knit-doc')[1].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(nodes, 'knit-preview')[0].props.className, first,
+    '换一篇不改变面板底色（底色只在 CSS 里，不随文档走）')
 })
 
 test('splitRelPath：拆目录与文件名（无目录 / 多级 / 空值）', () => {
@@ -758,6 +741,9 @@ test('媒体：默认文档视图有三个类型按钮，但不出现媒体网�
   assert.equal(btns.find((b) => textOf(b) === '文档').props['aria-selected'], true)
   assert.equal(byClass(nodes, 'knit-media-grid').length, 0)
   assert.equal(byClass(nodes, 'knit-doc').length, 2)
+  // ⚠️ 列数改造后，**默认（1 列）形态的 DOM 与改造前逐字一致**：
+  // 不多包一层容器（否则 byClass('knit-doc') 这类子串匹配会多命中一个）。
+  assert.equal(byClass(nodes, 'knit-multicol').length, 0, '1 列不该有网格容器')
   assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /2 篇/)
 })
 
@@ -773,6 +759,9 @@ test('媒体：媒体视图渲染方形网格，图片出 img、视频出首帧 
   assert.ok(calls[0].includes('kind=media'), `实际 URL: ${calls[0]}`)
   assert.equal(byClass(nodes, 'knit-media-grid').length, 1)
   assert.equal(byClass(nodes, 'knit-media-card').length, 2)
+  // ⚠️ 纵向不封顶：媒体档的网格也不许设 maxHeight（第三版修正，见 mediaLayoutFor 那条测试）
+  assert.equal(byClass(nodes, 'knit-media-grid')[0].props.style.maxHeight, undefined,
+    '媒体档的网格不设高度上限，滚动交给列表')
   assert.equal(byClass(nodes, 'knit-doc').length, 0, '媒体视图不该有文档行')
   assert.equal(nodes.filter((n) => n.type === 'img').length, 1, '一张图片缩略图')
   const videos = nodes.filter((n) => n.type === 'video')
@@ -828,7 +817,7 @@ test('媒体：点视频卡片就地预览，播放器 controls 且静音自动�
   assert.ok(!calls.some((u) => u.includes('/api/doc')), '视频不应触发正文请求')
 })
 
-test('媒体：「全部」分上下两区，文档上限 4、媒体不截断（超 8 个才等比缩小）', async () => {
+test('媒体：「全部」分上下两区，文档上限 4、媒体一格不隐藏', async () => {
   installFetch(kindResponder({ all: bigMixedPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -843,19 +832,23 @@ test('媒体：「全部」分上下两区，文档上限 4、媒体不截断（
     ['文档', '图片与视频'],
   )
   assert.equal(byToken(nodes, 'knit-doc').length, 4, '文档区最多 4 条')
-  // 载荷里 5 图 + 4 视频 = 9 个媒体；一屏基准是 8，超出的那个不隐藏，改成整块等比缩小
+  // 载荷里 5 图 + 4 视频 = 9 个媒体：一格都不隐藏，纵向也**不封顶**（有多少行铺多少行）
   assert.equal(byToken(nodes, 'knit-media-card').length, 9, '媒体区不截断，9 个全出')
   assert.equal(byExactClass(nodes, 'knit-media-grid in-section').length, 1, '媒体区用分区网格')
   assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /16 项/, '顶行仍报总数')
 
   const grid = byExactClass(nodes, 'knit-media-grid in-section')[0]
   // 测试环境没有 ResizeObserver → 量不到宽度 → 走默认面板几何（632px）
-  assert.equal(grid.props.style['--knit-media-cell'], '118px', '默认面板下 9 个媒体 → 5 列 118px')
-  assert.equal(grid.props.style['--knit-media-label'], 'none', '超 8 个 → 卡片文字让位给缩略图')
-  assert.equal(grid.props.style.maxHeight, '246px', '两行 + 一个 gap，超出的交给滚动')
+  assert.equal(grid.props.style['--knit-media-cell'], '118px', '默认面板下 9 个媒体 → 118px 的格子')
+  // 列数**不再由 JS 下发** —— 交给 CSS 的 auto-fill，面板一变宽就自己多一列
+  assert.equal(grid.props.style['--knit-media-cols'], undefined, '不再下发列数')
+  assert.equal(grid.props.style['--knit-media-label'], undefined, '118px 还有地方写文件名/时间')
+  // ⚠️ 纵向不许封顶：2026-09-20 前两版设 maxHeight 封「两行」，真机上第三行只露一点点
+  assert.equal(grid.props.style.maxHeight, undefined,
+    '网格不许设 maxHeight —— 纵向有多少行就铺多少行，滚动交给 .knit-list')
 })
 
-test('媒体：不超过 8 个时卡片正常带文件名与时间，不进入等比缩小态', async () => {
+test('媒体：条目不多时卡片正常带文件名与时间，不让文字让位', async () => {
   // 1 篇文档 + 5 媒体（正好一屏内）
   const docs = bigMixedPayload().docs.slice(0, 1).concat(
     bigMixedPayload().docs.filter((d) => d.kind !== 'md').slice(0, 5))
@@ -980,45 +973,128 @@ test('媒体：「全部」的键盘导航只走到分区上限内，不落到�
   assert.ok(!/^d[5-7]\.md$/.test(reached), `不该落到被截断的文档：${reached}`)
 })
 
-test('媒体：mediaLayoutFor —— 最少 3 列、一屏 8 个、超过就等比缩小', () => {
-  const { mediaLayoutFor, MEDIA_MIN_PX, MEDIA_MAX_ITEMS } = loadClientModule().exports.__test
+test('媒体：mediaLayoutFor —— 列数只跟可用宽度走，格子基准固定、与条目数无关', () => {
+  const {
+    mediaLayoutFor, MEDIA_TRACK_PX, MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX, MEDIA_MAX_ITEMS,
+  } = loadClientModule().exports.__test
 
-  assert.equal(MEDIA_MIN_PX, 64, '格子下限是用户定的 64×64')
-  assert.equal(MEDIA_MAX_ITEMS, 8, '一屏基准 8 个（4 列 × 2 行）')
+  assert.equal(MEDIA_TRACK_PX, 104, '格子基准由「响应区间」定，不由条目数定')
+  assert.equal(MEDIA_MAX_ITEMS, 8, '旧版的一屏基准 8 个现在只用来做默认值')
 
-  // 一开始的 bug 是「量不到宽度就回落 3 列」，于是默认面板下格子被撑到 200px+
-  assert.deepEqual(mediaLayoutFor(0, 4), { columns: 4, cell: 150, scaled: false, maxHeight: null },
-    '量不到宽度按默认面板算，不是回落 3 列')
+  // 量不到宽度就按默认面板算（右侧栏 ~632px 可用）
+  assert.deepEqual(mediaLayoutFor(0), { min: 104, columns: 5, cell: 118, scaled: false })
 
-  // 不超一屏：宽度够就固定 4 列满宽；媒体少于 4 个也不缩列，免得一个缩略图独占半屏
-  assert.deepEqual(mediaLayoutFor(632, 1), { columns: 4, cell: 150, scaled: false, maxHeight: null },
-    '1 个也占 4 列网格里的一格（旧的 3 列回落会让它撑到 204px）')
-  assert.equal(mediaLayoutFor(632, 3).columns, 4)
-  assert.equal(mediaLayoutFor(632, 4).columns, 4)
-  assert.equal(mediaLayoutFor(632, 4).cell, 150, '默认右侧栏 4 列时约 150px，远小于旧的 200px+')
-  assert.equal(mediaLayoutFor(632, 8).columns, 4, '8 个仍是 4 列 × 2 行')
-
-  // 超过一屏：不再隐藏，而是加列 + 缩小，两行装下
-  const nine = mediaLayoutFor(632, 9)
-  assert.equal(nine.columns, 5, '9 个 → 5 列 × 2 行')
-  assert.ok(nine.cell < mediaLayoutFor(632, 8).cell, '格子必须比 8 个时更小')
-  assert.equal(nine.scaled, true, '进入等比缩小态（卡片文字让位）')
-  assert.equal(nine.maxHeight, nine.cell * 2 + 10, '两行 + 一个 gap')
-
-  // 面板再窄也不掉到 1~2 列；够宽时网格绝不横向溢出
-  for (const width of [240, 280, 375, 500, 900, 1400]) {
-    for (const count of [1, 3, 8, 9, 24]) {
-      const layout = mediaLayoutFor(width, count)
-      assert.ok(layout.columns >= 3,
-        `${width}px / ${count} 个：列数不该低于 3（实际 ${layout.columns}）`)
-      assert.ok(layout.columns * layout.cell + (layout.columns - 1) * 10 <= width,
-        `${width}px / ${count} 个：网格不能横向溢出`)
-    }
+  // JS 的列数口径必须与 CSS 的 auto-fill **含 gap** 的算术逐字一致，否则测试数字与真机对不上
+  for (const width of [120, 240, 320, 375, 500, 632, 900, 1400]) {
+    const l = mediaLayoutFor(width)
+    const expected = Math.max(1, Math.floor((width + MEDIA_GAP_PX) / (MEDIA_TRACK_PX + MEDIA_GAP_PX)))
+    assert.equal(l.columns, expected, `${width}px：列数口径要与 CSS 一致`)
+    assert.equal(l.min, MEDIA_TRACK_PX, `${width}px：下发的基准宽始终是常量`)
+    assert.equal(l.cell, Math.floor((width - (l.columns - 1) * MEDIA_GAP_PX) / l.columns),
+      `${width}px：单格宽按列数现算`)
   }
-  // 极窄面板（连 3 个 64px 都放不下）时守住 3 列、允许轻微横溢 —— 用户明确要「最少 3 个」
-  const tiny = mediaLayoutFor(120, 8)
-  assert.equal(tiny.columns, 3, '极窄也保 3 列')
-  assert.equal(tiny.cell, 64, '格子不再继续缩，守住 64px 可读下限')
+
+  // ⚠️ 核心回归（2026-09-20 第二版）：**列数只与宽度有关，与有几个媒体无关**。
+  // 第一版把格宽和条目数绑在一起（条目 >8 个就缩到 64px），结果列数被条目数**锁死** ——
+  // 实测 400→1200px 一直是 5 列，只有格子被吹大；用户反馈「它不是真的响应式」。
+  for (const width of [320, 420, 632, 900, 1200]) {
+    const a = mediaLayoutFor(width)
+    // 函数签名就只有 width —— 条目数根本传不进去（传了也忽略）
+    assert.deepEqual(mediaLayoutFor(width, 120), a, `${width}px：120 个条目不该改变列数`)
+    assert.ok(a.cell >= MEDIA_TRACK_PX, `${width}px：格子不低于基准宽（实际 ${a.cell}px）`)
+    assert.ok(a.cell <= 160, `${width}px：格子不越过响应区间上限（实际 ${a.cell}px）`)
+  }
+
+  // 列数随宽度**平滑**增长：绝不出现「拖 400px 还是 5 列」那种平台期。
+  // 第一版的病灶正是平台期（实测 400→1200px 一直 5 列），所以这条按「每 120px 至少多一列」量。
+  for (let width = 200; width <= 1600; width += 120) {
+    const here = mediaLayoutFor(width).columns
+    const next = mediaLayoutFor(width + 120).columns
+    assert.ok(next >= here, `${width}→${width + 120}px：列数不该变少（${here}→${next}）`)
+    // 每 120px 至少多一列 = 不存在平台期；理论上最多多一列（120/114），允许边界上偶尔到 2
+    assert.ok(next >= here + 1, `${width}→${width + 120}px：出现了平台期（${here}→${next}）`)
+    assert.ok(next <= here + 2, `${width}→${width + 120}px：跳得太猛（${here}→${next}）`)
+  }
+
+  // 窄面板只出 2 列（格子约 135px），宽面板连续铺满
+  assert.equal(mediaLayoutFor(320).columns, 2, '320px 面板：2 列，而不是硬塞 5 列 48px')
+  assert.ok(mediaLayoutFor(900).columns >= 7, '900px 面板：至少 7 列')
+  assert.ok(mediaLayoutFor(1200).columns >= 10, '1200px 面板：至少 10 列——真的是「铺满」')
+
+  // 实际格宽永远 ≥100px（基准 104 + 1fr 只会撑宽），所以文字让位这条分支**不该被触发**
+  for (const width of [200, 240, 320, 632, 900, 920, 1020, 1060, 1140, 1200, 1400]) {
+    const l = mediaLayoutFor(width)
+    assert.equal(l.scaled, false, `${width}px：格宽 ${l.cell}px，文件名放得下，不该让位`)
+  }
+  assert.equal(MEDIA_LABEL_MIN_PX, 96, '兜底阈值：只有真实格宽 < 96 才让位')
+
+  // ⚠️ 核心回归（2026-09-20 第三版）：**纵向不许封顶**。
+  // 前两版返回 maxHeight（按「两行」算死），真机上第三行只露出一点点 ——
+  // 用户的原话是「本来有三行，结果第三行只显示了一点点，应该纵向也完整显示」。
+  // 布局函数只要不再吐出高度的概念，就没法再被谁拿去封顶。
+  assert.equal(mediaLayoutFor(632).maxHeight, undefined, '布局函数不再返回 maxHeight')
+  assert.ok(!('maxHeight' in mediaLayoutFor(632)), '连这个键都不该存在')
+})
+
+test('文档：docLayoutFor —— 默认 1 列，宽了最多 2 列，字段一个不少', () => {
+  const client = loadClientModule().exports.__test
+  const { docLayoutFor, DOC_TRACK_PX, DOC_GRID_MAX_COLS, DOC_SUMMARY_MIN_PX, MEDIA_GAP_PX } = client
+
+  assert.equal(DOC_TRACK_PX, 205, '格子下限由「2–3 列时摘要还放得下」反推（150px 会让 632px 排到 4 列）')
+  // 演进：4 列 → 3 列（「视觉跳动信息过载」）→ 2 列（交互评审：3 列摘要每行只剩 16 字）
+  assert.equal(DOC_GRID_MAX_COLS, 2, '上限 2 列 —— 3 列摘要每行只剩 16 个汉字，读不下去')
+  assert.equal(DOC_SUMMARY_MIN_PX, 185)
+
+  // 默认（量不到宽度）→ 1 列，与改造之前逐字一致
+  assert.deepEqual(docLayoutFor(0),
+    { columns: 1, cell: 0, compact: false, summary: true }, '量不到宽度 = 默认一列')
+  // ⚠️ 「默认一个文档一行」是用户的明确要求 —— 窄面板绝不能自己变多列
+  for (const w of [0, 120, 200, 300, 400]) {
+    assert.equal(docLayoutFor(w).columns, 1, `${w}px：窄面板必须还是 1 列`)
+    assert.equal(docLayoutFor(w).compact, false, `${w}px：1 列不是多列态`)
+  }
+
+  // 列数单调不减、封顶 4 列；断点用实测值钉住（基准 205px + gap 10）
+  let prev = 1
+  for (let w = 100; w <= 2000; w += 50) {
+    const { columns } = docLayoutFor(w)
+    assert.ok(columns >= prev, `${w}px：列数不该回落（${prev}→${columns}）`)
+    assert.ok(columns <= DOC_GRID_MAX_COLS, `${w}px：不许超过 4 列`)
+    prev = columns
+  }
+  assert.equal(docLayoutFor(2000).columns, 2, '再宽也停在 2 列')
+  assert.equal(docLayoutFor(419).columns, 1, '419px 可用宽还是 1 列')
+  assert.equal(docLayoutFor(420).columns, 2, '420px → 2 列')
+  assert.equal(docLayoutFor(616).columns, 2, '632px 面板（可用 616px）→ 2 列')
+  assert.equal(docLayoutFor(635).columns, 2, '635px 也只有 2 列（不再有第 3 列）')
+  assert.equal(docLayoutFor(1400).columns, 2, '1400px 也只有 2 列')
+
+  // ⚠️ 核心约束：**compact 与列数同源**（不能出现「排了 2 列但还是 1 列的样子」）
+  for (let w = 100; w <= 2000; w += 25) {
+    const { columns, compact } = docLayoutFor(w)
+    assert.equal(compact, columns > 1, `${w}px：compact 必须 == (columns > 1)`)
+  }
+  // 与 mediaLayoutFor 同一套算术（含 gap），再按 4 列封顶
+  for (const w of [200, 420, 616, 900, 1400]) {
+    assert.equal(docLayoutFor(w).columns,
+      Math.min(DOC_GRID_MAX_COLS,
+        Math.max(1, Math.floor((w + MEDIA_GAP_PX) / (DOC_TRACK_PX + MEDIA_GAP_PX)))),
+      `${w}px：文档列数口径要与媒体同一套算术（2 列封顶）`)
+  }
+
+  // ⚠️ 用户第二次修正的核心：**多列时字段一个不少** —— 摘要在任何可达的列数下都保留
+  // （205px 下限 + 4 列上限 ⇒ 最窄的格子也有 ~217px，摘要放得下）。
+  // `summary:false` 只是兜底分支，留给将来调窄基准宽的情况。
+  for (let w = 100; w <= 2000; w += 5) {
+    const { columns, cell, summary } = docLayoutFor(w)
+    if (columns === 1) continue
+    assert.ok(cell >= DOC_SUMMARY_MIN_PX,
+      `${w}px / ${columns} 列：格子 ${cell}px 应该仍然放得下摘要`)
+    assert.equal(summary, true, `${w}px / ${columns} 列：摘要不该被砍（用户否掉了「只剩标题+时间」）`)
+  }
+  // 兜底分支本身必须能用：格子真的窄到放不下时，摘要让位
+  assert.equal(docLayoutFor(420).summary, true, '2 列 205px 格：摘要保留')
+  assert.equal(docLayoutFor(400).summary, true, '1 列时摘要永远在')
 })
 
 test('样式：类型切换的选中态不再用品牌色描边，与列表行同一套中性灰填充', async () => {
@@ -1057,19 +1133,104 @@ test('样式：悬停 / 选中的灰底各降一档（悬停 −60% / 选中 −
   assert.match(css, /\.knit-media-thumbbox\{[^}]*background:var\(--dsw-alias-interactive-bg-hover/)
 })
 
-test('样式：媒体网格靠 CSS 变量收列数与格子边长，下限与 JS 常量同源', async () => {
+test('样式：文档多列只有 2 列一档显式轨道，容器类名不与 knit-doc 撞前缀', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // 列数由 JS 算好、只下发 cols-2 这一个类（**不写 auto-fit**）：写 auto-fit 就变成
+  // 「几列」会有两套算法（容器一个、卡片样式一个），而多列样式是按类生效的，必然对不上。
+  assert.match(css, /\.knit-multicol\.cols-2\{display:grid/)
+  assert.match(css, /\.knit-multicol\.cols-2\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)
+  // ⚠️ 上限 2 列：3 列与 4 列的样式都该是死代码，不许留在 CSS 里
+  assert.ok(!/\.knit-multicol\.cols-3/.test(css), '上限是 2 列，不该再有 cols-3 的样式')
+  assert.ok(!/\.knit-multicol\.cols-4/.test(css), '上限是 2 列，不该再有 cols-4 的样式')
+  assert.ok(!/\.knit-multicol[^{]*auto-fit/.test(css), '文档多列不许用 auto-fit')
+  // ⚠️ 容器类名里**不能含 `knit-doc`**：byClass 是子串匹配，会把它当成一个文档行
+  // （§6.5 那个坑的第三次；旧名 knit-doc-grid 就是踩了这个）。
+  assert.ok(!/knit-doc-grid/.test(source), '容器类名不许是 knit-doc* 前缀（会被 byClass 误命中）')
+  assert.ok(!/\.knit-list\.cols-/.test(css),
+    '列数类只许加在文档容器上 —— .knit-list 是唯一滚动容器，媒体档与「全部」都在它里面')
+
+  // ⚠️ **多列不砍数据**（用户第二次修正的核心）：摘要只有 `.no-sum` 那条兜底规则能藏，
+  // 路径**任何情况下都不许藏**（第一版的错就是「多列只剩标题 + 时间」）。
+  assert.match(css, /\.knit-multicol\.no-sum \.knit-sum\{display:none\}/,
+    '摘要只由 no-sum 兜底规则让位')
+  assert.ok(!/\.knit-multicol\.cols-[234] \.knit-sum[^{]*\{[^}]*display:none/.test(css),
+    '不许再按列数直接藏摘要（那正是「多列只剩标题+时间」那个被否掉的写法）')
+  assert.ok(!/\.knit-multicol[^{]*\.knit-meta[^{]*\{[^}]*display:none/.test(css),
+    '路径在多列时也必须保留')
+  // 标题折两行、路径折两行
+  assert.match(css, /-webkit-line-clamp:2/)
+  assert.match(css, /\.knit-multicol\.cols-2 \.knit-meta\{[^}]*-webkit-line-clamp:2/)
+
+  // ⚠️ 布局函数不许吃条目数（与 mediaLayoutFor 同一条规矩）。先剥注释再扫真实调用。
+  assert.match(source, /function docLayoutFor\(width\) \{/, 'docLayoutFor 只接受 width')
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  for (const m of code.matchAll(/docLayoutFor\(/g)) {
+    let depth = 1
+    let topLevelComma = false
+    for (let i = m.index + m[0].length; i < code.length && depth > 0; i += 1) {
+      if (code[i] === '(') depth += 1
+      else if (code[i] === ')') depth -= 1
+      else if (code[i] === ',' && depth === 1) topLevelComma = true
+    }
+    assert.ok(!topLevelComma, 'docLayoutFor 的调用处不该传第二个参数')
+  }
+})
+
+test('样式：媒体网格靠 auto-fill 连续加列，格子基准与 JS 常量同源', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
 
   assert.ok(!source.includes('grid-template-columns:1fr 1fr'), '不能再写死两列')
-  assert.ok(!source.includes('minmax(160px,1fr)'), '160px 下限已按用户要求改成 64px')
-  // 列数由 JS 算好传进来；前面的 repeat(3,1fr) 是旧内核的兜底，保证「最少 3 列」
-  assert.match(source, /grid-template-columns:repeat\(3,1fr\);\s*\n\s*grid-template-columns:repeat\(var\(--knit-media-cols/)
-  assert.match(source, /height:var\(--knit-media-cell/)
-  assert.match(source, /const MEDIA_MIN_PX = 64/)
+  assert.ok(!source.includes('minmax(160px,1fr)'), '160px 下限已按用户要求改掉')
+  // 列数由 CSS 的 auto-fill 自己数（用户点名的、AIGC 资产中心那套机制）
+  assert.ok(!source.includes('--knit-media-cols'), '列数不该由 JS 下发')
+  assert.match(source, /grid-template-columns:repeat\(3,1fr\);/, '旧内核的 3 列兜底要留在前面')
+  // 下限 104px + 1fr：1fr 不能省（否则只有一个媒体时那张图撑满面板宽度），
+  // 下限也不能改成「JS 算出的实际格宽」—— 那样列数会被条目数锁死（见下面那条回归）。
+  assert.match(source,
+    /grid-template-columns:repeat\(auto-fill,minmax\(var\(--knit-media-track,\d+px\),1fr\)\)/,
+    'auto-fill + 基准下限 + 1fr')
+  assert.match(source, /--knit-media-track:\$\{MEDIA_TRACK_PX\}px/, '基准宽直接由 JS 常量插入，不许各写一套')
+  assert.match(source, /const MEDIA_TRACK_PX = 104/)
   assert.match(source, /const MEDIA_GAP_PX = 10/)
   assert.match(source, /const MEDIA_MAX_ITEMS = 8/)
+  // ⚠️ 核心回归（2026-09-20 第三版）：**纵向不许封顶**。
+  // 前两版有 `const MEDIA_ROWS = 2` + 网格上的 `overflow-y:auto` + 行内 maxHeight，
+  // 真机上第三行只露一点点。这条守三件事：常量没了、网格不自己滚、渲染不设 maxHeight。
+  assert.ok(!source.includes('MEDIA_ROWS'), '不再有「一屏两行」这个常量')
+  assert.ok(!/mediaLayout\.maxHeight/.test(source), '渲染处不许再读 maxHeight')
+  // 网格的 CSS 规则里不许出现 overflow-y（只有 .knit-list 该滚）
+  const gridRule = source.match(/\.knit-media-grid\{[^}]*\}/)
+  assert.ok(gridRule, '.knit-media-grid 规则必须在')
+  assert.ok(!gridRule[0].includes('overflow-y'), '媒体网格自己不滚（交给 .knit-list）')
+  assert.ok(!gridRule[0].includes('max-height'), '媒体网格不设高度上限')
+  // ⚠️ 核心回归（2026-09-20 第二版）：`mediaLayoutFor` **不许再接受条目数**。
+  // 第一版是 mediaLayoutFor(width, count) —— count 一进来，格宽就跟着条目数走，
+  // 列数随之被锁死（400→1200px 全是 5 列），用户反馈「它不是真的响应式」。
+  assert.match(source, /function mediaLayoutFor\(width\) \{/, '签名里不许再有 count')
+  // ⚠️ 真正的病灶在**调用处**：第一版是 `mediaLayoutFor(可用宽, 条目数)` —— 只要调用时还传
+  //    条目数，格宽就会跟着条目数走、列数随之被锁死。
+  //    只看**真实的调用**（先剥注释），并且要求参数表里没有**顶层**逗号
+  //    （嵌套的 Math.max(0, …) 里有逗号，不算）。
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  for (const m of code.matchAll(/mediaLayoutFor\(/g)) {
+    let depth = 1
+    let topLevelComma = false
+    for (let i = m.index + m[0].length; i < code.length && depth > 0; i += 1) {
+      const ch = code[i]
+      if (ch === '(') depth += 1
+      else if (ch === ')') depth -= 1
+      else if (ch === ',' && depth === 1) topLevelComma = true
+    }
+    assert.ok(!topLevelComma, '调用处不该再传第二个参数（条目数）')
+  }
+  assert.match(source, /height:var\(--knit-media-cell/)
 })
 
 test('样式：交互强调色走 DSH 品牌令牌，源码里不再有硬编码的紫/蓝强调色', async () => {
@@ -1127,25 +1288,38 @@ test('样式：滚动条交给 DSH 的全局样式，只覆盖令牌、不重写
   assert.match(css, /--dsh-scrollbar-thumb-hover:var\(--dsw-alias-scrollbar-hover-l2\)/)
 })
 
-test('样式：预览面板靠 bg-module-platform 分层，头部对齐官方预览', async () => {
+test('样式：预览面板底色恒为纯阅读底色，不靠底色分层；头部对齐官方预览', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
   const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
   const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
 
-  // 浅色主题下 bg-layer-1/2/3 解析出来全是 #fff —— 用 layer-2 分层等于没分
-  assert.match(css, /\.knit-preview\{[^}]*background:var\(--dsw-alias-bg-module-platform/)
+  // 用户 2026-09-20：「下拉出现详情时背景是灰的，这个交互比较差……把它改成整个都是白」
+  // 底色恒为 bg-base（浅 #fff / 深 #151517）—— **分层改由圆角+边界+柔影承担**。
+  assert.match(css, /\.knit-preview\{[^}]*background:var\(--dsw-alias-bg-base/,
+    '预览面板底色走 bg-base（浅色纯白 / 暗色最深的阅读底色）')
+  // ⚠️ 不许写死 #fff：暗色主题下会白得刺眼。fallback 才是 #fff。
+  assert.ok(!/\.knit-preview\{[^}]*background:#fff/.test(css),
+    '底色不能硬编码 #fff —— 要走 bg-base 让暗色主题跟着走')
+  assert.ok(!css.includes('.knit-preview.reading'),
+    '「滚动才变白」那套（.knit-preview.reading）已删，不要再加回来')
+  assert.ok(!/\.knit-preview\{[^}]*transition:background/.test(css),
+    '没有背景过渡了，transition 也该去掉')
+  // 也仍然不许用 bg-layer-2 分层（浅色主题下 layer-1/2/3 都是 #fff，等于没分）
   assert.ok(!/\.knit-preview\{[^}]*bg-layer-2/.test(css),
     '别用 bg-layer-2 分层：浅色主题下它和 bg-layer-1 都是 #fff')
+  // 分层三件套仍在：上边界 + 圆角 + 柔影
+  assert.match(css, /\.knit-preview\{[^}]*border-top-left-radius:12px/)
+  assert.match(css, /\.knit-preview\{[^}]*box-shadow:0 -8px 24px/)
   // 头部对齐官方 .dhJKeW_header：38px + border-l3
   assert.match(css, /\.knit-preview-head\{[^}]*height:38px/)
   assert.match(css, /\.knit-preview-head\{[^}]*border-bottom:\.5px solid var\(--dsw-alias-border-l3/)
   // 全屏时要去掉圆角与柔影（那时没有「浮在列表上」的隐喻）
   assert.match(css, /\.knit-root\.fullscreen \.knit-preview\{[^}]*border-radius:0/)
-  // 阅读态：过渡到纯阅读底色，而不是继续用分层的灰
-  assert.match(css, /\.knit-preview\.reading\{background:var\(--dsw-alias-bg-base/)
-  assert.match(css, /\.knit-preview\{[^}]*transition:background-color/)
+  // ⚠️ 旧行为已废：不再有 .knit-preview.reading，也没有背景过渡
+  assert.ok(!css.includes('.knit-preview.reading'))
+  assert.ok(!css.includes('transition:background-color'))
 })
 
 test('媒体：点类型按钮切到「图片与视频」会带 kind=media 重拉并记住偏好', async () => {
