@@ -28,13 +28,18 @@
  * # 录屏文件（QuickTime / ⌘⇧5 录出来的 .mov 直接可用）
  * node tools/make-demo-gif.mjs --in ~/Desktop/knit-reorder.mov --start 2 --end 10
  *
+ * # 整屏录的，只要「对话 + 右侧栏」那一块：--crop x,y,w,h（源像素，先裁后缩）
+ * node tools/make-demo-gif.mjs --in ~/Desktop/knit-reorder.mov --crop 560,0,2240,1520 --width 1100
+ *
  * # 或者一帧帧的 PNG 目录（文件名要能按字典序排对）
  * node tools/make-demo-gif.mjs --in /tmp/knit-frames --fps 10
  * ```
  *
  * 录之前先看 `发布文档规划` §4.3 的拍摄清单（只截「对话 + 右侧栏」、深色主题、
  * 循环能无缝衔接）。**最关键的一条**：先在对话里聊 A 话题（列表顶上是 A 的文档），
- * 再发一句 B 话题，让列表在 1 秒内重排 —— 那一秒才是这个 GIF 的全部意义。
+ * 再发一句 B 话题，让列表重排 —— 那一下才是这个 GIF 的全部意义。
+ * ⚠️ 重排**不是瞬时的**：面板每 5 秒轮询一次，所以它落在发消息后的 0–5 秒之间，
+ * 图注按这个写，别写成「1 秒内」。
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -63,8 +68,27 @@ const start = arg('start')
 const end = arg('end')
 const dryRun = Boolean(arg('dry-run', false))
 
+/**
+ * `--crop x,y,w,h`（**源画面**像素）。
+ *
+ * 为什么需要它：真机录屏是整屏（或至少带着左栏），而 README 只想要「对话 + 右侧栏」。
+ * 裁切必须在这里做，不能事后手工跑一遍 ffmpeg —— 两个原因：
+ *   ① `crop` 要排在 `scale` **前面**（先裁后缩）；反过来就是按已缩放的坐标去裁，会切错
+ *   ② 画布高度是按输入比例算的，不先把裁切算进去，输出会带着一圈留边
+ */
+const cropArg = arg('crop')
+let crop = null
+if (cropArg && cropArg !== true) {
+  const parts = String(cropArg).split(/[,x:]/).map((s) => Number(s.trim()))
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n) || n < 0) || parts[2] <= 0 || parts[3] <= 0) {
+    console.error(`❌ --crop 要四个数：x,y,w,h（宽高必须 > 0），收到「${cropArg}」`)
+    process.exit(1)
+  }
+  crop = { x: parts[0], y: parts[1], w: parts[2], h: parts[3] }
+}
+
 if (!inPath || inPath === true) {
-  console.error('❌ 缺 --in\n\n用法：\n  node tools/make-demo-gif.mjs --in <录屏文件.mov|帧目录> [--out docs/demo-reorder.gif] [--fps 12] [--width 880] [--start 2] [--end 10]\n')
+  console.error('❌ 缺 --in\n\n用法：\n  node tools/make-demo-gif.mjs --in <录屏文件.mov|帧目录> [--out docs/demo-reorder.gif] [--fps 12] [--width 880] [--crop 560,0,2240,1520] [--start 2] [--end 10]\n')
   process.exit(1)
 }
 if (!Number.isFinite(fps) || fps <= 0 || fps > 30) {
@@ -137,8 +161,15 @@ if (!srcSize || !srcSize.w || !srcSize.h) {
   process.exit(1)
 }
 // 画布高度按「首帧比例 × 目标宽」算，并压成偶数（部分编码器要求）
-const H = Math.max(2, 2 * Math.round((width * srcSize.h) / srcSize.w / 2))
-console.log(`  画布：${width}×${H}（源 ${srcSize.w}×${srcSize.h}；不同尺寸的帧会被居中留边，不会丢帧）`)
+// 有 --crop 时按**裁完**的比例算，否则输出会多出一圈留边
+const effW = crop ? crop.w : srcSize.w
+const effH = crop ? crop.h : srcSize.h
+if (crop && (crop.x + crop.w > srcSize.w || crop.y + crop.h > srcSize.h)) {
+  console.error(`❌ --crop 超出源画面：源 ${srcSize.w}×${srcSize.h}，却要裁 ${crop.x},${crop.y} 起 ${crop.w}×${crop.h}`)
+  process.exit(1)
+}
+const H = Math.max(2, 2 * Math.round((width * effH) / effW / 2))
+console.log(`  画布：${width}×${H}（源 ${srcSize.w}×${srcSize.h}${crop ? ` → 裁到 ${crop.x},${crop.y} ${crop.w}×${crop.h}` : ''}；不同尺寸的帧会被居中留边，不会丢帧）`)
 
 /**
  * 单命令调色板法：`split` 出一路生成调色板，再拿它量化另一路。
@@ -150,6 +181,7 @@ console.log(`  画布：${width}×${H}（源 ${srcSize.w}×${srcSize.h}；不同
  * （2026-09-21 实测：3 帧不同高宽比的输入 → 静默产出 1 帧）。
  */
 const FILTER = [
+  ...(crop ? [`crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}`] : []),
   `fps=${fps}`,
   `scale=${width}:${H}:force_original_aspect_ratio=decrease:flags=lanczos`,
   `pad=${width}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x101010`,
@@ -180,7 +212,7 @@ if (isDir) {
       const dst = join(tempDir, `n${String(i + 1).padStart(4, '0')}.png`)
       const r = spawnSync('ffmpeg', [
         '-y', '-hide_banner', '-loglevel', 'error', '-i', join(src, f),
-        '-vf', `scale=${width}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${width}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x101010`,
+        '-vf', `${crop ? `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},` : ''}scale=${width}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${width}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x101010`,
         '-frames:v', '1', dst,
       ], { stdio: ['ignore', 'inherit', 'inherit'] })
       if (r.status !== 0) {
@@ -201,7 +233,7 @@ else {
 args.push('-vf', FILTER, '-loop', '0', outPath)
 
 console.log(`\n  输出：${outPath}`)
-console.log(`  参数：${fps} fps · 宽 ${width}px · ${isDir ? '帧序列' : '视频'}${start ? ` · 从 ${start}s` : ''}${end ? ` · 到 ${end}s` : ''}`)
+console.log(`  参数：${fps} fps · 宽 ${width}px · ${isDir ? '帧序列' : '视频'}${crop ? ` · 裁 ${crop.w}×${crop.h}+${crop.x}+${crop.y}` : ''}${start ? ` · 从 ${start}s` : ''}${end ? ` · 到 ${end}s` : ''}`)
 console.log(`  滤镜：palettegen(stats_mode=diff) + paletteuse(bayer)\n`)
 
 if (dryRun) {
@@ -272,7 +304,9 @@ if (inRepo) {
        ![排序跟着对话走](${raw})
     2. README.en.md   —— 同一位置的英文版
     3. docs/README.md —— 把 demo-reorder.gif 那行的状态从 ⬜ 改成 ✅
-  图注记得写清「图里在发生什么」（对话切到 B → 列表 1 秒内重排），别只写「演示」。
+  图注记得写清「图里在发生什么」，别只写「演示」。**而且别写「1 秒内重排」**：
+  面板是**每 5 秒轮询一次**（POLL_MS，见 src/client/client.js），所以重排发生在发消息之后的
+  **0–5 秒**内，快的时候看着像瞬时，慢的时候要等一轮。写「下一次轮询就重排」才是准的。
   补图**不用发版**：README 走的是绝对 raw URL + HEAD。`)
 } else {
   console.log(`  ⚠️ 输出不在仓库里（${outPath}）—— 正式产物请输出到 docs/ 下，例如：

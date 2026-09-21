@@ -7,12 +7,20 @@
 
 ![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
-*Screenshot from a real machine, not a mock-up: a workspace with 34 documents — the list, an inline
+*Screenshot from a real machine, not a mock-up: a workspace with 36 documents — the list, an inline
 preview, and the references bar.*
 *The references bar is new in v0.12: expand it to see which documents reference this one, and click
 one to jump straight there.*
 *The top line follows whatever you're talking about; when there isn't enough conversation yet it
 falls back to newest-first and states its basis.*
+
+![Order follows the conversation: send a message and the sidebar re-ranks the document list by it](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
+
+*Order follows the conversation — same workspace, same session: ask "how is BM25 weighted for the
+ranking?" and the sorting docs move to the top; then ask "how do I check plugin-market listings and
+download counts?" and the market-research docs take over.*
+*⚠️ The panel polls **every 5 seconds**, so the re-rank lands **0–5 s** after the message rather than
+instantly, and the GIF runs faster than real time.*
 
 Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network
 
