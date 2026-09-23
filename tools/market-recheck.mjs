@@ -41,16 +41,44 @@ const NPM_VERSION_SPLIT = 'https://api.npmjs.org/versions/dsh-knit/last-week'
 const PKG = 'dsh-knit'
 const PROBE = 'react' // 空洞探针
 
-/** 上一次人工测得的基线（2026-09-20），用来出对照表 */
+/** 上一次人工测得的基线（2026-09-23），用来出对照表 */
 const BASELINE = {
-  measuredAt: '2026-09-20',
-  version: '0.12.1',
+  measuredAt: '2026-09-23',
+  version: '0.13.0',
   stars: 2,
-  downloads: 396,
-  downloadsWindow: '08-21→09-19',
+  downloads: 1115,
+  downloadsWindow: '08-23→09-21（30 天）',
   install: 'dsh plugin --profile web add dsh-knit',
-  screenshots: 1,
+  screenshots: 3,
 }
+
+/** 取包元数据（为了拿 dist-tags.latest —— 形状判读要用它） */
+const NPM_PKG_META = `https://registry.npmjs.org/${PKG}`
+
+/**
+ * ── 「形状判读」的两条门槛（2026-09-23 建立，**取代旧的「连续多日非零」**）──
+ *
+ * **旧判据分不出真人和爬虫** —— 2026-09-21 那次它打出「最长连续非零 2 天」，
+ * 读起来像「有点人气」，而真相是自动化枚举。
+ *
+ * 实测对照（同一个 30 天窗口）：
+ *
+ *   真有人在用的包                        被自动化枚举的包
+ *   latest 占比 **60–80%**               latest 占比 **11–15%**（各版本均分）
+ *   旧版本**塌到 1–2%**                  旧版本**和最新版一样多**
+ *   日覆盖 **23–24 / 24**                日覆盖 **2–9 / 24**
+ *
+ * 决定性证据（就是 dsh-knit 自己）：
+ *   `0.5.0`  当了 latest **0.47 小时**（28 分） → 155 次
+ *   `0.13.0` 当了 latest **59.6 小时**          → 161 次
+ *   **曝光相差 127 倍、下载只差 1.04 倍** ⇒ 不可能是人（人只装 `latest`）。
+ *
+ * ⚠️ **不要拿「每版本下载量」当判据** —— 实测分不出来：
+ * `dsh-workbench` 每版本只有 117 次（低于所谓地板），但它 `latest` 占 64.9%、
+ * 日覆盖 24/24，是真有人在用的包。**只有「形状」能分。**
+ */
+const FLOOR_LATEST_SHARE = 50 // % —— latest 占比低于此值 = 疑似枚举
+const FLOOR_COVERAGE_DAYS = 10 // 非空洞且有量的天数低于此值 = 样本不足
 
 const days = (() => {
   const i = process.argv.indexOf('--days')
@@ -163,6 +191,10 @@ async function main() {
   }
 
   /* ── 三、npm 下载量（避开空洞） ───────────────────── */
+  /** 形状判读的两个读数，算完给 §五 出总结论 */
+  let coverageDays = null
+  let latestShare = null
+
   head('三、npm 下载量（逐日，已对 react 探针标出空洞）')
   try {
     const [mine, probe] = await Promise.all([
@@ -183,52 +215,96 @@ async function main() {
     kv('其中非零', realNonZero.length)
     kv('非零合计', realNonZero.reduce((s, r) => s + r.n, 0))
 
-    // 「连续多日非零」= 真实采用的判据（不是单日数字）
+    // ★ 判据一：**日覆盖度** —— 非空洞且有量的天数。
+    //   真包 23–24/24；发布日一次小尖峰只有 2–9/24。
+    coverageDays = realNonZero.length
+    kv('★ 日覆盖度', `${coverageDays} / ${real.length} 个可测日`)
+
+    // 仅作参考，**不再是判据**（它分不出真人和爬虫）
     let best = 0
     let cur = 0
     for (const r of rows) {
       if (!r.hole && r.n > 0) { cur += 1; best = Math.max(best, cur) } else { cur = 0 }
     }
-    kv('最长连续非零', `${best} 天`)
+    kv('（参考）最长连续非零', `${best} 天 —— ⚠️ 这不是判据，见 §五`)
     line()
     if (real.length < 5) {
-      line('  ⚠️ 已统计的天数太少 —— **还不能判断**，不要给确定性结论（历史误读见发布清单-v0.9.0 §3.2）')
-    } else if (best >= 3) {
-      line(`  ✅ 出现 ${best} 天连续非零 —— 这是「真人在用」的信号（但仍要看下面版本分布）`)
+      line('  ⚠️ 已统计的天数太少 —— 还不能判断，不要给确定性结论（历史误读见发布清单-v0.9.0 §3.2）')
+    } else if (coverageDays >= FLOOR_COVERAGE_DAYS) {
+      line(`  ✅ 日覆盖 ${coverageDays}/${real.length} —— 过了覆盖门槛（但还要看 §五 的 latest 占比）`)
     } else {
-      line('  ⬜ 没有连续多日非零 —— 目前更像发布当天的尖峰或零散自动化流量')
+      line(`  ⬜ 日覆盖只有 ${coverageDays}/${real.length} —— 更像发布当天的小尖峰，不是持续使用`)
     }
   } catch (e) {
     line(`  ❌ 取下载曲线失败：${e.message}`)
   }
 
-  /* ── 四、按版本拆分（自动化流量最灵的判据） ───────── */
-  head('四、按版本拆分（last-week）—— 自动化流量判据')
+  /* ── 四、按版本拆分 —— ★ 判据二：latest 占比 ─────── */
+  head('四、按版本拆分（last-week）—— ★ 判据二：latest 占比')
   try {
-    const split = await getJson(NPM_VERSION_SPLIT)
+    const [split, meta] = await Promise.all([
+      getJson(NPM_VERSION_SPLIT),
+      getJson(NPM_PKG_META).catch(() => null),
+    ])
     const dl = split.downloads || {}
     const entries = Object.entries(dl).sort((a, b) => b[1] - a[1])
     if (entries.length === 0) {
       line('  ⬜ 没有数据')
     } else {
       const total = entries.reduce((s, [, n]) => s + n, 0)
-      for (const [v, n] of entries) line(`  ${v.padEnd(12)}${String(n).padStart(8)}`)
+      const latest = (meta && meta['dist-tags'] && meta['dist-tags'].latest) || null
+      for (const [v, n] of entries) {
+        const pct = total > 0 ? (n / total) * 100 : 0
+        const bar = '█'.repeat(Math.max(1, Math.round(pct / 2.5)))
+        line(`  ${v.padEnd(12)}${String(n).padStart(8)}  ${pct.toFixed(1).padStart(5)}%  ${bar}${v === latest ? ' ← latest' : ''}`)
+      }
       kv('合计', total)
-      line()
-      const old = entries.filter(([v]) => v !== (entries[0][0]))
-      if (old.length >= 2) {
-        line(`  ⚠️ 有 ${old.length} 个非首位版本仍在被下载 —— 更像**有工具在枚举所有版本**，`)
-        line('     而不是真人在装某一个。判据是「连续多日非零」+「版本分布是否发散」，两者一起看。')
+
+      // ★ 判据二：**latest 占比**。人只装 latest（真包 60–80%）；
+      //   枚举会把每个版本各取一遍 ⇒ 各版本均分 11–15%。
+      if (latest && dl[latest] !== undefined && total > 0) {
+        latestShare = (dl[latest] / total) * 100
+        kv('★ latest 占比', `${latestShare.toFixed(1)}%（${latest}）`)
       } else {
-        line('  ℹ️ 版本分布集中 —— 没有明显的版本枚举迹象（但样本仍可能太小）')
+        kv('★ latest 占比', `⚠️ 拿不到 dist-tags.latest（${latest || 'null'}），本项跳过`)
+      }
+
+      line()
+      const flat = entries
+        .filter(([v]) => v !== latest)
+        .filter(([, n]) => total > 0 && (n / total) * 100 >= 5)
+      if (flat.length >= 3) {
+        line(`  ⚠️ 除 latest 外还有 ${flat.length} 个版本各占 ≥5%（近乎均分）——`)
+        line('     **这是版本枚举的指纹**：人不会去装一个被取代多次的旧版本。')
+      } else {
+        line('  ✅ 版本分布集中、旧版本已塌下去 —— 没有被枚举的迹象。')
       }
     }
   } catch (e) {
     line(`  ❌ 取版本拆分失败：${e.message}`)
   }
 
+  /* ── 五、形状判读（总结论） ───────────────────────── */
+  head('五、形状判读 —— 一句话结论')
   line()
-  line('（判读口径与历史误读：03_发布/发布清单-v0.9.0.md §三 / §五；本脚本取代了那个坏掉的每日定时任务）')
+  kv('日覆盖度', coverageDays === null ? '取数失败' : `${coverageDays} 天（门槛 ≥ ${FLOOR_COVERAGE_DAYS}）`)
+  kv('latest 占比', latestShare === null ? '取数失败' : `${latestShare.toFixed(1)}%（门槛 ≥ ${FLOOR_LATEST_SHARE}%）`)
+  line()
+  if (coverageDays === null || latestShare === null) {
+    line('  ⚠️ 有一项取数失败 —— 不给结论，不要猜。')
+  } else if (latestShare >= FLOOR_LATEST_SHARE) {
+    line('  ✅ **latest 占比过了门槛 —— 开始有真人 npm install 了。**')
+    line('     这是「有个真人装了」的唯一硬信号；到这步才该看有没有人开口。')
+  } else if (coverageDays >= FLOOR_COVERAGE_DAYS) {
+    line('  ⚠️ 有量，但 latest 占比仍低 —— 量在、形状不像人。**继续按枚举对待。**')
+  } else {
+    line('  ⬜ **两条都没过：这个下载量是自动化枚举，不是用户。**')
+    line('     不要把总下载量当采用度，也不要据此推论需求。')
+    line('     ⇒ 下一步不是加功能，是「**触达**」（去官方 Discord / Discussions 说一次）。')
+  }
+  line()
+  line('  对照：真包 latest 60–80% / 日覆盖 23–24 天；枚举 11–15% / 2–9 天。')
+  line('  （口径与实测见 00_调研与规划/功能机会汇总-2026-09-23.md §一）')
 }
 
 main().catch((e) => {
