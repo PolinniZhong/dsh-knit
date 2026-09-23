@@ -180,6 +180,27 @@ Then **restart DSH** and hard-refresh the browser (`Cmd + Shift + R`).
 **Optional**: if `dsh-better-sidebar` is installed, the panel also registers
 as one of its tabs. Each host is an independent optional dependency; missing one doesn't affect the other.
 
+**Upgrading**: same command as installing, and the same restart + hard-refresh afterwards.
+
+---
+
+## Feedback
+
+**Right now this project is not about adding features — it's about finding out whether
+"rank project docs by the current conversation" is something anyone actually uses.**
+So the most valuable thing you can send is not "could you add X" but **how you work around
+this today** — including "I installed it and never opened it", which is more useful than a
+feature request.
+
+- 💬 [Tell us when you actually open it](https://github.com/PolinniZhong/dsh-knit/issues/new?template=feature.yml) — two fields, thirty seconds
+- 🐞 [Won't install / panel won't open / ranking looks wrong](https://github.com/PolinniZhong/dsh-knit/issues/new?template=bug.yml)
+- 📖 Check [known limitations](#known-limitations) first — short conversations degrade to time order and Chinese uses n-gram approximation; those are deliberate trade-offs, not bugs
+
+> A single issue is treated as a real signal. So far this plugin has **no trace of a single
+> real user** — the npm download count is automated version enumeration, not people
+> (only 14% of it is `latest`, and a human install only ever pulls `latest`). One human reply
+> changes what gets built next.
+
 ---
 
 ## Features
@@ -277,7 +298,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 215 tests, zero dependencies, no npm install needed
+npm test          # 285 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -297,7 +318,7 @@ knit/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 215 tests
+└── test/                 # 285 tests
 ```
 
 Details and trade-offs live in the source comments; see [CONTRIBUTING.md](CONTRIBUTING.md)

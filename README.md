@@ -131,6 +131,24 @@ dsh plugin --profile web add dsh-knit
 **可选**：装了 `dsh-better-sidebar` 的话，面板也会注册成它的一个 tab；
 没装不受影响，两边是各自独立的可选依赖。
 
+**升级**：命令和首次安装是同一条，装完同样要**重启 DSH** + 硬刷新。
+
+---
+
+## 反馈
+
+**这个项目当前的重心不是加功能，是搞清楚「按对话给文档排序」这件事到底有没有人在用。**
+所以最有价值的一句话不是「能不能加个 XX」，而是**你现在是怎么绕过它的** ——
+哪怕结论是「装了，但一周没打开过」，也请直说，那比一个功能建议有用得多。
+
+- 💬 [说说你在什么场景下会打开它](https://github.com/PolinniZhong/dsh-knit/issues/new?template=feature.yml) —— 两步、三十秒，不必客气
+- 🐞 [装不上 / 面板打不开 / 排得不对](https://github.com/PolinniZhong/dsh-knit/issues/new?template=bug.yml)
+- 📖 提之前先看一眼[已知限制](#已知限制) —— 短对话退化、中文用 n-gram 近似，这几条是已知的取舍，不是 bug
+
+> 一条 issue 会被当成真实信号处理。这个插件到现在**一个真实用户的痕迹都没有**
+> （npm 那个下载量是自动化版本枚举、不是人 —— `latest` 占比只有 14%，而真人只会装 `latest`）
+> —— 一条有人味儿的反馈能直接改变接下来做什么。
+
 ---
 
 ## 功能
@@ -250,7 +268,7 @@ Knit 一装上就有整个项目的历史文档可用。
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 215 项，零依赖，不需要先 npm install
+npm test          # 285 项，零依赖，不需要先 npm install
 ```
 
 **改动生效方式**：宿主半边（`src/host/`）改了**必须重启 DSH**（实测不热加载）；
@@ -271,7 +289,7 @@ knit/
 │   ├── host/relevance.js # 相关性引擎：BM25 + 关键词抽取（纯函数）
 │   ├── host/tool.js      # agent 文档工具 knit_docs（手写 ToolDefinition）
 │   └── client/client.js  # 双宿主注册 + 面板 UI
-└── test/                 # 215 项测试
+└── test/                 # 285 项测试
     └── eval/             # 离线质量评测：语料 + 用例 + 冻结的 v0.5.2 基线
 ```
 
