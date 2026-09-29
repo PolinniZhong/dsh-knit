@@ -7,18 +7,22 @@
 
 ![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
-*Screenshot from a real machine, not a mock-up: a workspace with 36 documents — the list, an inline
+*Screenshot from a real machine, not a mock-up: a workspace with 51 documents — the list, an inline
 preview, and the references bar.*
 *The references bar is new in v0.12: expand it to see which documents reference this one, and click
 one to jump straight there.*
 *The top line follows whatever you're talking about; when there isn't enough conversation yet it
 falls back to newest-first and states its basis.*
+*Since v0.14 the list is always one column: the rank number sits in its own column on the far left
+(vertically centred on the title's first line), then Primary dot + title + relative time (time on the
+right), then the summary. **The path lives in the preview header's breadcrumb only** — rows no longer repeat it.*
 
 ![Order follows the conversation: send a message and the sidebar re-ranks the document list by it](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
 
-*Order follows the conversation — same workspace, same session: ask "how is BM25 weighted for the
-ranking?" and the sorting docs move to the top; then ask "how do I check plugin-market listings and
-download counts?" and the market-research docs take over.*
+*Order follows the conversation — same workspace, in a freshly opened session: before you have said
+anything, the top line says so ("not enough conversation yet — sorted by time") and the list runs
+newest-first; ask "how is BM25 weighted for the ranking?" and the ranking docs take over, with the
+rank numbers and the primary / supporting / related tiers appearing alongside them.*
 *⚠️ The panel polls **every 5 seconds**, so the re-rank lands **0–5 s** after the message rather than
 instantly, and the GIF runs faster than real time.*
 
@@ -321,24 +325,24 @@ feature request.
 
 ### The other two views
 
-![Screenshot of the Images & video tab: a square thumbnail grid, six columns at this panel width, with a video thumbnail carrying a play glyph and a duration badge](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
+![Screenshot of the Images & video tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
 
 *Images & video: square thumbnails, with the **column count following the panel width continuously** —
-six columns at this width, cells about 112px. Videos show their first frame as a poster with a play
-glyph and a duration badge. These are the workspace's real image and SVG files; this particular
-workspace happens to hold several screenshots and two icon files.*
+six columns at this width, cells about 112px. These are the workspace's real image and SVG files; this
+particular workspace happens to hold several screenshots and two single-colour SVG icons (the two solid
+black squares are those icons). Videos get their first frame as a poster with a play glyph and a
+duration badge — this workspace simply has no video, so none shows here.*
 
-![Screenshot of the All tab: documents above, media with a count only below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and no media section](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
-*All: documents on top (max 4, with a "View all →" link when truncated) and images & video below
-(**never truncated**, count only). All four fields — title, time, summary, path — were present.*
+*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 40").*
 
-⚠️ **This screenshot is from v0.13**, when documents could still lay out in two columns *and* rows still
-carried the path. **Since v0.14 the list is always one column** (the number now sits in its own column
-on the far left, with Primary dot + relative time, then the title, stacked to its right), and **the path
-is no longer shown in the list** (the preview header's breadcrumb always shows the full path, so the
-duplicate was dropped).
-The screenshot has not been retaken yet.
+⚠️ **There is no media section in this screenshot, and that is not a layout accident** — for the All
+view the host fetches a **40-item window**. This workspace has 51 documents plus 8 media files, and the
+media rank 50th–58th by relevance, so they fall outside the window; the client's
+`visibleDocs.filter(isMedia)` is then empty and the media section is not rendered at all. **Any
+workspace with 40 or more documents behaves this way** — a known defect, with reproduction and the fix
+recorded in [`docs/README.md`](docs/README.md).*
 
 ---
 

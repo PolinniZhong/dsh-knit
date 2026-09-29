@@ -6,21 +6,32 @@
  * 第 1 屏最该有、却一直缺的，是「**排序跟着对话走**」的动图 —— 静态图只能拍到结果，
  * 拍不到「过程」，而那条才是 Knit 相对竞品的唯一差异点（`发布文档规划` §4.4）。
  *
- * **录屏这一步必须由人做**：本机这个执行环境**没有**任何截屏能力 ——
- * 2026-09-21 逐条探过，四条路全堵：
+ * ~~**录屏这一步必须由人做**~~ —— **2026-09-29 更正：抓帧可以由 agent 做完**。
+ * 本机**桌面**截屏确实四条路全堵（2026-09-21 逐条探过）：
  *
  * | 路 | 结果 |
  * |---|---|
  * | `screencapture` | `rect … does not intersect any displays`（没有屏幕录制权限 / 无显示访问） |
  * | AppleScript（System Events） | `hiservices-xpcservice Connection Invalid`（发不出 Apple Event） |
- * | Playwright 自带 Chromium | `MachPortRendezvousServer … Permission denied (1100)`，起不来 |
+ * | Playwright 的 **launch API** | `MachPortRendezvousServer … Permission denied (1100)`，起不来 |
  * | `ffmpeg -f avfoundation -list_devices` | 视频设备列表**是空的** |
  *
- * 而且**不许拿 HTML 原型充数**（`发布文档规划` §4 的硬规矩）——
- * GIF 里必须是真实 GUI。
+ * 但**同一个 Playwright 装下来的 `chrome-headless-shell` 二进制，直接起是通的** ——
+ * 它连的是已经跑着的那个 GUI（`http://127.0.0.1:3080`），走 CDP 就能定视口、打字、
+ * 点按钮、逐帧抓：
  *
- * 所以分工是：**人录 2 分钟 → 这个脚本把剩下全做完**（裁切、抽帧、调色板优化、
- * 控制体积、打印要粘进 README 的那一行）。
+ * ```sh
+ * chrome-headless-shell --headless --no-sandbox --single-process --no-zygote --disable-gpu \
+ *   --remote-debugging-port=9333 --lang=zh-CN --user-data-dir=/tmp/knit-capture-profile about:blank
+ * ```
+ *
+ * 三个坑：① **必须带 `--lang=zh-CN`**（`Emulation.setLocaleOverride` 改不动
+ * `navigator.language`，UI 会是英文）；② 抓帧用 `Page.captureScreenshot` + `clip{scale}`，
+ * 取景**要把 composer 一起拍进去**，否则打字那几秒全是静止画面（09-29 第一次录就栽在这）；
+ * ③ 拍到的仍然是**真实 GUI**，没有拿 HTML 原型充数（`发布文档规划` §4 的硬规矩）。
+ *
+ * 所以分工是：**人只要想清楚拍什么，抓帧可以交给 agent；这个脚本把剩下全做完**
+ * （裁切、抽帧、调色板优化、控制体积、打印要粘进 README 的那一行）。
  *
  * ## 用法
  *
