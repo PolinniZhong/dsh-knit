@@ -508,11 +508,16 @@ export function rankByRelevance(docs, keywords, now) {
   const lens = { title: 0, summary: 0, body: 0 }
   const tfList = []
 
+  /** 每篇文档「哪些词命中了、命中在哪些字段」—— 供 Context Assembly 定性用，不参与 BM25。 */
+  const termHits = []
+
   for (const doc of docs) {
     const hay = doc.haystack || { title: '', summary: '', body: '' }
     const tf = { title: new Map(), summary: new Map(), body: new Map() }
     const len = { title: 0, summary: 0, body: 0 }
     const seen = new Set()
+    /** @type {Map<string, {title:boolean, summary:boolean, body:boolean, bodyTf:number}>} */
+    const fields = new Map()
 
     for (const field of FIELDS) {
       const text = hay[field] || ''
@@ -524,6 +529,17 @@ export function rankByRelevance(docs, keywords, now) {
         if (hits === 0) continue
         tf[field].set(term, hits)
         seen.add(term)
+        // 字段命中位图 + 正文字频。位图是**定性**的（命中在标题还是正文），
+        // bodyTf 用来区分「正文里真的在展开讲」与「正文里只提了一句」——
+        // v0.14 的 Context Assembly 靠它把「什么话题都提一句」的归档长文挡在
+        // Supporting 之外（见 `context.js` 的 `isDocHit` 说明）。
+        let row = fields.get(term)
+        if (row === undefined) {
+          row = { title: false, summary: false, body: false, bodyTf: 0 }
+          fields.set(term, row)
+        }
+        row[field] = true
+        if (field === 'body') row.bodyTf = hits
       }
     }
 
@@ -531,6 +547,7 @@ export function rankByRelevance(docs, keywords, now) {
     // 同一篇里两个字段都命中不能算两次。
     for (const term of seen) df.set(term, (df.get(term) || 0) + 1)
     tfList.push({ tf, len })
+    termHits.push(fields)
   }
 
   const avgdl = {}
@@ -582,13 +599,34 @@ export function rankByRelevance(docs, keywords, now) {
 
   const maxRaw = Math.max(...raws, 0)
 
-  const scored = docs.map((doc, index) => ({
-    ...doc,
-    raw: raws[index],
-    score: maxRaw > 0 ? Math.round((raws[index] / maxRaw) * 100) : 0,
-  }))
+  const scored = docs.map((doc, index) => {
+    const fields = termHits[index]
+    // 命中词按查询权重降序 —— 与 `matched` 同一口径（权重降序，其次按词的字典序稳定）。
+    const matchedTerms = keywords
+      .filter((k) => fields.has(k.term))
+      .sort((a, b) => b.weight - a.weight || a.term.localeCompare(b.term))
+      .map((k) => ({
+        term: k.term,
+        weight: k.weight,
+        fields: fields.get(k.term),
+      }))
+    return {
+      ...doc,
+      raw: raws[index],
+      score: maxRaw > 0 ? Math.round((raws[index] / maxRaw) * 100) : 0,
+      // v0.14：上下文装配的输入。**不是新的打分** —— 只是把第 1 趟已经算过的
+      // 「谁命中了、命中在哪个字段」留下来，避免 context.js 再扫一遍语料。
+      // `publicDoc()` 会把它剥掉，不下发给浏览器。
+      matchedTerms,
+    }
+  })
 
-  scored.sort((a, b) => b.raw - a.raw || b.mtimeMs - a.mtimeMs)
+  // ⚠️ 最后一个兜底键必须是 **doc 自己的**（`rel`），不能是「它在输入里的下标」——
+  // 后者只在同一份输入的排列下稳定，换个扫描顺序（`collectDocs` 按 mtime 倒序给出）
+  // 就会换序。v0.14 的 Context Pack 承诺「相同输入产出完全相同顺序」，
+  // 那要求排序与输入排列无关。
+  scored.sort((a, b) => b.raw - a.raw || b.mtimeMs - a.mtimeMs
+    || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
 
   // 语料里真实存在的词，按查询权重降序。
   const present = keywords

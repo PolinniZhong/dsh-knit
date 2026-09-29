@@ -54,10 +54,43 @@ window.__ModuleLoader__.load({
       'filter.placeholder': '过滤标题 / 摘要 / 路径',
       'filter.aria': '过滤文档',
 
-      'topic.relevance': '按「{topic}」排序',
+      // 关键词**退到 title 里当低层 metadata**（2026-09-29 用户要求弱化）：
+      // 可见的只有「相关性排序」一句，命中了哪几个词只在悬停时给。
+      'topic.relevanceTerms': '按相关度排序 · 命中的关键词：{topic}',
       'topic.relevancePlain': '相关性排序',
       'topic.needsConversation': '对话内容还不足，暂按最新排序',
       'topic.time': '按修改时间倒序',
+
+      // ── v0.14 当前任务上下文（Context Pack）──────────────────────
+      // ⚠️ 文案纪律：不出现「AI / 智能 / 推荐 / 置信度 / 百分比」。
+      // 这一层是确定性规则算出来的，说成 AI 就是在骗用户。也不能放表情符号
+      // （test/i18n.test.mjs 有守卫）。
+      // ⚠️ 这里只剩**分组**与**理由**的文案（2026-09-29）：右栏那个
+      // 「当前任务上下文」面板整个删掉了 —— Context Pack 是**数据层**结构
+      // （Primary / Supporting / Related），不是一张要单独显示的卡片。
+      // 所以 `context.title` / `matched` / `task*` / `evidence*` / `ev*` /
+      // `float` / `dock` / `dragHint` / `gripAria` 这些词条一起删了：
+      // 不留在词典里当死键，否则下一个人会以为那个面板还在。
+      'context.primary': '主要上下文',
+      'context.supporting': '辅助上下文',
+      'context.related': '相关上下文',
+      'context.other': '其他相关文档',
+      // 提示词**极短**（用户要求）：长副标题会把分组标题读成说明文。
+      'context.primaryHint': '先看',
+      'context.supportingHint': '辅助',
+      'context.relatedHint': '背景',
+      'context.why': '为什么在这里',
+      // 理由码 → 文案。宿主只给码（AGENTS.md §4.5），翻译在这里。
+      // ⚠️ 2026-09-29 用户要求把这行压得更克制：原来是「直接命中当前话题：…」，
+      // 读起来像调试信息。现在它是**标签 + 值**，词之间用「 · 」分隔。
+      'why.direct': '直接命中：{term}',
+      'why.titleMatch': '标题命中：{term}',
+      'why.summaryMatch': '摘要命中：{term}',
+      'why.bodyMatch': '正文命中：{term}',
+      'why.bodyMatchPlain': '正文命中',
+      'why.linkTarget': '被主要上下文引用',
+      'why.linkSource': '引用了主要上下文',
+      'why.related': '与当前任务相关',
 
       'row.tooltip': '{path}\n单击就地预览 · 双击在新标签页打开',
       'summary.empty': '（没有正文摘要）',
@@ -163,10 +196,40 @@ window.__ModuleLoader__.load({
       'filter.placeholder': 'Filter title / summary / path',
       'filter.aria': 'Filter documents',
 
-      'topic.relevance': 'Sorted by “{topic}”',
+      // Keywords are **low-level metadata** now (2026-09-29): the visible text is just
+      // "Sorted by relevance" — which terms matched only shows up on hover.
+      'topic.relevanceTerms': 'Sorted by relevance · matched keywords: {topic}',
       'topic.relevancePlain': 'Sorted by relevance',
       'topic.needsConversation': 'Not enough conversation yet — sorted by time',
       'topic.time': 'Sorted by modified time',
+
+      // ── v0.14 current-task context (Context Pack) ──────────────
+      // ⚠️ Never say "AI", "smart", "recommended", "confidence" or show percentages:
+      // this tiering is deterministic local rules, and pretending otherwise is a lie.
+      // ⚠️ Only **group** and **reason** labels live here now (2026-09-29): the
+      // right-hand "Current task context" panel was deleted — a Context Pack is a
+      // **data-layer** structure (Primary / Supporting / Related), not a card.
+      // `context.title` / `matched` / `task*` / `evidence*` / `ev*` / `float` /
+      // `dock` / `dragHint` / `gripAria` went with it, so no dead keys remain.
+      'context.primary': 'Primary',
+      'context.supporting': 'Supporting',
+      'context.related': 'Related',
+      'context.other': 'Other documents',
+      // Hints are deliberately **tiny**: a long subtitle turns a group title into prose.
+      'context.primaryHint': 'read first',
+      'context.supportingHint': 'supporting',
+      'context.relatedHint': 'background',
+      'context.why': 'Why it is here',
+      // Reason codes → copy. The host only ships codes (AGENTS.md §4.5).
+      // ⚠️ Flattened on 2026-09-29: "direct topic match: …" read like debug output.
+      'why.direct': 'direct match: {term}',
+      'why.titleMatch': 'title match: {term}',
+      'why.summaryMatch': 'summary match: {term}',
+      'why.bodyMatch': 'body match: {term}',
+      'why.bodyMatchPlain': 'body match',
+      'why.linkTarget': 'referenced by a primary document',
+      'why.linkSource': 'references a primary document',
+      'why.related': 'related to the current task',
 
       'row.tooltip': '{path}\nClick to preview here · double-click to open in a new tab',
       'summary.empty': '(no summary)',
@@ -353,6 +416,16 @@ window.__ModuleLoader__.load({
     const MAX_RATIO = 0.8
     const DEFAULT_RATIO = 0.46
 
+    /* ── 曾经在这里的一组常量：右栏的宽度与形态 ──────────────
+       `PACK_W_DEFAULT`(310) / `PACK_W_MIN`(260) / `PACK_W_MAX`(420) /
+       `PACK_SNAP_PX`(28) / `PACK_DRAG_SLOP`(4)
+       **2026-09-29 整组删除**：它们只服务于「拖宽那个面板 / 把它拖出去浮动 /
+       拖到右缘吸附回来」这一套动作，而**右侧那个面板本身没有了**。
+       用户当天的结论：Context Pack 是**数据层**概念（Primary / Supporting /
+       Related 的结构化结果），**不是一个必须单独显示出来的 UI 卡片** ——
+      同一个结构直接落进文档列表的分组里，不再另开一栏解释一遍。
+       ⚠️ 留着一套只服务于已删 UI 的常量，下一个人只会以为它还在生效。 */
+
     /** 「全部」视图里文档区的固定上限。 */
     const ALL_DOC_CAP = 4
     /**
@@ -375,48 +448,28 @@ window.__ModuleLoader__.load({
      * （它的窄屏档就是 `minmax(104px,1fr)`）。
      */
     const MEDIA_TRACK_PX = 104
-    /**
-     * 文档列表的响应式（2026-09-20 用户**三次**修正后的口径）：
-     * **默认 1 列；宽了排 2 列；多列时卡片数据不变。**
+    /* ── 文档列表为什么是单列（历史，写给下一个人看）─────────────────
+     * 这一段**不修饰任何声明**，只记结论与代价 —— 因为原来修饰的那个常量
+     * （`DOC_GRID_MIN_COLS` 那一组）已经随多列一起删了。
      *
-     * 三次修正的经过（每一版都是真机体验后被打回的）：
+     * 文档列表**永远是单列**（2026-09-29 用户拍板，第四版也是最后一版）。
+     *
+     * 演进，每一版都是真机体验后被打回的：
      *  - 第一版「把完整卡直接压窄」→ 632px 面板 4 列时标题只剩 **9 个字**
-     *    （真实标题中位数 18、最长 43），一屏还是 4 篇，只是把信息切碎了。
-     *  - 第二版「多列只留标题 + 时间」→ 用户否掉：「两行保留一行一样的列表数据，
-     *    现在大于一行后只有标题与时间了」。**多列不等于可以砍数据。**
-     *  - 第三版（当前）保留全部字段，但**上限从 4 列收到 3 列** —— 用户原话：
-     *    「大于三行体验上视觉跳动信息过载了」。即：4 列时一屏塞太密，
-     *    扫读时视线要反复跳跃，反而比 3 列更难用。
+     *    （真实标题中位数 18、最长 43）。**多列不等于可以砍数据**（第二版
+     *    「多列只留标题 + 时间」也被否掉）。
+     *  - 第三版保留全部字段、上限收到 2 列；用户原话：「大于三行体验上视觉跳动信息过载了」。
+     *  - **第四版（当前）**：用户看到真机上的 2 列后拍板 ——「文档列表最多一个就行，
+     *    现在一行两个有点太多了」。**上限改成 1 列，多列那套整体删除**
+     *    （`docLayoutFor` / `DOC_TRACK_PX` / `DOC_SUMMARY_MIN_PX` / `.knit-multicol.cols-N`
+     *    与 `.no-sum` 兜底全部不再存在）。
      *
-     * 所以现在是：**每张卡片的字段与 1 列时完全一样**（标题 + 时间 + 摘要 + 路径），
-     * 只按格子宽度决定摘要是否还放得下 —— 与媒体卡「窄到 96px 以下让位给缩略图」
-     * 同一套渐进让位思路，而不是一多列就砍。
+     * 单列之后行内改成**元信息在上、标题独占一行**（用户同一条消息里给的方向：
+     * 「时间跟那个置顶的序号可以一行」）—— 见 `DocRow` 的组装顺序与 `.knit-row1`。
      *
-     * ⚠️ **基准宽 205px 是「2–3 列时摘要还有意义」推出来的**：实测一行摘要每个汉字约 11.5px，
-     * 要摆下 16 个汉字以上才不算碎片。150px 那版会让 632px 直接排到 4 列（146px/格）、
-     * 标题只剩 10 字 —— 那又是第一版的坑。
+     * ⚠️ **不要加回多列**。真要提升宽面板的信息利用率，该做的是让**单列更舒展**，
+     * 不是切栏 —— 这句从第三版起没变过。
      */
-    const DOC_GRID_MIN_COLS = 1
-    /**
-     * **上限 2 列。**
-     *
-     * 演进：4 列（标题只剩 9 字）→ 3 列（用户：「大于三行视觉跳动信息过载」）→ **2 列**。
-     * 收到 2 列的依据是交互评审的实测：3 列时摘要每行只剩 **16 个汉字**
-     * （2 列是 26、1 列是 56）—— 文档卡的关键任务是**读摘要判断哪篇有用**，
-     * 而读文字的成本由「每行字数 + 换行次数」决定，不由「一屏几个卡片」决定。
-     * 3 列换来的只是「多一篇」，代价是每一篇的摘要都碎成片段。
-     *
-     * ⚠️ **别再加回 3 列**：真要提升宽面板的信息利用率，该做的是让**单列更舒展**
-     * （时间/路径移到右侧同一基线、摘要可读宽度拉满），不是继续切栏。
-     */
-    const DOC_GRID_MAX_COLS = 2
-    /** 文档格子宽度下限（CSS 里 minmax 的下限由它插入，改一处必须改另一处）。 */
-    const DOC_TRACK_PX = 205
-    /**
-     * 格子窄于这个宽度时摘要放不下有意义的内容（16 个汉字都摆不开）——
-     * 与其显示「本文件是 Agent 进」这种碎片，不如让摘要整块让位（**路径仍然保留**）。
-     */
-    const DOC_SUMMARY_MIN_PX = 185
     /**
      * 实际格宽低于这个值才让卡片文字让位给缩略图。
      *
@@ -477,35 +530,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /**
-     * 算文档列表能排几列、单格多宽、摘要放不放得下（见 `DOC_TRACK_PX` 上方的说明）。
-     *
-     * 与 `mediaLayoutFor` **同一套算术**（`floor((可用宽 + gap) / (基准宽 + gap))`），
-     * 只是基准宽与上限不同 —— 文档格子的下限是 205px（媒体是 104px），上限 4 列。
-     *
-     * @param {number} width - 列表可用宽度（px，不含列表左右内边距）
-     * @returns {{columns:number, cell:number, compact:boolean, summary:boolean}}
-     *   列数（1–4）、单格实际宽度、是否多列（多列时卡片改成网格里的样式）、
-     *   以及**摘要是否放得下**（放不下就整块让位，路径仍然保留）
-     */
-    function docLayoutFor(width) {
-      const w = Number(width)
-      // ⚠️ **量不到宽度就按 1 列走，不能按「默认面板 632px」算** —— 用户要的默认形态是
-      // 「一个文档一行」，而 632px 会算出 2–3 列，等于把默认值改掉了；
-      // 另外默认 1 列也不会在真实宽度到达前先闪一下多列。
-      const usable = Number.isFinite(w) && w > 0 ? w : 0
-      const columns = Math.min(DOC_GRID_MAX_COLS, Math.max(DOC_GRID_MIN_COLS,
-        Math.floor((usable + MEDIA_GAP_PX) / (DOC_TRACK_PX + MEDIA_GAP_PX))))
-      const cell = Math.floor((usable - (columns - 1) * MEDIA_GAP_PX) / columns)
-      // 多列时的卡片样子：**字段一个不少**，只把放不下的摘要让位（见 DOC_SUMMARY_MIN_PX）。
-      return {
-        columns,
-        cell,
-        compact: columns > 1,
-        summary: columns === 1 || cell >= DOC_SUMMARY_MIN_PX,
-      }
-    }
-
     /* ── 样式：跟随 DSH 主题令牌，深浅色自适应 ───────────────── */
     const STYLE_ID = 'dsh-knit-style'
     const CSS = `
@@ -556,78 +580,148 @@ body[data-ds-dark-theme] .knit-root{
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1));outline:none}
 .knit-filter:focus{border-color:var(--knit-accent)}
 .knit-filter::placeholder{color:var(--dsw-alias-label-caption,#80868b)}
-.knit-topic{flex:none;padding:0 12px 8px;font-size:10.5px;line-height:1.4;
+.knit-topic{flex:none;padding:0 12px 9px;font-size:10.5px;line-height:1.4;
   color:var(--dsw-alias-label-caption,#80868b);
-  border-bottom:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ⚠️ 这里以前有一条 border-bottom（全宽横线）。2026-09-29 用户要求**减少全宽分割线**
+   ——「页面上横线一多，读起来就像文件管理表格」。层级改由空间与字号建立：
+   这一行只用 bottom padding 与列表拉开距离，不画线。 */
+
+
+/* ── v0.14 右栏（Context Pack 面板）已整体删除（2026-09-29）────────
+   用户裁定：Context Pack 是**数据层**结构（Primary / Supporting / Related），
+   不是一个要单独显示的 UI 卡片。右栏与左栏的 Primary / Supporting / Related
+   信息重复，「当前任务 / 命中 N 篇 / 证据」的视觉价值也有限，还容易把 Knit
+   做成 AI Dashboard ⇒ 界面改成**单栏**，分组直接落在文档列表里。
+
+   随这一栏删掉的东西（**删干净，不留死代码**）：
+   .knit-context-layout / .knit-col-list / .knit-context-column（两列网格）、
+   @media (max-width:1000px) 的并栏规则、.knit-grip（拖宽把手）、
+   .knit-pack*（面板与头部）、.knit-evrow 一整套证据行、
+   .knit-solo / .knit-undocked / .knit-snap 三个状态类。
+   JS 那边对应的 clampPackW / clampFloatPos / nearRightEdge、拖拽与吸附、
+   contextPanel 也一起删了。
+   ⚠️ 留着一套永远渲染不出来的样式，下一个人只会以为它还在生效。
+
+   ⚠️ 这段注释里不能出现反引号（整个 CSS 是一个模板串）。 */
+
+.knit-tier{display:block}
+.knit-tier + .knit-tier{margin-top:16px}
+/* ⚠️ 组与组之间**不再画线**（2026-09-29）：以前是 margin-top:2px + 一条 border-top，
+   读起来像表格。现在只有 16px 空间 —— 分组靠间距与组名建立，不靠横线。 */
+.knit-tierline{display:flex;align-items:baseline;gap:6px;padding:0 12px 6px;
+  font-size:10px;line-height:1.3;color:var(--dsw-alias-text-tertiary)}
+/* Design §14：层名走「大写 + 字距」这套页签式排版，中文 hint 退到 muted 那一档。
+   ⚠️ uppercase 对中文是空操作，所以中文形态仍然是「主要上下文」——
+   不为了对齐英文形态去改词典：界面语言该由 i18n 决定，不该由 CSS 决定。
+   Design §14 里那个「可选的 5~6px 灰点」**不做** —— Primary 已经有一颗黑点了，
+   再加一颗同形状的点会让「层标记」和「主上下文标记」看起来是一回事。 */
+.knit-tiername{font-weight:600;font-size:12px;letter-spacing:.01em;
+  text-transform:uppercase;color:var(--dsw-alias-text-secondary)}
+.knit-tierhint{font-weight:400}
+/* 「为什么在这里」：比摘要更弱的一行，只在 Context Pack 的条目上出现。
+   11px 而不是 10px，因为它承担的是**信息**（可核验的理由），不是装饰标注。 */
+.knit-why{padding-top:2px;font-size:11px;line-height:1.5;color:var(--dsw-alias-text-tertiary)}
 /* 滚动条**不要自己画**：DSH 主题里已有全局样式
    （::-webkit-scrollbar 宽 8px ＋ --dsh-scrollbar-thumb，见 dsh-client-ui-theme）。
    曾经在这里写死 6px 宽 ＋ rgba(255,255,255,.14) 的滑块 —— 白色 14% 在白底上完全隐形，
    用户的原话是「没有一个右侧的滑动条」。删掉即继承主题默认（l1），与侧栏列表一致。
    ⚠️ CSS 注释里不要出现反引号：这段是模板字符串，反引号会把它提前截断。 */
 .knit-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px;outline:none}
-/* 文档多列：**只有 2 列这一档**，由 JS 算好后加类 ——
-   不写 auto-fit，否则「几列」会有两套算法（容器一个、卡片样式一个），必然对不上。
-   ⚠️ **上限就是 2 列**，所以这里不该出现 cols-3 / cols-4（有守卫盯着）。
-   ⚠️ 类加在 .knit-multicol 上而**不是** .knit-list 上：列表是那个唯一的滚动容器
-   （媒体档与「全部」都在它里面），把 grid 写上去会连带改掉那两个视图的排版。 */
-.knit-multicol{display:flex;flex-direction:column;gap:6px}
-.knit-multicol.cols-2{display:grid;gap:8px;align-items:stretch;
-  grid-template-columns:repeat(2,minmax(0,1fr))}
+/* 文档列表**没有网格**：永远一个文档一行（2026-09-29 用户拍板，第四版也是最后一版）。
+   ⚠️ 这里曾经有 「.knit-multicol.cols-2」 那一档（JS 按可用宽度算列数、再加类），
+   连同 「docLayoutFor」 / 「DOC_TRACK_PX」 / 「DOC_SUMMARY_MIN_PX」 / 「.no-sum」 一起删了 ——
+   留着一套永远算不出 2 列的代码，下一个人只会以为它还在生效。
+   媒体网格不走这里（它有自己的 「.knit-media-grid」 + CSS auto-fill，不受影响）。 */
 .knit-list:focus-visible{box-shadow:inset 0 0 0 1px var(--knit-accent)}
-.knit-doc{padding:10px 11px;border-radius:10px;cursor:pointer;
-  border:.5px solid transparent;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.03));
+/* 列表行＝**两列的 grid**（2026-09-29 用户追加要求：「文档列表序号放在独立最左边，
+   其他数据放在右边」）。第一列＝序号那条竖直的轴（.knit-num），第二列＝其余全部数据
+   （.knit-body）。用 grid 而不是「有号才插一个元素」，是因为没有号的条目（时间序 /
+   筛选结果 /「其他相关文档」）也要和有的条目**左边缘对齐** —— 轨道一直在，
+   正文就永远不会因为少一个序号而左移。 */
+/* 行的**静止态没有底色**（2026-09-29 用户反馈：「深色模式下，文档列表没有选中，鼠标没有悬停，
+   不需要有背景。或者是说，跟深色模式的最底下的背景一样」）。
+   ⚠️ 这里以前写的是 bg-layer-1 —— 浅色主题下它和面板底色都是 #fff（根本看不出来），
+   **暗色主题下它比 bg-base 亮一档**，于是每一行都像一张浮起来的小卡片，哪怕没选中、没悬停。
+   现在静止态直接 transparent，露出宿主侧边栏的底色（.knit-root / .knit-list 都不画底色）；
+   ⚠️ 右栏删除后这段注释里提到的 .knit-pack 已经不存在了（2026-09-29），
+   hover 与 .active 各有自己的令牌，
+   两者都**不该**跟着改成 transparent（那样一屏灰里就认不出选中态了）。 */
+.knit-doc{display:grid;grid-template-columns:22px minmax(0,1fr);column-gap:8px;align-items:start;
+  padding:10px 11px;border-radius:10px;cursor:pointer;
+  border:.5px solid transparent;background:transparent;
   transition:background .18s,border-color .18s,transform .18s,opacity .18s}
 .knit-doc:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.1));transform:translateX(-2px)}
-/* 选中（正在预览）保留品牌色描边，与「键盘光标」的中性描边区分开 */
-.knit-doc.active{border-color:var(--knit-accent);
+/* 选中（正在预览）用**中性描边**（Design §12 / 2026-09-29 用户裁决）。
+   ⚠️ 这里曾经是品牌色描边。用户本次的决定是「按 Design 改成 neutral border」，
+   理由是 Design §8「用灰阶建立层级，而不是用颜色建立层级」——
+   选中态要能从一屏灰里被认出来，但不该在整个界面里唯一地跳成蓝色。
+   两个态不再靠色相区分，而是靠「选中＝整行描边 + 灰底」。 */
+.knit-doc.active{border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22));
   background:var(--knit-active-bg,rgba(255,255,255,.085))}
-/* ⚠️ **但多列时必须给一个可见标记**（2026-09-20 补）：网格里 :hover 的
-   translateX 被关掉了，光标若仍然不可见，键盘用户就完全没有「我在哪」的线索。
-   用与媒体卡光标同一套中性环（不是品牌色），与 .active 的品牌描边区分开。 */
-.knit-multicol .knit-doc.cursor{
-  border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22));
-  box-shadow:0 0 0 1.5px var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.1))}
-/* 单列时 .knit-doc.cursor 故意不设样式：键盘焦点靠「移动即预览」的预览面板表达，
-   再加描边会与 .active 的整块蓝色背景重复，显得突兀。 */
+/* .knit-doc.cursor **故意不设样式**：键盘焦点靠「移动即预览」的预览面板表达，
+   再加描边会与 .active 的整块背景重复，显得突兀。
+   （曾经有一条 「.knit-multicol .knit-doc.cursor」 的中性环，是为多列网格补的 ——
+   多列没了，那条也删了。） */
+/* 行一＝**标题行**：Primary 点 + 标题 + 相对时间（**时间靠右**）。
+   2026-09-29 这一天里这一行改了三次：先是「序号 + 标题 + 时间」，然后
+   「时间跟那个置顶的序号可以一行」（序号留下、标题移出去），再后来
+   「序号放在独立最左边」（序号也出去、只剩点与时间）；最后用户要求
+   「将时间放到标题同行，时间放在右边，然后标题跟时间就可以以序号平行，居中平行」
+   ⇒ 标题**回到这一行**，时间从行尾滑到标题右边。
+   序号那一列与这一行**垂直居中**：靠 .knit-num 的 line-height 与标题行高对齐
+   （见下面 .knit-num 的说明 —— 两处必须同步改）。 */
 .knit-row1{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-.knit-title{flex:1;min-width:0;font-weight:600;font-size:12.5px;line-height:1.4;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* v0.14（Design §11 / §13）：**最左边独立一列**的序号（2026-09-29 用户追加要求）。
+   序号是「这个包里的第几篇」，不是分数；Primary 只给一个 5px 黑点 ——
+   不是星标、不是徽章、不是 AI 图标。「重要来自位置和结构，不来自图标」。
+   ⚠️ 深浅主题都要能看见：用文字色令牌，不写死 #242426（暗色下会消失）。
+   ⚠️ 没有序号的行**不渲染这个节点**；那一列由 .knit-doc 的 grid 轨道保着
+   （时间序 / 筛选结果 /「其他相关文档」照样和有条目的行左边缘对齐）。
+   ⚠️ line-height **19.6px 是把序号与标题第一行居中的唯一手段**：
+   它＝.knit-title 的 14px × 1.4。格的 align-items:start 让这一列从卡片顶边
+   开始排，所以只要这个行盒与标题行盒等高，两个字号不同的文本就自然居中。
+   **改 .knit-title 的字号或行高时，这里必须同步改**，否则序号会与标题错开。 */
+.knit-num{grid-column:1;font-size:10.5px;line-height:19.6px;font-variant-numeric:tabular-nums;
+  color:var(--dsw-alias-label-caption,#80868b)}
+/* 右边这一列＝其余全部数据（标题行 / 摘要 / 理由）。
+   ⚠️ min-width:0 不能省：轨道是 minmax(0,1fr)，但**单元格本身**默认也是按
+   min-content 撑的，不写它标题的省略号和摘要的两行截断就不生效（会把行撑宽）。 */
+.knit-body{grid-column:2;min-width:0}
+.knit-dot{flex:none;width:5px;height:5px;border-radius:50%;
+  background:var(--dsw-alias-text-primary,var(--dsw-alias-label-primary,#242426))}
+/* 时间**在标题右边的行尾**（2026-09-29 用户要求「时间放在右边」）。
+   ⚠️ 这条推翻了同一天早先的写法（那时候时间跟在点后面左对齐，理由是
+   「元信息行读起来像一句话」）—— 时间现在和标题同一行，左对齐会把标题夹在中间。
+   靠 .knit-title 的 flex:1 1 auto 把时间挤到行尾；这里只要 flex:none 不被压扁。 */
 .knit-time{flex:none;font-size:10.5px;color:var(--dsw-alias-label-caption,#80868b)}
-.knit-sum{font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary,#9aa0a6);
+/* 标题现在和 Primary 点、时间**同行**（见 .knit-row1 的说明；margin-bottom 移到了那一行）。
+   仍是单行省略 —— 列表是扫读用的，想看全标题就预览或打开；折行会让每条卡高度不一，
+   「移动到下一项」的位移就没法预期。
+   flex:1 1 auto + min-width:0 是**时间能被推到行尾、且长标题在时间之前省略**的前提：
+   去掉 min-width:0，标题会把整行撑宽（省略号失效）；去掉 flex-grow，时间会紧贴标题而不是靠右。 */
+.knit-title{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1.4;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.knit-sum{font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary,#9aa0a6);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .knit-sum.empty{font-style:italic;color:var(--dsw-alias-label-caption,#80868b)}
-.knit-meta{margin-top:6px;font-size:10px;color:var(--dsw-alias-label-caption,#80868b);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* ── 2 列时的卡片 ─────────────────────────
-   ⚠️ **字段一个不少**：标题 + 时间 + 摘要 + 路径，与 1 列时同一套数据。
-   第一版曾在这里「只留标题 + 时间」，被用户否掉：「两行保留一行一样的列表数据，
-   现在大于一行后只有标题与时间了」。**多列不等于可以砍数据。**
-
-   变的只有排版，因为格子窄了：
-   - 时间从「和标题挤一行」改成纵向排（挤一行会把标题压到十几个字）
-   - 标题从单行省略改成**折两行**（宽度不够，截断太浪费）
-   - 摘要按格子宽度决定去留：放不下 16 个汉字就整块让位（见 DOC_SUMMARY_MIN_PX）。
-     这是**渐进让位**（与媒体卡窄到 96px 以下让位给缩略图同一个思路），
-     不是「一多列就砍」—— 路径任何时候都保留。
-
-   ⚠️ 这些规则必须排在 .knit-title / .knit-time / .knit-sum / .knit-meta **之后**：
-   选择器优先级一样，靠源码顺序取胜（和 .knit-media-card.cursor 那条同一个理）。 */
-.knit-multicol.cols-2 .knit-doc{padding:9px 10px}
-/* 标题折两行 */
-.knit-multicol.cols-2 .knit-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
-  white-space:normal;overflow:hidden;word-break:break-word}
-/* 行一改成纵向：格子窄时时间与标题挤一行会把标题压成十几个字 */
-.knit-multicol.cols-2 .knit-row1{display:block;margin-bottom:0}
-.knit-multicol.cols-2 .knit-time{margin-top:4px}
-/* 摘要挤不下时整块让位（JS 按格子宽决定加不加这个类）。路径不受影响。 */
-.knit-multicol.no-sum .knit-sum{display:none}
-/* 多列时的路径也折两行，别只给一行就切掉（真实路径中位数比标题还长） */
-.knit-multicol.cols-2 .knit-meta{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;
-  -webkit-box-orient:vertical;word-break:break-all}
-/* 悬停不再左移：网格里位移会让整格抖动 */
-.knit-multicol.cols-2 .knit-doc:hover, .knit-doc:hover{transform:none}
+/* ── 列表行里为什么没有路径（2026-09-29） ────────────────────
+   这里曾经是「.knit-meta」（相对路径那一行）。用户否掉了它：
+   「文档列表中的文档路径，我觉得不需要出现了，因为点开查看文档详情的时候已经有了，
+   所以这里是重复的，隐藏掉」。
+   ⇒ **删掉，不是 display:none** —— 预览头的面包屑（.knit-preview-path）已经
+   始终显示完整路径，重复的那一份没有存在的理由。
+   ⚠️ 不要和「多列砍字段」那条教训混起来：**摘要（.knit-sum）仍然任何情况下都不许
+   display:none** —— 那条守的是「不许因为排版窄就静默少给信息」，而路径是**重复信息**。
+   ⚠️ 另：本文件整份 CSS 在一个模板串里，**注释里不能出现反引号**（会截断模板）——
+   这个教训在这里被踩到过一次（就是写上面这段注释的时候）。
+/* ── 曾经在这里的一段：2 列时的卡片 ─────────────────────────
+   它按「格子窄了」改排版（时间纵向排、标题折两行、摘要按格子宽让位、路径折两行），
+   并顺手把 :hover 的 translateX 关掉。
+   **2026-09-29 整段删除**：列表不再有第二列，这些规则一条也匹配不到。
+   删的时候**没有**把 「transform:none」 留下来 —— 上面的 「.knit-doc:hover」
+   仍然保留 「translateX(-2px)」（单列的悬停位移从来没被这些规则影响过）。 */
 .knit-msg{padding:24px 16px;text-align:center;font-size:12px;
   color:var(--dsw-alias-label-caption,#80868b);line-height:1.7}
 .knit-notice{margin:6px 8px 0;padding:7px 10px;border-radius:7px;font-size:11px;line-height:1.5;
@@ -720,19 +814,23 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── 类型切换（文档 / 图片与视频 / 全部）────────────── */
-/* 选中态与下面的列表行、上面的排序切换共用一套中性灰填充，**不要品牌色描边**：
-   用户的原话是「选中的时候不用加绿色、蓝色的描边，就跟下面列表一样，
-   选中填充背景灰就可以」。所以这里不许再用 --knit-accent / --knit-accent-fill。 */
-.knit-types{display:flex;gap:5px;padding:1px 12px 7px;flex:none}
-.knit-type-btn{flex:1;height:24px;padding:0 6px;border-radius:6px;cursor:pointer;
-  border:.5px solid transparent;background:transparent;
-  color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:11px;
+/* v0.14（Design §20）：**不再是三个并排的灰底按钮**，改成下划线式页签 ——
+   底部一条 hairline，选中的那个用「深色文字 + 2px 深色下划线」表达。
+   ⚠️ 2026-09-29 用户裁决：这条**覆盖**了早先那条「选中填充背景灰就可以」。
+   当时用户的原话是「选中的时候不用加绿色、蓝色的描边，就跟下面列表一样」——
+   诉求是「别用品牌色描边」；现在连灰底也不要了，层级交给下划线，
+   依然不许出现 --knit-accent / --knit-accent-fill（Design §8：灰阶分层）。
+   ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。 */
+.knit-types{display:flex;gap:14px;padding:0 12px;flex:none;
+  border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.06))}
+.knit-type-btn{flex:none;height:28px;padding:0;cursor:pointer;
+  border:none;border-bottom:2px solid transparent;background:transparent;
+  color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:11.5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  transition:background .15s,color .15s}
-.knit-type-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
-  color:var(--dsw-alias-label-primary,#e8eaed)}
-.knit-type-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
-  color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
+  transition:color .15s,border-color .15s}
+.knit-type-btn:hover{color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-type-btn.active{color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600;
+  border-bottom-color:var(--dsw-alias-label-primary,#e8eaed)}
 
 /* ── 图片与视频：方形缩略图网格 ─────────────────────
    **列数由浏览器自己数**（用户 2026-09-20 点名的机制，取自 AIGC 资产中心的图片网格）：
@@ -921,6 +1019,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       if (!Number.isFinite(n)) return DEFAULT_RATIO
       return Math.min(MAX_RATIO, Math.max(MIN_RATIO, n))
     }
+
+    /* ── 曾经在这里的三个纯函数：右栏几何 ────────────────────
+       `clampPackW`（把右栏宽度夹进 260–420）/ `clampFloatPos`（把浮窗夹进视口）/
+       `nearRightEdge`（指针是否落在右缘 28px 的吸附带里）。
+       **2026-09-29 随右栏一起删除**：没有可拖宽的面板、没有浮窗、没有吸附，
+       这三个函数一个都不可能再被调用。 */
 
     /**
      * 读用户上次拖的预览高度。
@@ -1159,6 +1263,36 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * （渲染顺序、过滤、轮询刷新都会变），指向就会漂。用哈希则同一篇永远同一个 id。
      * 前缀保留可读部分纯粹是为了调试时看得懂。
      */
+    /**
+     * 一个条目「为什么在 Context Pack 里」的文案（v0.14）。
+     *
+     * 宿主只给**结构化理由**（码 + 命中的词 + 跨了几个字段），文案在这里翻译 ——
+     * 与宿主错误码同一套纪律（AGENTS.md §4.5）。
+     *
+     * ⚠️ 只输出**可核验的事实**：命中了哪个词、被谁引用、文件角色是什么。
+     * **不要**在这里写「可能对你的任务有帮助」这类无法验证的推断 ——
+     * Context Pack 的全部价值就是「每条都能说出凭什么」。
+     *
+     * @param {{code?: string, terms?: string[]}} [reason] - `context.js` 的 `reason`
+     * @returns {string} 文案；没有理由时返回空串（时间序 / 非相关模式）
+     */
+    function whyText(reason) {
+      if (!reason || typeof reason.code !== 'string') return ''
+      const terms = Array.isArray(reason.terms) ? reason.terms.filter(Boolean) : []
+      // 最多列两个词：理由行是**一行**，列多了会把列表读成段落。
+      // 分隔符用「 · 」而不是「、」（2026-09-29 用户要求把这条理由压得更克制：
+      // 「直接命中：knit · client」）—— 它读起来是**标签 + 值**，不是一句话。
+      const shown = terms.slice(0, 2).join(' · ')
+      const key = `why.${reason.code}`
+      // 词典里没有这个码就把码本身显示出来 —— 宿主加了新码而客户端还没跟上时，
+      // 用户看到的是 `why.xxx` 这种明显异常，而不是一条静默的空行。
+      if (!terms.length) {
+        const plain = `${key}Plain`
+        return ZH[plain] !== undefined ? t(plain) : t(key)
+      }
+      return t(key, { term: shown })
+    }
+
     function docOptionId(doc) {
       const rel = String(doc.rel || doc.path || '')
       const safe = rel.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 48)
@@ -1170,7 +1304,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       return `knit-opt-${safe}-${(hash >>> 0).toString(36)}`
     }
 
-    function DocRow({ doc, now, active, cursor, relevance, onSelect, onOpenTab, optionId }) {
+    function DocRow({ doc, now, active, cursor, relevance, why, num, primary, onSelect, onOpenTab, optionId }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
 
       return h('div', {
@@ -1185,15 +1319,44 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         onClick: () => onSelect(doc),
         onDoubleClick: () => onOpenTab(doc),
       },
-      h('div', { className: 'knit-row1' },
-        h('div', { className: 'knit-title' },
-          fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
-          doc.title || doc.name),
-        h('div', { className: 'knit-time' }, relTime(doc.mtimeMs, now))),
-      doc.summary
-        ? h('div', { className: 'knit-sum' }, doc.summary)
-        : h('div', { className: 'knit-sum empty' }, t('summary.empty')),
-      h('div', { className: 'knit-meta' }, doc.rel))
+      // ── 序号＝**最左边独立一列**（2026-09-29 用户追加要求）──────────────
+      // 用户原话：「文档列表序号放在独立最左边，其他数据放在右边」。所以序号从行一里
+      // 搬了出来，成为 .knit-doc 这条两列 grid 的第一列，其余数据全在右边堆叠。
+      // v0.14（Design §11）：只有 Context Pack 前三层的条目有号；「其他相关文档」里的
+      // 没有 —— 那些不属于这个包，编号会把它们谎报成包的一部分。**没有号时整个节点不渲染**，
+      // 左边那一列由 grid 轨道保着（正文照样和有条目的行对齐，不会左移）。
+      num ? h('span', { className: 'knit-num' }, String(num).padStart(2, '0')) : null,
+      // 右边这一列＝其余全部数据。列位置由 .knit-body 的 grid-column 定死 ——
+      // 靠自动排布的话，没有序号时正文会掉进第一列。
+      h('div', { className: 'knit-body' },
+        // 行一＝**标题行**（Primary 点 + 标题 + 相对时间，**时间靠右**）—— 2026-09-29 用户要求
+        // 「将时间放到标题同行，时间放在右边，然后标题跟时间就可以以序号平行，居中平行」。
+        // 序号那一列与这一行垂直居中（靠 .knit-num 的 line-height，CSS 里有说明）。
+        h('div', { className: 'knit-row1' },
+          // v0.14（Design §13）：Primary 唯一允许的标记 —— 5px 黑点。
+          // 不是星标、不是徽章、不是 AI 图标：「重要来自位置和结构，不来自图标」。
+          primary ? h('span', { className: 'knit-dot', 'aria-hidden': 'true' }) : null,
+          h('div', { className: 'knit-title' },
+            fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
+            doc.title || doc.name),
+          // 时间在标题右边的行尾 —— 靠 .knit-title 的 flex-grow 推过去，不是靠 margin。
+          h('div', { className: 'knit-time' }, relTime(doc.mtimeMs, now))),
+        doc.summary
+          ? h('div', { className: 'knit-sum' }, doc.summary)
+          : h('div', { className: 'knit-sum empty' }, t('summary.empty')),
+        // ⚠️ **列表行里不再有路径**（2026-09-29 用户要求）：「文档列表中的文档路径，我觉得
+        //    不需要出现了，因为点开查看文档详情的时候已经有了，所以这里是重复的，隐藏掉」。
+        //    —— 这是**重复信息**，不是「多列砍字段」那种静默降级：预览头的面包屑
+        //    （`.knit-preview-path`：目录浅 + 文件名亮，还可点）始终显示完整路径。
+        //    所以删掉的是 `.knit-meta` 这一个节点，**摘要仍然任何情况下都不许 display:none**。
+        //    行的定位不走可见路径：`data-knit-rel` 仍在（键盘 / 预览映射靠它）。
+        // v0.14：为什么这一篇在这个层里。只有 Context Pack 的条目才有 ——
+        // 时间序 / 平铺列表里不渲染这一行（不编造理由）。
+        // ⚠️ 这一行**故意独占一行**，不并到上面的标题行（Design §11 的 ASCII 把它画在
+        //    标题右侧）：它是本版新增的那条信息，右侧对齐 + 省略号会把它截成
+        //    「标题命中当前…」，恰好把要传达的东西吃掉。Design §11 的字段顺序
+        //    （number / title / summary / path / why）在这里是满足的。
+        why ? h('div', { className: 'knit-why', title: `${t('context.why')}：${why}` }, why) : null))
     }
 
     /**
@@ -1430,6 +1593,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const [kind, setKind] = React.useState(readKindPref)
       const [state, setState] = React.useState({
         status: 'loading', docs: [], root: '', total: 0, error: '', mode: 'time', topic: '',
+        // v0.14：当前任务上下文（Context Pack）。宿主只在「文档档 + 相关序 + 有命中」时给，
+        // 其余情形是 null —— 那时面板退回它一直在用的平铺列表（行为与 v0.13 逐字一致）。
+        context: null,
       })
       const [preview, setPreview] = React.useState(null)
       const [tick, setTick] = React.useState(() => Date.now())
@@ -1451,6 +1617,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const [links, setLinks] = React.useState(null)
       const [linksExpandedTick, setLinksExpandedTick] = React.useState(0)
 
+      /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
+         `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
+         **2026-09-29 随右栏一起删除**。当时它们**只存在内存里**（刷新回默认值），
+         理由现在仍然成立、也仍然适用于剩下的界面：readPref/writePref 那套只用于
+         排序 / 类型 / 预览高度这类**语义偏好**，界面几何状态不属于它。 */
+
       React.useEffect(() => {
         const host = listRef.current
         if (!host || typeof ResizeObserver === 'undefined') return undefined
@@ -1466,7 +1638,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       const load = React.useCallback(async () => {
         if (!sessionId) {
-          setState({ status: 'error', docs: [], root: '', total: 0, error: t('error.noSession'), mode: 'time', topic: '' })
+          setState({ status: 'error', docs: [], root: '', total: 0, error: t('error.noSession'), mode: 'time', topic: '', context: null })
           return
         }
         try {
@@ -1482,13 +1654,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
               error: '',
               mode: data.mode || 'time',
               topic: data.topic || '',
+              context: data.context || null,
             })
 
           } else {
-            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', topic: '' })
+            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', topic: '', context: null })
           }
         } catch (error) {
-          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', topic: '' })
+          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', topic: '', context: null })
         }
         setTick(Date.now())
       }, [sessionId, sort, kind])
@@ -1523,11 +1696,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const shownDocs = docItems.slice(0, ALL_DOC_CAP)
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
       // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
-      // ⚠️ 这里**不传条目数** —— 列数只跟可用宽度有关（传了就会重演「按个数锁列数」那个 bug）。
+      // 文档列表**没有列数可算**：永远一个文档一行（见 `DOC_GRID` 那段说明）。
+      // 于是这里也不再需要 `listWidth − LIST_PAD_X` 这个量 —— 只有媒体网格要宽度。
       const mediaLayout = mediaLayoutFor(Math.max(0, listWidth - LIST_PAD_X - MEDIA_GRID_PAD_X))
-      // 文档列表的列数：**只看列表可用宽度**（扣掉 `.knit-list` 自己的左右内边距）。
-      // 1 列 = 完整卡，2–4 列 = 紧凑卡（样式由 `.knit-list.cols-N` 承担）。
-      const docLayout = docLayoutFor(Math.max(0, listWidth - LIST_PAD_X))
 
       /** 媒体网格：列数由 CSS 的 auto-fill 自己数；JS 只下发「一格多宽」用于正方形兜底。
        *  **不设 maxHeight** —— 有多少行就铺多少行，纵向滚动统一交给 `.knit-list`。 */
@@ -1541,21 +1712,119 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       }, docs.map(renderEntry))
 
       /**
-       * 文档列表的容器：**1 列时原样返回（不多一层 DOM），2–4 列时才包一层网格**。
-       * 单列不多包一层是有意的 —— 默认形态的 DOM 与列数改造之前**逐字一致**，
-       * 既有测试与既有的滚动/键盘行为都不用跟着动。
-       * `no-sum` 只在「格子窄到摘要放不下」时加（多列但格子够宽时摘要照常显示）。
+       * 渲染一组文档行：**没有容器、没有列数**（2026-09-29 起）。
+       *
+       * 这里曾经按可用宽度包一层 `.knit-multicol.cols-2` 网格。列表改成永远单列后
+       * 那层网格连同 `docLayoutFor` 一起删了 —— 现在它只剩一件事要做：
+       * 把「这一组的条目」映射成带序号 / Primary 标记的 `DocRow`。
+       *
+       * ⚠️ `num` 只有 Context Pack 前三层才有（见 `renderEntry` 的说明）：
+       * 时间序、筛选结果、「其他相关文档」都不编号。
        */
-      const docsGrid = (docs) => {
-        if (docLayout.columns <= 1) return docs.map(renderEntry)
-        const cls = `knit-multicol cols-${docLayout.columns}${docLayout.summary ? '' : ' no-sum'}`
-        // ⚠️ 这层是**纯排版容器**，必须 role="presentation"（不是 group）：
-        // option 要是 listbox 的直接子级，辅助技术才会把选项算进那个集合。
-        return h('div', { className: cls, role: 'presentation' }, docs.map(renderEntry))
-      }
+      const docsGrid = (docs, numbers, primary) => docs.map((doc) =>
+        renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary)))
 
-      /** 键盘与 cursor 真正能到达的条目：「全部」里文档只到上限，媒体全部可达。 */
-      const navDocs = kind === KIND_ALL ? shownDocs.concat(mediaItems) : visibleDocs
+      const relevance = state.mode === 'relevance'
+      const filtering = query.trim().length > 0
+
+      /**
+       * 把分层视图渲染成一组分区（v0.14）。
+       *
+       * 每个分区：一行标题（层名 + 一句提示），下面是这个层的条目。
+       * 组内**复用 `docsGrid()`**，所以多列排版与单列形态与原来完全一致。
+       *
+       * ⚠️ 分区标题是**纯排版**，不带列表语义（`role="presentation"`）——
+       * listbox 的直接子级只能是 option，否则辅助技术会把选项算错集合。
+       *
+       * @param {{sections: Array<{key:string,titleKey:string,hintKey:string,docs:object[]}>,numbers: Map<string,number>}} view - `contextView`
+       * @returns {Array} 节点数组
+       */
+      const contextBody = (view) => view.sections.map((section) => h('div', {
+        className: 'knit-tier',
+        key: section.key,
+        role: 'presentation',
+      },
+      // ⚠️ 这几个类名**互不为子串**：`byClass` 是子串匹配，若叫
+      // `knit-tier-head` / `knit-tier-title`，取 `knit-tier` 会一次命中十几个节点
+      // （AGENTS.md §6.5 同一个坑踩过三次）。
+      h('div', { className: 'knit-tierline', role: 'presentation' },
+        h('span', { className: 'knit-tiername' }, t(section.titleKey)),
+        section.hintKey ? h('span', { className: 'knit-tierhint' }, t(section.hintKey)) : null),
+      docsGrid(section.docs, view.numbers, section.key === 'primary')))
+
+      /* ── 曾经在这里的一个函数：`contextPanel` ─────────────────
+         它渲染右栏那三样东西（当前任务原文 / 「命中 N 篇」/ 三条证据行）。
+         **2026-09-29 整个删除**，因为面板本身没有了：那三样里
+         ①「当前任务」是列表**上方**那行弱化的元信息在说的话，
+         ②「命中 N 篇」与头部的总篇数重复，
+         ③「三条证据行」说的正是下面三个分组标题已经在说的事。
+         用户当天的判断：这一栏「视觉价值有限」，而且「容易把 Knit 做成 AI Dashboard」。
+         留下的那条纪律仍然有效：**层级靠灰阶与位置表达，不用颜色、不用评分、
+         不用「AI 推荐」**（PRD §8.3 / Design §8）。 */
+
+
+      /**
+       * v0.14：当前任务上下文的分层视图。
+       *
+       * **只在「文档档 + 相关序 + 宿主给了 context」时成立**；否则返回 null，
+       * 下面的渲染退回与 v0.13 逐字一致的平铺列表。
+       *
+       * 这一层是**纯投影**：分组、顺序、理由都来自宿主（同一个 Context Model），
+       * 客户端不重算任何东西 —— 面板与 `knit_docs` 用的是同一份结果。
+       *
+       * ⚠️ 过滤框生效时**照常过滤**，而不是切回平铺列表：过滤是对当前视图的子集化，
+       * 用户的预期是「在当前这份上下文里找」。
+       */
+      const contextView = React.useMemo(() => {
+        const pack = state.context
+        if (!relevance || kind !== KIND_DOC || !pack) return null
+        const tiers = [
+          ['primary', 'context.primary', 'context.primaryHint'],
+          ['supporting', 'context.supporting', 'context.supportingHint'],
+          ['related', 'context.related', 'context.relatedHint'],
+        ]
+        const visible = new Set(visibleDocs.map((doc) => doc.rel))
+        const sections = []
+        for (const [tierKey, titleKey, hintKey] of tiers) {
+          const items = Array.isArray(pack[tierKey]) ? pack[tierKey] : []
+          const docs = items.filter((item) => visible.has(item.rel))
+          if (docs.length > 0) sections.push({ key: tierKey, titleKey, hintKey, docs })
+        }
+        // 其余文档：宿主没放进任何一层的。补上它们，面板才仍然是「工作区的地图」，
+        // 而不是一个可能漏掉用户要找的那一篇的子集。
+        const placed = new Set()
+        for (const tierKey of ['primary', 'supporting', 'related']) {
+          for (const item of (Array.isArray(pack[tierKey]) ? pack[tierKey] : [])) placed.add(item.rel)
+        }
+        const rest = visibleDocs.filter((doc) => !isMedia(doc) && !placed.has(doc.rel))
+        if (rest.length > 0) {
+          sections.push({ key: 'other', titleKey: 'context.other', hintKey: '', docs: rest })
+        }
+        if (sections.length === 0) return null
+        // 行首序号（Design §11）：**只编三层里的**，而且是跨层连续的
+        // （01 属于 Primary、02/03 属于 Supporting……），与右栏证据行的计数对齐。
+        // 「其他相关文档」不编号 —— 它们不在这个包里面。
+        const numbers = new Map()
+        for (const section of sections) {
+          if (section.key === 'other') continue
+          for (const doc of section.docs) numbers.set(doc.rel, numbers.size + 1)
+        }
+        // 键盘到达顺序 = 屏幕上从上到下的顺序（分组顺序 + 组内顺序）
+        const flat = []
+        for (const section of sections) for (const doc of section.docs) flat.push(doc)
+        return { sections, flat, numbers }
+      }, [relevance, kind, state.context, visibleDocs])
+
+      /**
+       * 键盘与 cursor 真正能到达的条目。
+       *
+       * 分了层时必须是**三层里那些真的渲染出来的条目**（`contextView.flat`）——
+       * 否则「其他相关文档」区里的条目键盘到不了，而已经在 Related 层里的条目
+       * 会被算两次。「全部」档里文档只到上限，媒体全部可达。
+       */
+      const navDocs = kind === KIND_ALL
+        ? shownDocs.concat(mediaItems)
+        : (contextView ? contextView.flat : visibleDocs)
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
@@ -1614,15 +1883,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       }, [])
 
       /**
-       * 键盘导航：↑↓ 逐项移动即预览，多列时 ←→ 按**屏幕位置**横移，Enter 切换，Esc 收起。
+       * 键盘导航：↑↓ 逐项移动即预览，Enter 切换，Esc 收起。
        *
-       * ⚠️ **多列必须支持 ←→，否则「视觉空间」和「键盘空间」对不上**：
-       * 2 列网格里按 ↓ 视觉上是**往右**走（DOM 顺序即阅读顺序），
-       * 而 ←→ 原先完全不响应 —— 用户看到的是两列，键盘却只有一条线。
-       * 现在：↑↓ 走相邻项，←→ 跨一整行（rowWidth = 列数）。
-       *
-       * ⚠️ 左右键只在**多列**时生效：单列的纵向列表里 ←→ 没有空间含义，
-       * 拦截它反而会挡掉宿主或输入框的正常行为。
+       * ⚠️ **←→ 只在当前列表真的横向铺开时才生效**：
+       *  - 文档档（`KIND_DOC`）与「全部」档：文档**永远单列**（2026-09-29 起），
+       *    纵向列表里 ←→ 没有空间含义 —— 拦它只会挡掉宿主/输入框的正常行为，所以传 1。
+       *  - 媒体档：网格由 CSS auto-fill 排布，列数用 `mediaLayout.columns` 镜像同一套算术。
+       *    （这里以前一律传 `docLayout.columns`，而文档列数与媒体列数根本不是一回事 ——
+       *    媒体档的 ←→ 一直是按文档的 2 列在走。改动顺便把它对齐了。）
        */
       const onListKeyDown = React.useCallback((event) => {
         if (navDocs.length === 0) return
@@ -1630,7 +1898,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         const last = navDocs.length - 1
 
         // 方向键与 Home/End 全部交给纯函数算（见 nextIndexFor 的注释）
-        const target = nextIndexFor(index, event.key, navDocs.length, docLayout.columns)
+        const navColumns = kind === KIND_MEDIA ? mediaLayout.columns : 1
+        const target = nextIndexFor(index, event.key, navDocs.length, navColumns)
         if (target >= 0) {
           event.preventDefault()
           const doc = navDocs[target]
@@ -1648,7 +1917,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           if (fullscreen) setFullscreen(false)
           else closePreview()
         }
-      }, [navDocs, cursor, fullscreen, docLayout.columns, openPreview, togglePreview, closePreview])
+      }, [navDocs, cursor, fullscreen, kind, mediaLayout.columns, openPreview, togglePreview, closePreview])
 
       /** 拖拽预览面板上缘改变高度。 */
       const onResizeStart = React.useCallback((event) => {
@@ -1670,6 +1939,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         window.addEventListener('pointermove', onMove)
         window.addEventListener('pointerup', onUp)
       }, [ratio])
+
+      /* ── 曾经在这里的一整段：右栏的拖宽 / 浮动 / 吸附 ────────
+         `packRect` // `viewportSize` // `floatPack` // `onGripDown` //
+         `onGripKeyDown` // `onPackHeadDown`
+         **2026-09-29 随右栏一起删除**。当时的三条决定（量不到几何就不动 /
+         位移小于阈值不算拖 / 吸附只认指针进右缘）全部只服务于那个面板。 */
+
 
       // 悬停浮层点了某一篇 → **立刻**展开预览，不等列表、不等轮询。
       // 挂载时先取一次可能已挂起的目标，之后靠订阅实时收。
@@ -1818,11 +2094,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         setFullscreen(false)
       }, [])
 
-      const relevance = state.mode === 'relevance'
-      const filtering = query.trim().length > 0
+
 
       /** 渲染一个条目：媒体一律出方形卡片（媒体视图与「全部」的媒体区共用），其余出文档行。 */
-      const renderEntry = (doc) => {
+      const renderEntry = (doc, num, primary) => {
         const common = {
           key: doc.path || doc.rel,
           doc,
@@ -1834,7 +2109,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           onOpenTab,
         }
         if (isMedia(doc)) return h(MediaCard, { ...common, src: srcFor(doc) })
-        return h(DocRow, { ...common, relevance })
+        // `whyText` 只认 Context Pack 条目上挂的 `reason` —— 平铺列表里没有这个字段，
+        // 于是返回空串，那一行不渲染。
+        // `num` / `primary` 只有分层视图会传（Design §11 / §13）；平铺列表照旧无序号。
+        return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, primary })
       }
 
       /** 「全部」的分区标题：类型名 + 「已显示 / 总数」+ 被截断时的「查看全部」。 */
@@ -1880,11 +2158,20 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                 ? mediaGrid(visibleDocs, false)
                 : kind === KIND_ALL
                   ? allSections
-                  : docsGrid(visibleDocs)
+                  : contextView
+                    ? contextBody(contextView)
+                    : docsGrid(visibleDocs)
 
+      // 排序依据那行**弱化**了（2026-09-29 用户要求）：可见的只有一句
+      // 「相关性排序」，命中的关键词退到 title 里当低层 metadata ——
+      // 关键词是**系统依据**，不该被大号加粗地推到用户眼前。
+      // ⚠️ 可见文本里**不能**出现关键词：test/i18n.test.mjs 有守卫。
       const topicText = relevance
-        ? (state.topic ? t('topic.relevance', { topic: state.topic }) : t('topic.relevancePlain'))
+        ? t('topic.relevancePlain')
         : (sort === 'relevance' ? t('topic.needsConversation') : t('topic.time'))
+      const topicTitle = relevance && state.topic
+        ? t('topic.relevanceTerms', { topic: state.topic })
+        : topicText
 
       // 不同类型用不同量词：文档「篇」、媒体「个」、混排「项」。
       const countKey = kind === KIND_MEDIA
@@ -1946,22 +2233,39 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             title: t('kind.title'),
             onClick: () => pickKind(value),
           }, t(labelKey)))),
-      h('div', { className: 'knit-topic', title: topicText }, topicText),
+      h('div', { className: 'knit-topic', title: topicTitle }, topicText),
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
-      h('div', {
-        className: 'knit-list',
-        ref: listRef,
-        tabIndex: 0,
-        onKeyDown: onListKeyDown,
-        role: 'listbox',
-        'aria-label': t('list.aria'),
-        // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
-        // 所以用 activedescendant 把「当前项」告诉辅助技术。
-        // cursor 不在可见列表里时（被过滤/被上限截断）就不指向任何东西。
-        'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
-          ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
-          : undefined,
-      }, body),
+      // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
+      // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——
+      // 时间序、媒体档、「全部」都不受影响。
+      (() => {
+        const listNode = h('div', {
+          className: 'knit-list',
+          ref: listRef,
+          tabIndex: 0,
+          onKeyDown: onListKeyDown,
+          role: 'listbox',
+          'aria-label': t('list.aria'),
+          // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
+          // 所以用 activedescendant 把「当前项」告诉辅助技术。
+          // cursor 不在可见列表里时（被过滤/被上限截断）就不指向任何东西。
+          'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
+            ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
+            : undefined,
+        }, body)
+        /* ── 曾经在这里的一层：双栏装配 ────────────────────────
+           `if (!contextView) return listNode` 之后是 `.knit-context-layout`
+           （两列网格：左 `.knit-col-list` + 右 `.knit-context-column`）、
+           右栏里的 `.knit-grip` 拖宽把手，以及 `.knit-pack-scroll` 包着的
+           `contextPanel(contextView)`。
+           **2026-09-29 整段删除，改成永远单栏**：`listNode` 直接返回，
+           DOM 里不再有任何双栏骨架。
+           ⚠️ 当初把网格放在 listbox **外面**的那条理由现在仍然成立，所以
+           **不要**为了「划一块区域」再往 `.knit-list` 里面塞包装节点 ——
+           `role=listbox` 的直接子级只能是 option，多一层 group 会让辅助技术
+           把选项算成另一个集合（这条纪律与右栏无关，别跟着一起删）。 */
+        return listNode
+      })(),
       preview ? h(PreviewPanel, {
         preview,
         pathImages,

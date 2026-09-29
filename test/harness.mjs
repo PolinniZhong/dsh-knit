@@ -32,6 +32,9 @@ export function loadClientModule(options = {}) {
     addEventListener() {},
     removeEventListener() {},
     innerHeight: 800,
+    // 右栏的「拖回右缘吸附」要用它算吸附带（1024 - 28 = 996）。
+    // 不给它的话，吸附的那几条测试会永远测不到东西还全绿 —— 假绿比红更贵。
+    innerWidth: 1024,
   }
 
   const markdownCalls = []
@@ -60,10 +63,13 @@ export function loadClientModule(options = {}) {
       'module.exports.__test = { KnitBody, OfficialTabBody, BetterSidebarTabBody, '
         + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, splitRelPath, '
         + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, openLocalPath, '
-        + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, docLayoutFor, '
+        + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
         + 'nextIndexFor, docOptionId, '
+        // ⚠️ 右栏那套名字（clampPackW / clampFloatPos / nearRightEdge / PACK_*）已随
+        // 右栏一起删除（2026-09-29）。名字留在这里，模块一加载就 ReferenceError ——
+        // 这个替身是**只增不减**的重灾区，删功能时记得同步删名字。
         + 'MIN_RATIO, MAX_RATIO, ALL_DOC_CAP, MEDIA_MAX_ITEMS, MEDIA_TRACK_PX, '
-        + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX, DOC_TRACK_PX, DOC_GRID_MAX_COLS, DOC_SUMMARY_MIN_PX }\n'
+        + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX }\n'
         + "    module.exports.inject = ['slots', 'locale']",
     )
 
@@ -89,11 +95,19 @@ export function createHarness() {
   let pendingEffects = []
 
   const React = {
-    createElement: (type, props, ...children) => ({
-      type,
-      props: props || {},
-      children: children.flat().filter((c) => c !== null && c !== undefined && c !== false),
-    }),
+    // ⚠️ children 必须**递归摊平**（真实 React 也会摊平数组）。
+    // 只摊一层的话，`h(A, null, [h(B), h(C)])` 里 B/C 会变成一个数组子节点，
+    // 而 textOf() 只按 node.children 递归 → 断言「分区里有这篇文档」会假红。
+    createElement: (type, props, ...children) => {
+      const flat = []
+      const push = (c) => {
+        if (Array.isArray(c)) { c.forEach(push); return }
+        if (c === null || c === undefined || c === false) return
+        flat.push(c)
+      }
+      children.forEach(push)
+      return { type, props: props || {}, children: flat }
+    },
     useState(init) {
       const i = hookIdx++
       if (!(i in hookStates)) hookStates[i] = typeof init === 'function' ? init() : init
@@ -245,6 +259,12 @@ export function byExactClass(nodes, className) {
 
 /**
  * 取节点下所有字符串子节点的拼接。
+ *
+ * ⚠️ **函数组件要展开**（与 `render()` 的 walk 同一套语义）。
+ * 不展开的话 `h(DocRow, {...})` 这种节点在树里是 `{type: 函数, props, children}`，
+ * 而它的子节点其实来自 `DocRow(props)` 的返回值 —— 于是「分区里有没有这篇文档」
+ * 这类断言会假红（细节见 AGENTS.md §6.2）。
+ *
  * @param {object} node - 节点
  * @returns {string} 文本
  */
@@ -254,6 +274,12 @@ export function textOf(node) {
     if (typeof n === 'string') { acc.push(n); return }
     if (!n || typeof n !== 'object') return
     if (Array.isArray(n)) { n.forEach(walk); return }
+    const type = n.type
+    if (type && typeof type === 'object' && typeof type.type === 'function') {
+      walk(type.type(n.props))
+      return
+    }
+    if (typeof type === 'function') { walk(type(n.props)); return }
     ;(n.children || []).forEach(walk)
   }
   walk(node)

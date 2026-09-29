@@ -208,3 +208,74 @@ test('HTTP 端到端：/api/links 的引用关系、缺参与越界、不泄漏�
     await close()
   }
 })
+
+/* ── v0.14 上下文接口（端到端）──────────────────────────
+   两条路由都要验：`/api/recent` 里**顺带**给的 `context` 字段，
+   以及独立的 `/api/context`。重点是「装配层不许把内部输入发出去」。 */
+
+test('HTTP 端到端：/api/recent 带 context，且不泄漏装配层的内部输入', async () => {
+  const { base, close } = await startKnitServer()
+  try {
+    // 时间序：**不该**有分层（没有对话可依据）
+    let r = await fetch(`${base}/api/recent?sessionId=s&sort=time`)
+    let body = await r.json()
+    assert.equal(body.context, null, '时间序不该给 Context Pack')
+
+    // 相关序：这个假会话没有事件 → 仍然退回 time，于是 context 还是 null
+    r = await fetch(`${base}/api/recent?sessionId=s&sort=relevance`)
+    body = await r.json()
+    assert.equal(body.mode, 'time')
+    assert.equal(body.context, null)
+
+    // 关键纪律：无论哪条路，`docs` 里都不许出现装配层的内部字段
+    for (const doc of body.docs) {
+      for (const forbidden of ['raw', 'matchedTerms', 'strength', 'haystack', 'head']) {
+        assert.ok(!(forbidden in doc), `docs 里不该出现 ${forbidden}`)
+      }
+    }
+    // 顶层也不许把全量名次（含 raw / matchedTerms）发出去
+    assert.ok(!('ranked' in body), '顶层不该出现 ranked')
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：/api/context 返回同一份 Context Model', async () => {
+  const { base, close } = await startKnitServer()
+  try {
+    const r = await fetch(`${base}/api/context?sessionId=s`)
+    const body = await r.json()
+    assert.equal(r.status, 200)
+    assert.equal(body.ok, true)
+    // 没有对话可依据 → 空包，但结构必须齐全（客户端靠它判空态）
+    assert.deepEqual(body.context.primary, [])
+    assert.deepEqual(body.context.supporting, [])
+    assert.deepEqual(body.context.related, [])
+    // 三层空（没有对话可依据），但 `total` 仍然是工作区里真实的 Markdown 篇数 ——
+    // 客户端靠它区分「工作区是空的」与「有文档但一篇都没命中」。
+    assert.deepEqual(
+      {
+        primary: body.context.totals.primary,
+        supporting: body.context.totals.supporting,
+        related: body.context.totals.related,
+        matched: body.context.totals.matched,
+      },
+      { primary: 0, supporting: 0, related: 0, matched: 0 },
+    )
+    assert.ok(body.context.totals.total > 0, `应当报出工作区篇数，实际 ${body.context.totals.total}`)
+    assert.deepEqual(body.context.summary, {
+      primary: 0,
+      supporting: 0,
+      related: 0,
+      shown: 0,
+      matched: 0,
+      total: body.context.totals.total,
+    })
+    assert.equal(body.context.task, '')
+    // 安全头与其余 JSON 路由一致
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(r.headers.get('cache-control'), 'no-store')
+  } finally {
+    await close()
+  }
+})

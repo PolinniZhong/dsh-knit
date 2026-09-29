@@ -21,6 +21,11 @@ import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
 import { registerKnitDocsTool } from './tool.js'
 // v0.12：引用关系。`links.js` **不反过来 import 本文件**（依赖由这里注入），所以没有环。
 import { buildLinkGraph, linksOf } from './links.js'
+// v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
+// ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
+// `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
+// `renderContextText` 却没人调用 —— 那是个会与 `tool.js` 漂移的第二渲染器，已删。
+import { buildContext } from './context.js'
 
 export const name = 'dsh-knit'
 
@@ -44,6 +49,27 @@ const HAYSTACK_CHARS = 2500
 const CONV_MAX_MESSAGES = 6
 const CONV_MAX_CHARS = 6000
 const CONV_MESSAGE_CHARS = 2000
+
+/**
+ * `task` 字段（当前任务的**原文引用**）的长度上限。
+ *
+ * 右栏要显示它、agent 文本里也会带一行，所以太长的消息会把它变成一个正文块。
+ * 截断是这里唯一允许的加工 —— 它不改语义，只是裁剪，超出部分用 `…` 标出。
+ */
+const TASK_MAX_CHARS = 80
+
+/**
+ * 纯应答词表：这些不是任务，是「接着说」。
+ *
+ * `task` 要回答「现在这个任务是什么」，而「继续」「好的」回答不了这个问题 ——
+ * 把它们当任务显示，比空着更糟（空着至少不撒谎）。判定前先按标点切成段，
+ * 所以「好的，继续」也命中。
+ */
+const TASK_ACK = new Set([
+  '继续', '好的', '好', '嗯', '嗯嗯', '收到', '谢谢', '可以', '行', '对',
+  '是的', '没问题', '辛苦了', '麻烦了',
+  'ok', 'okay', 'yes', 'yep', 'y', 'thanks', 'thx', 'gotit', 'continue', 'goon', 'next', 'done',
+])
 
 /**
  * 允许内联渲染的图片类型白名单。
@@ -208,7 +234,7 @@ export function parseMarkdown(head, fileName) {
 /**
  * 读一个 Markdown 文件的元信息，命中缓存则跳过读盘。
  * @param {string} absPath - 绝对路径
- * @returns {Promise<object|null>} 解析结果（含小写 haystack），读失败返回 null
+ * @returns {Promise<object|null>} 解析结果（含小写 haystack 与原文首部 head），读失败返回 null
  */
 async function readDoc(absPath) {
   let st
@@ -237,6 +263,9 @@ async function readDoc(absPath) {
     size: st.size,
     title,
     summary,
+    // ⚠️ 原文首部**留在缓存里**（v0.14）：上下文装配要用它抽引用关系。
+    // 它已经在内存里了 —— 再读一遍盘才是浪费。`publicDoc()` 不会把它发出去。
+    head,
     hayTitle: title.toLowerCase(),
     haySummary: summary.toLowerCase(),
     hayBody: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
@@ -371,6 +400,8 @@ export async function collectDocs(root) {
       summary: meta.summary,
       size: meta.size,
       mtimeMs: meta.mtimeMs,
+      // 原文首部：`buildContextFor()` 抽引用关系用（v0.14）。内部字段，不下发。
+      head: meta.head,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
@@ -403,26 +434,81 @@ function messageText(message) {
 }
 
 /**
- * 取会话里最近的若干条人机对话文本（**最新在前**）。
+ * 把一段文本压成可显示的单行。
+ * @param {string} text - 原始文本
+ * @returns {string} 折叠空白后的文本
+ */
+function tidyText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 整条消息是否**只由应答词组成**（切成段后逐段查 `TASK_ACK`）。
+ * @param {string} tidy - 已折叠空白的文本
+ * @returns {boolean} 是否只是应答
+ */
+function isAcknowledgementOnly(tidy) {
+  const parts = tidy.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  if (parts.length === 0) return false
+  return parts.every((part) => TASK_ACK.has(part.toLowerCase()))
+}
+
+/**
+ * 判断一条用户消息能不能当「任务」引用。
+ *
+ * 全部是确定性判定，没有任何主观打分：
+ *   - 折叠空白后至少 2 个字符；
+ *   - 至少含一个字母或汉字（纯数字 / emoji / 符号不算）；
+ *   - 不能只是应答词（「继续」「好的」不是任务）。
+ *
+ * @param {string} text - 用户消息文本
+ * @returns {boolean} 是否可作为 `task` 引用
+ */
+function isSubstantiveTask(text) {
+  const tidy = tidyText(text)
+  if (tidy.length < 2) return false
+  if (!/\p{L}/u.test(tidy)) return false
+  return !isAcknowledgementOnly(tidy)
+}
+
+/**
+ * 把用户消息原文截成 `task` 字段的值。
+ * @param {string} text - 用户消息文本
+ * @returns {string} 截断后的单行文本
+ */
+function taskText(text) {
+  const tidy = tidyText(text)
+  if (tidy.length <= TASK_MAX_CHARS) return tidy
+  return `${tidy.slice(0, TASK_MAX_CHARS - 1)}…`
+}
+
+/**
+ * 取会话里最近的若干条人机对话文本（**最新在前**），外加当前任务的原文引用。
  *
  * 只收 `source.kind === 'user'` 的 user/message —— `agent.inject()` 塞进来的
  * 合成上下文（AGENTS.md、skill 内容、文件变更通知）不是用户意图，会把话题带偏。
  *
+ * `task` 与用于检索的窗口**同源**：都只看最近 `CONV_MAX_MESSAGES` 条。这不是偷懒 ——
+ * 让「右栏显示的任务」和「实际排序依据的对话」来自两个不同窗口，用户会对不上账。
+ *
  * @param {object} session - 宿主会话对象
- * @returns {{texts: string[], seq: number}} 对话文本与最新事件的 seq
+ * @returns {{texts: string[], seq: number, task: string}} 对话文本、最新事件 seq、任务原文
  */
 function recentConversation(session) {
   let events
   try {
     events = session && typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : null
   } catch {
-    return { texts: [], seq: -1 }
+    return { texts: [], seq: -1, task: '' }
   }
-  if (!Array.isArray(events) || events.length === 0) return { texts: [], seq: -1 }
+  if (!Array.isArray(events) || events.length === 0) return { texts: [], seq: -1, task: '' }
 
   const texts = []
   let seq = -1
   let chars = 0
+  // 从新往旧扫，第一条通过 `isSubstantiveTask()` 的用户消息就是当前任务。
+  // 用**第一条**而不是最长的：任务会变，「现在在做什么」由最近那句说了算。
+  let task = ''
 
   for (let i = events.length - 1; i >= 0 && texts.length < CONV_MAX_MESSAGES; i -= 1) {
     const event = events[i]
@@ -433,6 +519,7 @@ function recentConversation(session) {
       const source = event.data && event.data.source
       if (source && source.kind && source.kind !== 'user') continue
       text = messageText(event.data)
+      if (!task && isSubstantiveTask(text)) task = taskText(text)
     } else if (event.type === 'assistant/message') {
       text = messageText(event.data && event.data.message)
     } else {
@@ -448,29 +535,38 @@ function recentConversation(session) {
     if (chars >= CONV_MAX_CHARS) break
   }
 
-  return { texts, seq }
+  return { texts, seq, task }
 }
 
 /**
- * 取一个会话当前的话题关键词，按最新事件 seq 缓存。
+ * 取一个会话当前的检索关键词与任务引用，按最新事件 seq 缓存。
+ *
+ * 两者一起缓存是因为它们**必须来自同一次读数** —— 分开缓存会在「用户刚说完一句话」
+ * 的那个 5 秒轮询里出现「词已经更新、任务还是上一句」的错位。
+ *
  * @param {object} session - 宿主会话对象
  * @param {string} sessionId - 会话 id（缓存键）
- * @returns {Array<{term:string,weight:number}>} 关键词表
+ * @returns {{keywords: Array<{term:string,weight:number}>, task: string}} 关键词表与任务原文
  */
-function keywordsFor(session, sessionId) {
-  const { texts, seq } = recentConversation(session)
+function conversationFor(session, sessionId) {
+  const { texts, seq, task } = recentConversation(session)
   const hit = convCache.get(sessionId)
-  if (hit && hit.seq === seq) return hit.keywords
+  if (hit && hit.seq === seq) return hit
 
   const keywords = extractKeywords(texts, 30)
-  convCache.set(sessionId, { seq, keywords })
-  return keywords
+  const entry = { seq, keywords, task }
+  convCache.set(sessionId, entry)
+  return entry
 }
 
 /* ── 对外载荷 ───────────────────────────────────────── */
 
 /**
  * 剥掉内部字段，得到发给浏览器的文档记录。
+ *
+ * ⚠️ `raw` 与 `matchedTerms` **必须**留在这里被剥掉（v0.14）：它们是上下文装配的
+ * 内部输入，泄漏出去就等于对外给了一套第二分数（`test/host.test.mjs` 有守卫）。
+ *
  * @param {object} doc - 内部文档记录
  * @returns {object} 公开记录
  */
@@ -497,7 +593,10 @@ function publicDoc(doc) {
  *   排序上下文；`kind` 为 `doc`（默认，仅 Markdown）、`media`（仅图片/视频）或 `all`；
  *   `query` 非空时**用它排序，而不是用当前对话**（v0.7 的 agent 工具走这条路）；
  *   HTTP 路由不传 `query`，所以 `/knit/api/recent` 的行为逐字不变
- * @returns {Promise<object>} 给浏览器的载荷
+ * @returns {Promise<object>} 给浏览器的载荷。
+ *   ⚠️ **不要把这个对象直接 `sendJson`** —— 它现在带一个 `ranked` 键（全量名次，
+ *   含 `raw` 与 `matchedTerms`），是给 `buildContextFor()` 用的**内部输入**。
+ *   HTTP 路由必须走 `publicScanPayload()`（`test/host.test.mjs` 有守卫）。
  */
 export async function scan(root, limit, options = {}) {
   const collected = await collectDocs(root)
@@ -522,15 +621,22 @@ export async function scan(root, limit, options = {}) {
   let keywords = NO_KEYWORDS
   let mode = 'time'
   let matched = []
+  // 当前任务的**原文引用**（SDD §12）。只在「对话驱动」这条路上有值：
+  // 显式 query 路径下模型自己知道在问什么，把 query 当「任务」是编的。
+  let task = ''
 
   if (wantRelevance) {
     // 调用方给了明确的 query（v0.7 的 agent 工具走这条路）：把它当成**一条最新的消息**，
     // 于是走的是完全相同的抽取与门槛规则，不引入第二条抽取路径。
     // 不进 convCache —— 那个缓存按 session seq 键控，塞 query 进去会互相污染。
     const explicitQuery = typeof options.query === 'string' ? options.query.trim() : ''
-    keywords = explicitQuery
-      ? extractKeywords([explicitQuery], 30)
-      : keywordsFor(options.session, sessionId)
+    if (explicitQuery) {
+      keywords = extractKeywords([explicitQuery], 30)
+    } else {
+      const conv = conversationFor(options.session, sessionId)
+      keywords = conv.keywords
+      task = conv.task
+    }
     // 没有对话可依据时老实退回时间序，而不是假装排了个序
     mode = keywords.length > 0 ? 'relevance' : 'time'
   }
@@ -560,7 +666,156 @@ export async function scan(root, limit, options = {}) {
     mode,
     topic,
     keywords: mode === 'relevance' ? matched.slice(0, 8) : [],
+    // 全量名次（未按 limit 切片）。**只给上下文装配用**，由 `publicScanPayload()` 剥掉。
+    // 放在这里而不是让调用方再扫一遍，是 §二十「不要为了 Context Pack 再扫描一次
+    // 整个 Workspace」那条要求的实现：这里复用同一次 `rankByRelevance` 的结果。
+    ranked: mode === 'relevance' ? ordered : [],
+    // 任务原文。**也不下发**（由 `publicScanPayload()` 一并剥掉）—— 它只喂装配层与右栏。
+    // 剥掉不是为了保密（这是用户自己刚说过的话），而是为了不动 v0.13 的响应形状：
+    // `context.task` 已经把这个值带出去了，顶层再来一份是重复。
+    task: mode === 'relevance' ? task : '',
     docs: ordered.slice(0, limit).map(publicDoc),
+  }
+}
+
+/**
+ * 把 `scan()` 的载荷压成**可以发给浏览器/模型**的那一份。
+ *
+ * 存在的唯一理由是 `ranked`（全量名次、含 `raw` 与 `matchedTerms`）必须被剥掉 ——
+ * 它是装配层的内部输入，发出去就等于对外给了一套第二分数，而且响应体会大好几倍。
+ * `task` 同理：装配层已经把它放进 `context.task` 了。
+ * HTTP 路由与 agent 工具都只许返回这个函数的产物。
+ *
+ * @param {object} payload - `scan()` 的产物
+ * @returns {object} 公开载荷（与 v0.13 逐字一致，外加 v0.14 的 `context`）
+ */
+export function publicScanPayload(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  const { ranked, task, ...rest } = payload
+  void ranked
+  void task
+  return rest
+}
+
+/**
+ * 按需建引用图。
+ *
+ * `withLinks` 为假时**连图都不建** —— 媒体档 / 时间序 / 悬停浮层的条数不需要分层，
+ * 不该为它们读全库（这是 §二十「不要为了 Context Pack 再扫描一次整个 Workspace」
+ * 那条要求的一半；另一半是复用 `rankByRelevance` 已经算好的名次与命中词）。
+ *
+ * `read` 用文档记录上现成的 `head`（`collectDocs` 解析 title / summary 时已经读过
+ * 同样的 16KB）—— **零额外 I/O**。代价是只看头部 16KB，长文档尾部的引用会漏，
+ * 但那只影响「哪些邻居进 Supporting」，不影响任何一篇的名次。
+ *
+ * @param {string} root - 工作区根
+ * @param {boolean} withLinks - 是否要引用关系
+ * @param {Map<string, object>} byRel - 本次扫描到的文档（按 rel）
+ * @returns {Promise<object|null>} 图或 null
+ */
+async function linkGraphFor(root, withLinks, byRel) {
+  if (!withLinks) return null
+  try {
+    return await buildLinkGraph(root, {
+      list: async () => ({ docs: [...byRel.values()], truncated: false }),
+      read: async (_root, rel) => {
+        const entry = byRel.get(rel)
+        if (!entry || typeof entry.head !== 'string') return { ok: false }
+        return { ok: true, text: entry.head }
+      },
+    })
+  } catch {
+    // 图建不起来只是少一个上下文信号 —— 分层退化成「只看命中」，不报错。
+    return null
+  }
+}
+
+/**
+ * 装配一个工作区的 Context Pack（v0.14）。
+ *
+ * 顺序固定：`collect → relevance → links → context assembly`，四步复用同一批结果。
+ * `ranked` 为空时**不读盘**（媒体档 / 时间序走的就是这条），直接返回空包。
+ *
+ * @param {string} root - 工作区根
+ * @param {{ranked?: Array<object>, topic?: string, task?: string, total?: number, withLinks?: boolean}} [options] -
+ *   `ranked` 是 `scan()` 里的全量名次（含 `raw` 与 `matchedTerms`）；
+ *   `task` 是当前任务的**原文引用**，原样透传给 `buildContext()`，这里不生成也不改写
+ * @returns {Promise<object>} Context Pack
+ */
+export async function buildContextFor(root, options = {}) {
+  const ranked = Array.isArray(options.ranked) ? options.ranked : []
+  const total = Number.isInteger(options.total) ? options.total : ranked.length
+  const task = typeof options.task === 'string' ? options.task : ''
+  const empty = () => buildContext({ ranked: [], topic: options.topic || '', task, total })
+  if (ranked.length === 0) return empty()
+
+  const byRel = new Map()
+  for (const doc of ranked) {
+    if (doc && doc.rel) byRel.set(String(doc.rel), doc)
+  }
+
+  const graph = await linkGraphFor(root, options.withLinks !== false, byRel)
+  return buildContext({ ranked, topic: options.topic || '', task, total, graph })
+}
+
+/**
+ * 给 Context Pack 补一份**计数摘要**（不是分数）。
+ *
+ * 客户端需要它来做两件事：① 在没有可见条目时区分「这个工作区是空的」与
+ * 「有文档但当前话题一篇都没命中」；② 显示「相关上下文还有 N 篇」。
+ * 数字全部是**集合大小**，没有任何相似度含义。
+ *
+ * @param {object} pack - `buildContext()` 的产物
+ * @returns {object} 带 `summary` 的包
+ */
+function withStats(pack) {
+  const primary = Array.isArray(pack.primary) ? pack.primary : []
+  const supporting = Array.isArray(pack.supporting) ? pack.supporting : []
+  const related = Array.isArray(pack.related) ? pack.related : []
+  return {
+    ...pack,
+    summary: {
+      primary: primary.length,
+      supporting: supporting.length,
+      related: related.length,
+      // 三层加起来的**可见条目数**（客户端「全部」档要用它做上限判断）
+      shown: primary.length + supporting.length + related.length,
+      // 本批语料里命中了话题的篇数 —— 「有文档但一篇都没命中」靠它判
+      matched: pack.totals ? pack.totals.matched : 0,
+      total: pack.totals ? pack.totals.total : 0,
+    },
+  }
+}
+
+/**
+ * 一次请求里的上下文载荷：不适用（时间序 / 媒体档 / 没有命中）时返回 `null`。
+ *
+ * **只在文档档 + 相关序 + 有命中词时装配** —— 其余情形返回 null，
+ * 客户端于是退回它一直在用的平铺列表，行为与 v0.13 逐字一致。
+ *
+ * @param {string} root - 工作区根
+ * @param {object} payload - `scan()` 的产物
+ * @param {string} sort - 当前排序模式
+ * @param {string} kind - 当前条目类型
+ * @returns {Promise<object|null>} Context Pack（带 `summary`）或 null
+ */
+async function contextPayload(root, payload, sort, kind) {
+  if (!payload || payload.mode !== 'relevance' || sort !== 'relevance' || kind !== 'doc') return null
+  const ranked = Array.isArray(payload.ranked) ? payload.ranked : []
+  if (ranked.length === 0) return null
+  try {
+    const pack = await buildContextFor(root, {
+      ranked,
+      topic: payload.topic,
+      task: payload.task,
+      total: payload.total,
+      // 引用图只在**真有命中**时才值得建（零命中时 Primary 为空，邻居逻辑没有锚点）
+      withLinks: ranked.some((doc) => Number(doc.raw) > 0),
+    })
+    return withStats(pack)
+  } catch {
+    // 装配失败不该让整个列表接口失败 —— 退回 null，面板照常出平铺列表。
+    return null
   }
 }
 
@@ -816,7 +1071,37 @@ export function apply(ctx) {
           const payload = await scan(root, limit, {
             session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
           })
-          sendJson(res, 200, payload)
+          const body = publicScanPayload(payload)
+          // v0.14：相关模式下顺带给出任务上下文分层。
+          // ⚠️ 带上 `context` 是**可选**的（老客户端忽略它），而 `docs` 一字未动。
+          body.context = await contextPayload(root, payload, sort, kind)
+          sendJson(res, 200, body)
+          return
+        }
+
+        if (url.pathname === `${ROUTE_PREFIX}/api/context`) {
+          // v0.14：独立的上下文接口。与 `/api/recent` 分开是为了**不让只想拿列表的
+          // 调用方被迫付引用图的钱** —— 面板走 recent 里的 `context` 字段，
+          // 这个路由留给「只要上下文、不要列表」的调用方。
+          const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || MAX_DOCS, 1), MAX_DOCS)
+          const sort = url.searchParams.get('sort') === 'time' ? 'time' : 'relevance'
+          const kindParam = url.searchParams.get('kind')
+          const kind = kindParam === 'all' || kindParam === 'media' ? kindParam : 'doc'
+          const payload = await scan(root, limit, {
+            session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
+          })
+          // ⚠️ 与 `/api/recent` 的 `context` 字段**语义不同**：这里永远返回一个
+          // 结构齐全的包（没有命中就是三层全空），不用 null。
+          // null 是「请退回平铺列表」，那是 recent 的语义；独立的上下文接口
+          // 没有平铺列表可退，返回 null 只会让调用方多一次判空。
+          const context = withStats(await buildContextFor(root, {
+            ranked: Array.isArray(payload.ranked) ? payload.ranked : [],
+            topic: payload.topic,
+            task: payload.task,
+            total: payload.total,
+            withLinks: payload.mode === 'relevance' && kind === 'doc',
+          }))
+          sendJson(res, 200, { ok: true, root, mode: payload.mode, topic: payload.topic, context })
           return
         }
 
@@ -869,7 +1154,7 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context`)
       return () => unregister()
     }, 'dsh-knit: host route')
   })
@@ -881,7 +1166,7 @@ export function apply(ctx) {
   // 两条路互不依赖：没有 tools 服务时，浏览器那半边照常工作。
   ctx.inject(['tools'], (toolCtx) => {
     toolCtx.effect(
-      () => registerKnitDocsTool(toolCtx, scan, readDocument),
+      () => registerKnitDocsTool(toolCtx, scan, readDocument, buildContextFor),
       'dsh-knit: knit_docs tool',
     )
     console.log(`[${name}] agent tool ready: knit_docs`)

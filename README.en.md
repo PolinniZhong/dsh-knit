@@ -131,17 +131,102 @@ All of it is string arithmetic — **no embeddings, no model calls**.
 
 ---
 
+## Current task context (v0.14)
+
+Ranking answers "which documents look most like this conversation". But the question you
+usually have is a different one:
+
+> **For this task, what in the project should I read first?**
+
+The Context Pack is the answer to that question, but it is a **data-layer structure**
+(Primary / Supporting / Related, each entry carrying a deterministic reason) — **not a card of
+its own**. So it lands directly in the document list: in relevance mode the document view goes
+from one flat list to **three tier groups**, each group name followed by a very short hint.
+
+```
+┌─ Documents ──────────────────────────────┐
+│ Primary          read first              │
+│   01 ● Relevance ranking algorithm 5m ago│
+│      title matches: ranking              │
+│                                           │
+│ Supporting       supporting              │
+│   02  Ranking evaluation set       2h ago │
+│      body matches: term counting         │
+│                                           │
+│ Related          background              │
+│   03  CHANGELOG.md                 12d ago│
+│      body matches: ranking               │
+└───────────────────────────────────────────┘
+```
+
+> The sketch leaves out each entry's summary. **The real structure is: a number in its own column
+> on the far left (vertically centred with the first line), and to its right a stack of one line —
+> Primary dot + title + relative time (right-aligned) — then the summary** (**no path** — it is not
+> shown in the list; the path lives in the preview header's breadcrumb). And the list is
+> **always one column** however wide the pane gets.
+
+**No rules between groups**: hierarchy comes from 16px of space, the group name and type size,
+never from separators. No scores, no percentages, no stars — "why is it here" states
+deterministic facts only.
+
+> **The right-hand "Current task context" panel has been removed** (2026-09-29). It said the same
+> thing the three groups already say (the task sits in the quiet meta line above the list, the hit
+> count duplicates the header total, and the three evidence kinds *are* the three group names), it
+> added little visually, and it pushed Knit toward being an AI dashboard. Its
+> resize / pull-out / snap-to-right-edge behaviour went with it — see `CHANGELOG.md`.
+
+### The tiers are deterministic rules, not an AI judgement
+
+| Tier | When a document enters it | Cap |
+|---|---|---|
+| **Primary** | It matched, **and** it is *grounded* (a topic term hits its title or summary), **and** its relevance is not background noise (≥ 30% of the top score) | 1 |
+| **Supporting** | It has a **deep hit** on a *focus term* (that term is discussed in more than one document, and this document discusses it the most); **or** it is linked to a primary document (either direction, labelled separately) | 3 |
+| **Related** | Everything else that matched, plus zero-hit link neighbours | 5 |
+
+A cap is a **ceiling, not a quota**: primary is allowed to be empty (on real workspaces a fair
+share of topics genuinely have no document that discusses them), and so is related. **If there
+is no checkable reason, the document does not appear** — a document with zero hits and no link
+is not "related to the current task"; the only caption it could carry is "this might help you",
+which is exactly what this release refuses to print.
+
+**"Why it is here"** is always a checkable fact:
+
+| Reason | What it says |
+|---|---|
+| title / summary / body matches the topic: `term` | It really matched, and here is which term |
+| referenced by a primary document | A path in the primary document points here |
+| references a primary document | It mentions the primary document |
+
+There is **no** "the AI thinks this matters" and **no** percentages, stars or confidence bars.
+
+### Boundaries (stated, not oversold)
+
+- **A link is not "more relevant".** Measured: the link graph does not close the vocabulary-mismatch
+  gap. So a link can only place a document in supporting / related — **never** in primary.
+- **The ranking engine is unchanged.** This release adds a projection layer *above* ranking;
+  BM25 scoring and its evaluation (top-1 / MRR / trap cases) are untouched. If retrieval never
+  surfaced the right document, tiering can only tier what was surfaced — it cannot fix recall.
+- **No task understanding.** The "Current task" line in the panel holds the **verbatim text of the
+  most recent user message**, not a summary of it — Knit does not interpret the sentence, it just
+  puts it where you can see it. Actually summarising it would need a model, and Knit calls none.
+
+---
+
 ## Also for the agent: the `knit_docs` tool
 
 The same ranking that you see in the panel is also exposed to the model.
 
 Once installed, the agent's tool list gains `knit_docs`: it can ask *"which documents in this
-project are most relevant to what we're discussing?"* and get back **relevance-ordered** paths,
-titles and summaries — then open one with its own `read` tool.
+project are most relevant to what we're discussing?"* and get back **the same Context Pack** the
+panel shows — the `primary` / `supporting` / `related` tiers, each item carrying its path, title,
+summary, a **structured reason** (`direct` / `titleMatch` / `summaryMatch` / `bodyMatch` /
+`linkTarget` / `linkSource` / `related`), its **project role** (`impl` / `test` / `config` /
+`design` / `doc`) and the matching snippet — then open one of them with its own `read` tool.
 
 **Why it helps**: to cite a document that already exists, an agent can only guess paths or glob
-and `read` them one by one — slow and token-hungry. Knit has **already computed that ranking**
-every refresh; this tool just hands it over.
+and `read` them one by one. Knit has **already computed that ranking** every refresh; this tool
+just hands it over — what it removes is **the "which few are relevant?" guess** (measured: an
+agent holding the Pack no longer globs for candidates).
 
 **Read-only, and it stores nothing**: it reads the files that are already in the project — this is
 not "memory". The difference from memory plugins is that **theirs start empty** (the agent has to
@@ -212,6 +297,7 @@ feature request.
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
+| The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path breadcrumb** in the preview header, which is the one that stays | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
 | One-click switch between **Docs / Images & video / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline | ✅ |
@@ -224,7 +310,7 @@ feature request.
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
 | **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout) | ✅ |
-| Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse | ✅ |
+| Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse (`←` `→` span rows in the **media grid only** — the document list is always one column, so they have no spatial meaning there) | ✅ |
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
 | Zero model calls, zero network egress | ✅ |
@@ -242,11 +328,17 @@ six columns at this width, cells about 112px. Videos show their first frame as a
 glyph and a duration badge. These are the workspace's real image and SVG files; this particular
 workspace happens to hold several screenshots and two icon files.*
 
-![Screenshot of the All tab: documents laid out in two columns above, media with a count only below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+![Screenshot of the All tab: documents above, media with a count only below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
 *All: documents on top (max 4, with a "View all →" link when truncated) and images & video below
-(**never truncated**, count only). Documents lay out in **two columns** here, and all four fields —
-title, time, summary, path — are still present: column count changes the layout, never the data.*
+(**never truncated**, count only). All four fields — title, time, summary, path — were present.*
+
+⚠️ **This screenshot is from v0.13**, when documents could still lay out in two columns *and* rows still
+carried the path. **Since v0.14 the list is always one column** (the number now sits in its own column
+on the far left, with Primary dot + relative time, then the title, stacked to its right), and **the path
+is no longer shown in the list** (the preview header's breadcrumb always shows the full path, so the
+duplicate was dropped).
+The screenshot has not been retaken yet.
 
 ---
 
@@ -288,6 +380,11 @@ The relevance figure only affects ordering — it is **never displayed and never
   video `mp4/m4v/webm/mov/ogv`; images ≤ 12MB and video ≤ 256MB or they are not listed
 - **Media matches relevance by filename only**: no visual/audio content is parsed — give
   screenshots and recordings searchable names
+- **What we measured is *locating*, not *saving work***: in the on-machine A/B (frozen protocol,
+  four questions), an agent that could call `knit_docs` did **not** explore less — Control 4.75 →
+  Treatment 6.0 total tool calls, and no single question went down. The Pack did replace the
+  initial `glob` for candidates, but the **doubled `read` count** ate that back. It points
+  attention at the right file; that is **not** the same as the agent reading fewer files
 - **Right-sidebar state is memory-only**: a refresh or a new session collapses it again
 
 ---
@@ -298,7 +395,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 285 tests, zero dependencies, no npm install needed
+npm test          # 395 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -315,10 +412,15 @@ knit/
 ├── cordis.patch.yml      # the insert line mounted into the plugin tree
 ├── assets/               # icon source (path inlined into client.js)
 ├── src/
-│   ├── host/index.js     # /knit/api/recent · /doc · /raw
+│   ├── host/index.js     # /knit/api/recent · /doc · /raw · /links · /context
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
+│   ├── host/links.js     # reference parsing (pure; never touches ranking)
+│   ├── host/context.js   # context assembly: the three-tier Context Pack (pure, zero I/O)
+│   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 285 tests
+└── test/                 # 395 tests
+    ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
+    └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```
 
 Details and trade-offs live in the source comments; see [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -59,6 +59,15 @@ const SNIPPET_CHARS = 200
 const SNIPPET_WINDOW = 2500
 
 /**
+ * 「工作区里有文档，但当前话题一个词都没命中」时补的那句真话。
+ *
+ * 拼自 `SNIPPET_WINDOW` 而不是再抄一遍 2500 —— 这个窗口在本仓库已经有两份
+ * （`index.js` 的 `HAYSTACK_CHARS` 和这里的 `SNIPPET_WINDOW`），不要有第三份。
+ */
+const HAYSTACK_NOTE =
+  `Matches come from the first ${SNIPPET_WINDOW} characters of each file; use grep for anything deeper.`
+
+/**
  * 模型面向的描述。**必须短** —— 它会进每一次请求的系统提示词。
  *
  * v0.8 加过「Reports how many exist in total」，**但真机验证显示没用**：
@@ -76,11 +85,11 @@ const SNIPPET_WINDOW = 2500
  * 所以描述要点名两件它自己做不到的事：**稀有词权重**（不是数次数）
  * 与**不依赖文件名**。最后一句是行为引导 —— 直说「别自己来」。
  */
-const DESCRIPTION = 'List Markdown documents that already exist in this project, '
-  + 'ranked by relevance to the current conversation (or to an explicit query). '
-  + 'The ranking weighs rare terms above common ones and normalizes document length, '
-  + 'so it beats matching filenames or counting keyword hits — prefer it to doing that yourself. '
-  + 'Reads the workspace only; stores nothing and calls no model.'
+const DESCRIPTION = 'Project context for the current task, from the workspace Markdown: '
+  + 'primary (read first) / supporting (evidence, implementation) / related. '
+  + 'Ranked by IDF-weighted relevance to the conversation (or an explicit query), then split '
+  + 'by deterministic local rules — prefer it to globbing filenames or counting keyword hits. '
+  + 'Reads the workspace only; stores nothing, calls no model.'
 
 /**
  * 参数 schema。与 `defineTool` 的编译产物逐字一致
@@ -95,7 +104,8 @@ const PARAMETERS = {
     },
     limit: {
       type: 'integer',
-      description: `How many documents to return (1-${MAX_LIMIT}, default ${DEFAULT_LIMIT}).`,
+      description: `How many documents to consider (1-${MAX_LIMIT}, default ${DEFAULT_LIMIT}). `
+        + 'They are grouped into the context tiers, not returned as one flat list.',
     },
   },
 }
@@ -105,17 +115,89 @@ const PARAMETERS = {
  * 相关度是**相对**分数（永远有一篇 100%，且每次刷新可能换人当），
  * 面板里就不显示它，给模型看只会更糟 —— 它会把 86 当成绝对置信度去推理。
  * **顺序即相关度。**
+ *
+ * v0.14：从「一列文档」变成**三层 Context Pack**。结构变了，纪律没变 ——
+ * 仍然不返回分数、不返回正文、不返回绝对路径、不返回 haystack、不返回 embedding。
+ * 新增的 `reason` 是**结构化理由**（码 + 命中的词），不是自然语言推断：
+ * 宿主只给码，模型自己就能看懂 `direct` / `linkTarget` / `testSupport` 是什么意思。
  */
+const ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    rel: { type: 'string' },
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    mtimeMs: { type: 'integer' },
+    // 项目里的角色：impl / test / config / design / doc。纯路径规则，不是内容理解。
+    source: { type: 'string', enum: ['impl', 'test', 'config', 'design', 'doc'] },
+    // 条目是什么：md / image / video。
+    // ⚠️ **故意不给它 enum**。取值集合归 `index.js` 的 `kindOfName()` 所有；
+    // 在这里钉一份名单，等于以后每加一种文件类型就让工具在**校验层**静默失败一次。
+    // v0.14 正是这么坏掉的：`kind` 当时压根没被声明，而 schema 是 `additionalProperties: false`。
+    kind: { type: 'string' },
+    reason: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        // 为什么它在这个包里。全部来自确定性事实（命中字段 / 引用关系 / 文件角色）。
+        code: {
+          type: 'string',
+          enum: [
+            'direct', 'titleMatch', 'summaryMatch', 'bodyMatch',
+            'linkTarget', 'linkSource', 'related',
+          ],
+        },
+        // 命中的话题词（没有命中就是空数组 —— 不编造）。
+        terms: { type: 'array', items: { type: 'string' } },
+        // 命中跨了几个字段（0–3）。
+        fields: { type: 'integer' },
+        // 那句话的代表词：标题命中时取标题里那个词，正文命中时取正文里那个词。
+        // 与 `terms` 的区别是它是**单个**。
+        term: { type: 'string' },
+      },
+      // `term` 在 `explainContext()` 的每条分支上都有值（取不到时是空串），
+      // 所以它是 required，不是 optional —— schema 要如实描述。
+      required: ['code', 'terms', 'fields', 'term'],
+    },
+    // v0.11：命中的那一小段**原文**（不是整篇）。**可选** ——
+    // 时间序模式没有命中词，抽不出来就不带这个字段，
+    // 而不是给个空串假装有。
+    snippet: { type: 'string' },
+  },
+  // `kind` 也是 required：`buildContext()` 每条都给了（取不到时回落 `'md'`）。
+  // 声明成可选就等于允许「有的条目有 kind、有的没有」这种形状漂移。
+  required: ['rel', 'title', 'summary', 'mtimeMs', 'kind', 'source', 'reason'],
+}
+
 const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     mode: { type: 'string', enum: ['relevance', 'time'] },
     topic: { type: 'string' },
-    // 工作区里**一共有多少篇**（不是返回了几条）。
-    // 给这个数是为了让模型知道结果不是「随便挑的几条」，不必再自己 glob 一遍
-    // 做交叉验证 —— v0.8，依据是真机验收里观察到的行为。
+    // 本批语料里**一共有多少篇** Markdown —— 让模型知道这不是「随便挑的几条」，
+    // 不必再自己 glob 一遍做交叉验证（v0.8，依据是真机验收里观察到的行为）。
     total: { type: 'integer' },
+    // v0.14：三层。`primary` 是「先读这几篇」，`supporting` 是「证据 / 实现 / 下一步」，
+    // `related` 是「背景，不要从这里开始」。名字与面板逐字一致。
+    primary: { type: 'array', items: ITEM_SCHEMA },
+    supporting: { type: 'array', items: ITEM_SCHEMA },
+    related: { type: 'array', items: ITEM_SCHEMA },
+    // 渲染头部那条「N matching documents」用的计数。**它不是分数** ——
+    // 只是「本批语料里命中了几篇 / 一共有几篇」，给模型一个「有没有漏」的锚。
+    // 只有 relevance 模式有，所以不在 `required` 里。
+    totals: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        matched: { type: 'integer' },
+        total: { type: 'integer' },
+      },
+      required: ['matched', 'total'],
+    },
+    // 时间序（对话内容还不足，退回一列「最近改动的」）走这条。**形状比三层窄** ——
+    // 没有命中词，就没有 `source` / `reason` 可给，不编造。只有 time 模式有。
     docs: {
       type: 'array',
       items: {
@@ -126,16 +208,13 @@ const OUTPUT_SCHEMA = {
           title: { type: 'string' },
           summary: { type: 'string' },
           mtimeMs: { type: 'integer' },
-          // v0.11：命中的那一小段**原文**（不是整篇）。**可选** ——
-          // 时间序模式没有命中词，抽不出来就不带这个字段，
-          // 而不是给个空串假装有。
           snippet: { type: 'string' },
         },
         required: ['rel', 'title', 'summary', 'mtimeMs'],
       },
     },
   },
-  required: ['mode', 'topic', 'total', 'docs'],
+  required: ['mode', 'topic', 'total', 'primary', 'supporting', 'related'],
 }
 
 /**
@@ -274,7 +353,7 @@ export function pickSnippet(text, terms, options = {}) {
 }
 
 /**
- * 把工具结果渲染成模型看的文本。
+ * 把 Context Pack 渲染成模型看的文本。
  *
  * **英文**：模型面向文本要的是词表稳定，不跟随界面语言 —— 官方工具
  * （`todo_write`、`present`）也都是英文硬编码。这不是 i18n 违约：
@@ -283,37 +362,104 @@ export function pickSnippet(text, terms, options = {}) {
  * **头部要说清「一共多少篇」**（v0.8）：真机验收里 agent 每次拿到结果都还要
  * 自己 `find` 一遍来确认没漏 —— 把总数写在第一行，是为了消掉这次多余的调用。
  *
- * @param {{mode: string, topic: string, total?: number, docs: Array<object>}} value - 工具结果
+ * **v0.14 改的是什么**：以前是一条按相关度排的平铺列表（`Top 5 of 23 …`），
+ * 现在是一条**带层级的任务上下文**（Primary / Supporting / Related），
+ * 每一项都带 `Why:`。真机上 agent 拿到平铺列表后仍然要自己判断
+ * 「哪篇是主文档、哪篇只是背景」—— 那正是这一版要替它省掉的判断。
+ *
+ * @param {{mode: string, topic: string, total?: number, primary?: Array<object>,
+ *   supporting?: Array<object>, related?: Array<object>,
+ *   docs?: Array<object>}} value - 工具结果（兼容 v0.13 的 `docs` 形状，供时间序使用）
+ * @param {Function} [readSnippet] - 可选：从一条结果里取它的命中段落（`doc.snippet`）。
+ *   **注入成函数而不是直接读字段**，是为了让「段落从哪来」这件事留在 `execute` 里，
+ *   渲染函数保持无副作用、可单测。
  * @returns {string} 文本
  */
-export function renderToolText(value) {
-  const docs = value && Array.isArray(value.docs) ? value.docs : []
-  const total = Number.isInteger(value && value.total) ? value.total : docs.length
-  if (docs.length === 0) return 'No Markdown documents found in the workspace.'
+export function renderToolText(value, readSnippet) {
+  const mode = value && value.mode === 'relevance' ? 'relevance' : 'time'
+  const topic = value && typeof value.topic === 'string' ? value.topic : ''
+  const total = Number.isInteger(value && value.total) ? value.total : 0
 
-  // 「共 total 篇」回答「是不是漏了」；「IDF-weighted … not a keyword count or filename match」
-  // 回答「凭什么信这个排名」—— 后者才是 agent 自己再 grep 一遍的真正原因（v0.9）。
-  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
+  // 退化（时间序）与「没有对话」是同一件事的两面：都没有命中词。
+  if (mode !== 'relevance') {
+    const docs = (value && Array.isArray(value.docs)) ? value.docs : []
+    if (docs.length === 0) return 'No Markdown documents found in the workspace.'
+    const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
+    return [`Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified${scope}:`,
+      ...docs.map((doc, index) => `${index + 1}. ${doc.rel} — ${doc.title}`)].join('\n')
+  }
 
-  // 退化情形要**如实说明**，与面板那行「对话内容还不足，暂按最新排序」同一个口径
-  const head = value.mode === 'time'
-    ? `Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified${scope}:`
-    : `Top ${docs.length}${scope} in this workspace, ranked by IDF-weighted relevance to `
-      + `${value.topic ? `「${value.topic}」` : 'the current conversation'} `
-      + '(rare terms weighted, length-normalised — not a keyword count or filename match):'
+  const primary = (value && Array.isArray(value.primary)) ? value.primary : []
+  const supporting = (value && Array.isArray(value.supporting)) ? value.supporting : []
+  const related = (value && Array.isArray(value.related)) ? value.related : []
 
-  const lines = docs.map((doc, index) => {
-    const summary = oneLine(doc.summary)
-    // 命中段落（v0.11）：给模型判断「要不要读整篇」用。
-    // 用一个 `match:` 前缀把它和**首段摘要**区分开 —— 两者都是一行压平的文本，
-    // 不加标记的话模型分不清哪行是什么。
-    const snippet = doc.snippet ? flatten(doc.snippet, SNIPPET_CHARS) : ''
-    return `${index + 1}. ${doc.rel} — ${doc.title}`
+  // 三层都空 = 真的没有可看的上下文。**不能只判 total** —— 工作区有文档、
+  // 但当前话题一篇都没命中、且一条引用邻居都没有时，`total` 是正数而三层全空。
+  if (primary.length + supporting.length + related.length === 0) {
+    if (total === 0) return 'No Markdown documents found in the workspace.'
+    // 文档在、但一个词都没命中 —— **不许说成「工作区里没有 Markdown」**：
+    // 那是一句假话，而且会把 agent 推向一个错的结论（「这个项目里没有相关材料」）。
+    // 真机实测：问「路径越界怎么防」时 49 篇一篇都没命中，因为文档侧只看每篇
+    // **前 2500 字**（`index.js` 的 HAYSTACK_CHARS），而这个词在 5 篇 .md 里
+    // 全部出现在 2500 字之后。说实话 + 给下一步，比一句错的空结果有用。
+    return [
+      `No document matched the current topic — 0 of ${total} Markdown document${total === 1 ? '' : 's'} contain the query terms.`,
+      HAYSTACK_NOTE,
+    ].join('\n')
+  }
+
+  /** 层内每一项：一行路径 + 标题、一行摘要、一行 `Why:`、可选的 `match:` 段落。 */
+  const lines = (items) => items.map((item, index) => {
+    const summary = oneLine(item.summary)
+    const why = whyText(item.reason)
+    const raw = typeof readSnippet === 'function' ? readSnippet(item) : ''
+    const snippet = raw ? flatten(raw, SNIPPET_CHARS) : ''
+    return `${index + 1}. ${item.rel} — ${item.title}`
       + `${summary ? `\n   ${summary}` : ''}`
+      + `${why ? `\n   Why: ${why}` : ''}`
       + `${snippet ? `\n   match: ${snippet}` : ''}`
   })
 
-  return [head, ...lines].join('\n')
+  const out = []
+  const matched = (value && value.totals && Number.isInteger(value.totals.matched))
+    ? value.totals.matched : 0
+  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
+  out.push(`Context for ${topic ? `「${topic}」` : 'the current conversation'}: `
+    + `${matched} matching document${matched === 1 ? '' : 's'}${scope}, split into `
+    + 'primary / supporting / related by deterministic local rules (first-read order — '
+    + 'not a flat relevance list; each tier is still ranked by IDF-weighted relevance):')
+
+  if (primary.length > 0) {
+    out.push('', 'Primary (read these first):', ...lines(primary))
+  }
+  if (supporting.length > 0) {
+    out.push('', 'Supporting (evidence, implementation, next step):', ...lines(supporting))
+  }
+  if (related.length > 0) {
+    out.push('', 'Related (background — do not start here):', ...lines(related))
+  }
+  return out.join('\n')
+}
+
+/**
+ * 把结构化理由翻成一句英文。**码 → 文案**，不是自然语言推断 ——
+ * 每个码背后都是一条可核验的确定性事实。
+ *
+ * @param {{code?: string, terms?: string[], fields?: number}} [reason] - `explainContext()` 的产物
+ * @returns {string} 文本
+ */
+function whyText(reason) {
+  const code = reason && reason.code ? String(reason.code) : ''
+  const terms = reason && Array.isArray(reason.terms) ? reason.terms.join(', ') : ''
+  switch (code) {
+    case 'direct': return terms ? `direct topic match in the title (${terms})` : 'direct topic match in the title'
+    case 'titleMatch': return terms ? `matched in the title (${terms})` : 'matched in the title'
+    case 'summaryMatch': return terms ? `matched in the summary (${terms})` : 'matched in the summary'
+    case 'bodyMatch': return terms ? `matched in the body (${terms})` : 'matched in the body'
+    case 'linkTarget': return 'referenced by a primary document'
+    case 'linkSource': return 'references a primary document'
+    default: return 'related in the current workspace'
+  }
 }
 
 /**
@@ -325,9 +471,13 @@ export function renderToolText(value) {
  * @param {Function} [read] - 宿主的单篇读取函数 `readDocument(root, rel)`。
  *   **同样注入**，理由与 `scan` 一样。**可选** —— 没给就只是不带命中段落，
  *   `knit_docs` 的其余行为一字不变（老调用方不会坏）。
+ * @param {Function} [contextFor] - 宿主的上下文装配函数
+ *   `contextFor(root, {ranked, topic, task, total})` → Context Pack。
+ *   **同样注入**（v0.14）：装配规则长在 `context.js` 里，工具只负责投影。
+ *   不给就退化成 v0.13 的平铺列表 —— 但那只是兜底，正常路径 always 会传。
  * @returns {object} 工具定义
  */
-export function knitDocsDefinition(scan, read) {
+export function knitDocsDefinition(scan, read, contextFor) {
   /**
    * 给一篇文档抽命中段落。
    *
@@ -357,7 +507,11 @@ export function knitDocsDefinition(scan, read) {
     parameters: PARAMETERS,
     output: {
       schema: OUTPUT_SCHEMA,
-      render: (_args, value) => [{ type: 'text', text: renderToolText(value) }],
+      // 命中段落从条目自己的 `snippet` 字段取 —— `execute` 已经把它填好了。
+      render: (_args, value) => [{
+        type: 'text',
+        text: renderToolText(value, (item) => (item && item.snippet) || ''),
+      }],
     },
     async execute(args, exec) {
       const { root, sessionId, session } = agentScope(exec)
@@ -383,27 +537,88 @@ export function knitDocsDefinition(scan, read) {
       // 时间序模式下它是空数组 ⇒ terms 为空 ⇒ 不抽段落，正合语义。
       const terms = Array.isArray(payload.keywords) ? payload.keywords : []
 
-      const docs = await Promise.all((payload.docs || []).map(async (doc) => {
-        const row = {
-          rel: String(doc.rel || ''),
-          title: String(doc.title || ''),
-          summary: doc.summary == null ? '' : String(doc.summary),
-          mtimeMs: Number.isFinite(doc.mtimeMs) ? Math.trunc(doc.mtimeMs) : 0,
+      /** 给一篇抽段落：**只用这一篇自己命中的词** —— 拿别篇的词去原文里找，抽出来的段落跟这篇无关。 */
+      const snippetOf = async (item) => {
+        const own = (item.reason && Array.isArray(item.reason.terms)) ? item.reason.terms : []
+        return snippetFor(root, item.rel, own, item.title)
+      }
+
+      // 时间序（没有对话可依据）：退回一列「最近改动的」，**不硬凑三层**。
+      if (payload.mode !== 'relevance') {
+        const recent = await Promise.all((payload.docs || []).map(async (doc) => {
+          const row = {
+            rel: String(doc.rel || ''),
+            title: String(doc.title || ''),
+            summary: doc.summary == null ? '' : String(doc.summary),
+            mtimeMs: Number.isFinite(doc.mtimeMs) ? Math.trunc(doc.mtimeMs) : 0,
+          }
+          const snippet = await snippetFor(root, row.rel, terms, row.title)
+          if (snippet) row.snippet = snippet
+          return row
+        }))
+        return {
+          mode: 'time',
+          topic: '',
+          total: Number.isInteger(payload.total) ? payload.total : 0,
+          primary: [],
+          supporting: [],
+          related: [],
+          docs: recent,
         }
-        const snippet = await snippetFor(root, row.rel, terms, row.title)
-        // 抽不到就**不带这个字段**，不写空串 —— 让「没有命中」和「命中但没抽出来」
-        // 在输出里都是「没有 match 行」，而不是一行空的 `match: `
-        if (snippet) row.snippet = snippet
-        return row
+      }
+
+      const pack = typeof contextFor === 'function'
+        ? await contextFor(root, {
+          // ⚠️ 用 `payload.ranked`（全量、未切片）而不是 `payload.docs`（已切到 limit）——
+          // 分层要在完整名次上做，否则「Primary 3 篇 + Supporting 5 篇」会把
+          // 本该是 Supporting 的文档因为切片而挤掉（它会掉进 Related，或整个消失）。
+          ranked: Array.isArray(payload.ranked) ? payload.ranked : [],
+          topic: payload.topic,
+          // 任务原文（可能为空：显式 `query` 路径没有对话可引用）。
+          // 它进 `pack.task`，但**不出现在工具返回值里** —— 模型看到的是 `output.render`
+          // 渲染的那段文本，结构化 JSON 它根本看不见；而 `OUTPUT_SCHEMA` 是封闭的
+          // （`additionalProperties: false`），加一个模型用不到的字段只会把 schema 撑开。
+          // 头部已经用 topic 标签说了「这次是按什么排的」，那比原文更省 token。
+          // Human 面板走 HTTP，`context.task` 在那里有值。
+          task: payload.task,
+          total: Number.isInteger(payload.total) ? payload.total : 0,
+        })
+        : { mode: 'relevance', topic: payload.topic || '', total: 0, primary: [], supporting: [], related: [] }
+
+      /**
+       * 把装配层的条目投影成 `ITEM_SCHEMA` 的形状。
+       *
+       * ⚠️ `mtimeMs` **必须在这里取整**。`fs.Stats.mtimeMs` 是浮点，而 schema 写的是
+       * `integer` —— v0.14 把三层条目**原样透传**过一次，于是 `knit_docs` 每次调用
+       * 都在校验层失败（`"value.primary[0].mtimeMs" must be an integer`），
+       * agent 一个 Context Pack 都拿不到。时间序那条分支一直是取整的，两边不一致。
+       */
+      const project = (item) => ({
+        ...item,
+        mtimeMs: Number.isFinite(item.mtimeMs) ? Math.trunc(item.mtimeMs) : 0,
+      })
+
+      // 逐个抽命中段落 —— **只对真正要返回的条目做 I/O**，不在全量名次上读盘。
+      const withSnippets = async (items) => Promise.all(items.map(async (raw) => {
+        const item = project(raw)
+        const snippet = await snippetOf(item)
+        return snippet ? { ...item, snippet } : item
       }))
 
       return {
-        mode: payload.mode === 'relevance' ? 'relevance' : 'time',
-        topic: typeof payload.topic === 'string' ? payload.topic : '',
-        // `scan()` 的 total 是**全量池子**的条数（在 limit 切片之前），
-        // 正好是这里要的「工作区一共有多少篇」。
-        total: Number.isInteger(payload.total) ? payload.total : 0,
-        docs,
+        mode: 'relevance',
+        topic: typeof pack.topic === 'string' ? pack.topic : '',
+        total: Number.isInteger(pack.totals && pack.totals.total) ? pack.totals.total : 0,
+        // `matched` 走 `totals` —— 头部的「N matching documents」靠它。
+        // 漏掉这一个字段会让头部永远写「0 matching documents」，而下面明明列着结果
+        // （实测踩过一次，是渲染层的一个真实缺陷，不是美观问题）。
+        totals: {
+          matched: Number.isInteger(pack.totals && pack.totals.matched) ? pack.totals.matched : 0,
+          total: Number.isInteger(pack.totals && pack.totals.total) ? pack.totals.total : 0,
+        },
+        primary: await withSnippets(pack.primary || []),
+        supporting: await withSnippets(pack.supporting || []),
+        related: await withSnippets(pack.related || []),
       }
     },
   }
@@ -417,8 +632,9 @@ export function knitDocsDefinition(scan, read) {
  * @param {object} ctx - cordis 上下文（带 `tools` 服务）
  * @param {Function} scan - 宿主的扫描函数
  * @param {Function} [read] - 宿主的单篇读取函数（抽命中段落用；可选）
+ * @param {Function} [contextFor] - 宿主的上下文装配函数（v0.14；可选）
  * @returns {() => void} 注销函数
  */
-export function registerKnitDocsTool(ctx, scan, read) {
-  return ctx.tools.register(knitDocsDefinition(scan, read))
+export function registerKnitDocsTool(ctx, scan, read, contextFor) {
+  return ctx.tools.register(knitDocsDefinition(scan, read, contextFor))
 }

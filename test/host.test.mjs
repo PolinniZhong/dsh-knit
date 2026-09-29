@@ -18,6 +18,7 @@ import {
   mediaInfo,
   parseRange,
   ERROR_CODES,
+  publicScanPayload,
 } from '../src/host/index.js'
 import { extractKeywords, rankByRelevance, topicLabel } from '../src/host/relevance.js'
 import { makeWorkspace } from './fixture.mjs'
@@ -362,10 +363,114 @@ test('scan: 不把内部 haystack 泄漏给浏览器', async () => {
   assert.ok(r.docs.every((d) => typeof d.rel === 'string' && typeof d.mtimeMs === 'number'))
 })
 
+test('publicScanPayload: 装配层的内部输入（ranked / raw / matchedTerms / head）不下发', async () => {
+  // v0.14：`scan()` 多了一个 `ranked` 键（全量名次，含 `raw`、`matchedTerms`、`head`、`haystack`），
+  // 那是 `buildContextFor()` 的输入。**HTTP 路由与 agent 工具都只许返回 publicScanPayload() 的产物** ——
+  // 直接 `sendJson(payload)` 会把它们全发出去（还会让响应体大好几倍）。
+  const session = fakeSession([userMessage(1, '相关性排序 相关性排序')])
+  const raw = await scan(PROJECT_ROOT, 10, { session, sessionId: 's', sort: 'relevance' })
+  assert.ok(Array.isArray(raw.ranked) && raw.ranked.length > 0, 'scan 内部应当保留全量名次')
+  assert.ok(raw.ranked.every((d) => typeof d.raw === 'number'), '内部名次带 raw')
+  assert.ok(raw.ranked.every((d) => typeof d.head === 'string'), '内部名次带原文首部（抽引用用）')
+
+  const pub = publicScanPayload(raw)
+  assert.ok(!('ranked' in pub), '公开载荷不该有 ranked')
+  const serialized = JSON.stringify(pub)
+  for (const forbidden of ['"raw"', 'matchedTerms', '"strength"', '"haystack"', '"head"']) {
+    assert.ok(!serialized.includes(forbidden), `公开载荷不该出现 ${forbidden}`)
+  }
+  // 原来那些字段一个不少
+  for (const key of ['ok', 'root', 'kind', 'total', 'truncated', 'sessionId', 'mode', 'topic', 'keywords', 'docs']) {
+    assert.ok(key in pub, `公开载荷缺了 ${key}`)
+  }
+  // 时间序时 ranked 是空数组，一样要剥掉
+  const timePub = publicScanPayload(await scan(PROJECT_ROOT, 5, { sessionId: 's', sort: 'time' }))
+  assert.ok(!('ranked' in timePub))
+})
+
 test('scan: limit 生效', async () => {
   const r = await scan(PROJECT_ROOT, 2, { sessionId: 's', sort: 'time' })
   assert.ok(r.docs.length <= 2)
   assert.ok(r.total >= r.docs.length)
+})
+
+/* ── task：当前任务的原文引用（v0.14 / SDD §12）────────── */
+
+test('scan: task 取最新一条有实质内容的用户消息原文', async () => {
+  const session = fakeSession([
+    userMessage(1, '先看看相关性排序怎么写的'),
+    assistantMessage(2, '它在 src/host/relevance.js 里。'),
+    userMessage(3, '把长度归一化那段的注释补上'),
+  ])
+  const r = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-latest', sort: 'relevance' })
+  assert.equal(r.mode, 'relevance')
+  assert.equal(r.task, '把长度归一化那段的注释补上', '应取**最新**一条，不是最长或最早那条')
+})
+
+test('scan: 纯应答消息不算任务，向前找上一条实质消息', async () => {
+  const session = fakeSession([
+    userMessage(1, '重构 context.js 的装配规则'),
+    assistantMessage(2, '好，我改完了。'),
+    userMessage(3, '继续'),
+  ])
+  const r = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-ack', sort: 'relevance' })
+  assert.equal(r.task, '重构 context.js 的装配规则',
+    '「继续」回答不了「现在这个任务是什么」，不能当 task')
+})
+
+test('scan: 只有应答消息时 task 为空串（不猜）', async () => {
+  const session = fakeSession([userMessage(1, '好的'), userMessage(2, 'ok')])
+  const r = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-ackonly', sort: 'relevance' })
+  assert.equal(r.task, '')
+})
+
+test('scan: task 折叠空白并截断到 80 字', async () => {
+  const long = `帮我检查${'这一段很长'.repeat(30)}的结尾`
+  const session = fakeSession([userMessage(1, `  第一行\n\n  第二行   ${long}  `)])
+  const r = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-long', sort: 'relevance' })
+  assert.ok(r.task.endsWith('…'), '超长要截断并标出')
+  assert.equal(r.task.length, 80)
+  assert.ok(!/\s{2,}/.test(r.task), '空白要折叠成单空格')
+  assert.ok(!r.task.startsWith(' ') && !r.task.endsWith(' '), '首尾不能留空白')
+})
+
+test('scan: 显式 query 时 task 为空（模型自己知道在问什么，不编任务）', async () => {
+  const session = fakeSession([userMessage(1, '这句话不该被当成任务')])
+  const r = await scan(PROJECT_ROOT, 10, {
+    session, sessionId: 'task-query', sort: 'relevance', query: '相关性排序',
+  })
+  assert.equal(r.mode, 'relevance')
+  assert.equal(r.task, '')
+})
+
+test('publicScanPayload: task 也不下发（响应形状与 v0.13 逐字一致）', async () => {
+  const session = fakeSession([userMessage(1, '把 knit_docs 的 snippet 逻辑讲清楚')])
+  const raw = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-public', sort: 'relevance' })
+  assert.ok(raw.task.length > 0, 'scan 内部有 task')
+  const pub = publicScanPayload(raw)
+  assert.ok(!('task' in pub), '公开载荷不该有顶层 task —— 它由 context.task 带出去')
+  // 时间序同样要剥掉
+  const timePub = publicScanPayload(await scan(PROJECT_ROOT, 5, { sessionId: 's', sort: 'time' }))
+  assert.ok(!('task' in timePub))
+})
+
+test('scan: 合成消息（agent 注入）不参与 task', async () => {
+  const session = fakeSession([
+    userMessage(1, '真正的问题在这里', 'user'),
+    userMessage(2, 'AGENTS.md 项目约定：宿主半边改了要重启', 'plugin'),
+  ])
+  const r = await scan(PROJECT_ROOT, 10, { session, sessionId: 'task-synth', sort: 'relevance' })
+  assert.equal(r.task, '真正的问题在这里', 'plugin 注入的合成上下文不是用户意图')
+})
+
+test('context.js: buildContext 原样透传 task，不给就是空串', async () => {
+  const { buildContext } = await import('../src/host/context.js')
+  assert.equal(buildContext({ ranked: [], task: '修 Context Pack 的右栏' }).task, '修 Context Pack 的右栏')
+  assert.equal(buildContext({ ranked: [] }).task, '')
+  assert.equal(buildContext({ ranked: [], task: null }).task, '', '非字符串一律当没给')
+  // 一个字都不加工：不折叠、不截断（截断是调用方的事）
+  const weird = '  原样   带过去  '
+  assert.equal(buildContext({ ranked: [], task: weird }).task, weird)
 })
 
 /* ── 图片与视频：扫描、类型过滤、Range、安全边界 ──────── */

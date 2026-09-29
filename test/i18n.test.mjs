@@ -216,13 +216,16 @@ test('渲染：占位符按语言正确替换（含过滤计数）', async () =>
   assert.equal(byClass(filtered, 'knit-doc').length, 1)
 })
 
-test('渲染：相关性模式下英文话题行带 {topic} 替换', async () => {
+test('渲染：相关性模式下关键词退到 title，可见文本只有一句 Sorted by relevance', async () => {
   const { nodes } = await renderPanel('en', () => listPayload({
     mode: 'relevance',
     topic: 'sidebar、registry',
   }))
-  const topic = textOf(byClass(nodes, 'knit-topic')[0])
-  assert.match(topic, /Sorted by “sidebar、registry”/)
+  // 2026-09-29 用户要求弱化关键词：UI 上不许再出现 Sorted by “sidebar、registry”
+  const topicNode = byClass(nodes, 'knit-topic')[0]
+  assert.equal(textOf(topicNode), 'Sorted by relevance', '可见文本只剩一句中性说明')
+  assert.match(String(topicNode.props.title), /matched keywords: sidebar、registry/,
+    '关键词退到 title 里当低层 metadata')
 })
 
 test('渲染：显式切到「最新」后，话题行说明按修改时间排', async () => {
@@ -479,5 +482,45 @@ test('词典：不出现 🤖 之类的表情字符（用户明确要求删掉�
       return cp >= 0x1f300 && cp <= 0x1faff
     })
     assert.deepEqual(found, [], `${name} 词典里出现了表情字符：${found.join(' ')}`)
+  }
+})
+
+/* ── v0.14：理由码必须与客户端词典一一对应 ────────────────
+   宿主给码、客户端翻译（AGENTS.md §4.5）。宿主加了新码而客户端没跟上时，
+   界面上会漏出 `why.xxx` 这种原始码 —— 这条守卫把那个缺口钉死。 */
+
+test('i18n: 宿主的每个 Context Pack 理由码都有中英译文', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const context = readFileSync(fileURLToPath(new URL('../src/host/context.js', import.meta.url)), 'utf8')
+
+  // 从 `explainContext` 的函数体里抽出全部理由码。
+  // ⚠️ 不能只匹配 `code: 'xxx'` —— 有一个码写成三元里的 `? 'direct' : 'titleMatch'`，
+  // 只认前者会漏掉它，于是这条守卫静默少守一个码（正是它要防的那类事）。
+  const start = context.indexOf('export function explainContext')
+  const end = context.indexOf('const REASON_ORDER')
+  assert.ok(start > 0 && end > start, '没定位到 explainContext 的函数体')
+  const body = context.slice(start, end)
+  const used = new Set([...body.matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]))
+  assert.ok(used.size >= 6, `应当抽出至少 6 个理由码，实际 ${used.size}（${[...used].join('/')}）`)
+
+  const client = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const zhStart = client.indexOf('const ZH = {')
+  const zh = client.slice(zhStart, client.indexOf('const EN = {'))
+  const enStart = client.indexOf('const EN = {')
+  const en = client.slice(enStart, client.indexOf('const HOST_ERROR_KEY'))
+
+  const missing = []
+  for (const code of used) {
+    // 有命中词时用 `why.<code>`；没有命中词时回落 `why.<code>Plain`（可选）
+    if (!zh.includes(`'why.${code}'`)) missing.push(`ZH why.${code}`)
+    if (!en.includes(`'why.${code}'`)) missing.push(`EN why.${code}`)
+  }
+  assert.deepEqual(missing, [], `这些理由码没有译文：${missing.join('、')}`)
+  // 反向：词典里也不许留下已经不用的码（死键会让人以为那条规则还在）
+  for (const m of zh.matchAll(/'why\.([a-zA-Z]+)'/g)) {
+    const key = m[1]
+    if (key.endsWith('Plain')) continue
+    assert.ok(used.has(key), `ZH 里的 why.${key} 已经没有一个宿主理由码在用它`)
   }
 })
