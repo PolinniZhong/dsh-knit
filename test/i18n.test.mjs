@@ -187,7 +187,8 @@ test('渲染：英文环境下整个面板出英文', async () => {
     ['Relevant', 'Recent'],
   )
   assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, 'Filter title / summary / path')
-  assert.equal(textOf(byClass(nodes, 'knit-btn')[0]), 'Refresh')
+  // v0.15：头部有**两个**按钮 —— 使用情况（默认关）与刷新
+  assert.deepEqual(byClass(nodes, 'knit-btn').map(textOf), ['Usage', 'Refresh'])
 })
 
 test('渲染：中文环境下整个面板出中文', async () => {
@@ -200,7 +201,7 @@ test('渲染：中文环境下整个面板出中文', async () => {
     ['相关', '最新'],
   )
   assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, '过滤标题 / 摘要 / 路径')
-  assert.equal(textOf(byClass(nodes, 'knit-btn')[0]), '刷新')
+  assert.deepEqual(byClass(nodes, 'knit-btn').map(textOf), ['使用情况', '刷新'])
 })
 
 test('渲染：占位符按语言正确替换（含过滤计数）', async () => {

@@ -60,6 +60,16 @@ window.__ModuleLoader__.load({
       'topic.relevancePlain': '相关性排序',
       'topic.needsConversation': '对话内容还不足，暂按最新排序',
       'topic.time': '按修改时间倒序',
+      'usage.toggle': '使用情况',
+      'usage.toggleTitle': '打开后开始统计这个会话：先看的那篇有没有被读、有多少次读落在包外、上下文换过几回。只记事实，不给分数。',
+      'usage.none': '还没有记录',
+      'usage.primaryRead': '先看的「{rel}」已读',
+      'usage.primaryUnread': '先看的「{rel}」还没读',
+      'usage.supporting': '辅助 {read}/{total}',
+      'usage.reads': '读了 {n} 次',
+      'usage.outside': '包外 {n} 篇',
+      'usage.changes': '上下文换过 {n} 次',
+      'usage.note': '只统计本会话 · 数据在内核内存里，重启 DSH 就没了',
 
       // ── v0.14 当前任务上下文（Context Pack）──────────────────────
       // ⚠️ 文案纪律：不出现「AI / 智能 / 推荐 / 置信度 / 百分比」。
@@ -202,6 +212,16 @@ window.__ModuleLoader__.load({
       'topic.relevancePlain': 'Sorted by relevance',
       'topic.needsConversation': 'Not enough conversation yet — sorted by time',
       'topic.time': 'Sorted by modified time',
+      'usage.toggle': 'Usage',
+      'usage.toggleTitle': 'Measure this session: whether the primary doc was read, how many reads fell outside the pack, how often the context changed. Facts only — no score.',
+      'usage.none': 'Nothing recorded yet',
+      'usage.primaryRead': 'primary read ({rel})',
+      'usage.primaryUnread': 'primary not read yet ({rel})',
+      'usage.supporting': 'supporting {read}/{total}',
+      'usage.reads': '{n} reads',
+      'usage.outside': '{n} outside the pack',
+      'usage.changes': 'context changed {n}×',
+      'usage.note': 'This session only · kept in kernel memory, gone after a DSH restart',
 
       // ── v0.14 current-task context (Context Pack) ──────────────
       // ⚠️ Never say "AI", "smart", "recommended", "confidence" or show percentages:
@@ -405,6 +425,11 @@ window.__ModuleLoader__.load({
     const SORT_KEY = 'dsh-knit:sort'
     const RATIO_KEY = 'dsh-knit:preview-ratio'
     const KIND_KEY = 'dsh-knit:kind'
+    /**
+     * v0.15「使用情况」的开闸键。**默认关** —— 记账意味着每次轮询都要读一遍会话事件，
+     * 用户没要看这个之前，不该有人替他付出这个代价（也不该悄悄攒数据）。
+     */
+    const USAGE_KEY = 'dsh-knit:usage'
 
     /** 列表类型：仅文档 / 仅图片视频 / 全部混排。默认 doc，与旧版体验一致。 */
     const KIND_DOC = 'doc'
@@ -567,6 +592,8 @@ body[data-ds-dark-theme] .knit-root{
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));font-size:11px}
 .knit-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
+  color:var(--dsw-alias-label-primary,#e8eaed);border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22))}
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
 .knit-seg{display:inline-flex;flex:none;border-radius:7px;overflow:hidden;
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1))}
@@ -586,6 +613,11 @@ body[data-ds-dark-theme] .knit-root{
 /* ⚠️ 这里以前有一条 border-bottom（全宽横线）。2026-09-29 用户要求**减少全宽分割线**
    ——「页面上横线一多，读起来就像文件管理表格」。层级改由空间与字号建立：
    这一行只用 bottom padding 与列表拉开距离，不画线。 */
+/* v0.15「使用情况」：**一行事实**，不画卡片、不画进度条、不用品牌色。
+   它就在「相关性排序」那行下面 —— 与它同档的弱化文字，不是一块新面板。 */
+.knit-usage{flex:none;padding:0 12px 9px;font-size:10.5px;line-height:1.45;
+  color:var(--dsw-alias-label-caption,#80868b);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 
 /* ── v0.14 右栏（Context Pack 面板）已整体删除（2026-09-29）────────
@@ -1007,6 +1039,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     function readKindPref() {
       const v = readPref(KIND_KEY)
       return v === KIND_MEDIA || v === KIND_ALL ? v : KIND_DOC
+    }
+
+    /**
+     * 读上次是否打开了「使用情况」。**默认关**（没写过就是关）。
+     * @returns {boolean} 是否记账
+     */
+    function readUsagePref() {
+      return readPref(USAGE_KEY) === '1'
     }
 
     /**
@@ -1596,6 +1636,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // v0.14：当前任务上下文（Context Pack）。宿主只在「文档档 + 相关序 + 有命中」时给，
         // 其余情形是 null —— 那时面板退回它一直在用的平铺列表（行为与 v0.13 逐字一致）。
         context: null,
+        // v0.15：这个会话的使用情况（只统计**事实**：读了几次、落在哪一层、上下文换过几次）。
+        // 宿主只在用户显式打开「使用情况」之后才回传它。
+        usage: null,
       })
       const [preview, setPreview] = React.useState(null)
       const [tick, setTick] = React.useState(() => Date.now())
@@ -1616,6 +1659,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 塞进「每 5 秒一次」会把面板拖垮（SDD §3.5）。
       const [links, setLinks] = React.useState(null)
       const [linksExpandedTick, setLinksExpandedTick] = React.useState(0)
+
+      // v0.15「使用情况」的开闸状态（默认关，见 `USAGE_KEY`）。放在最后 —— 前几个 hook
+      // 的顺序被测试按位预置，别插队。
+      const [usageOn, setUsageOn] = React.useState(readUsagePref)
 
       /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
          `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
@@ -1642,7 +1689,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           return
         }
         try {
-          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}`
+          // `usage=1` 是**开闸**（不是「顺便取一下」）：宿主只有看到它才会开始给这个会话记账。
+          // 没打开「使用情况」的会话，宿主侧一个事件都不读。
+          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}${usageOn ? '&usage=1' : ''}`
           const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
           const data = await res.json()
           if (data && data.ok) {
@@ -1655,16 +1704,17 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
               mode: data.mode || 'time',
               topic: data.topic || '',
               context: data.context || null,
+              usage: data.usage || null,
             })
 
           } else {
-            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', topic: '', context: null })
+            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', topic: '', context: null, usage: null })
           }
         } catch (error) {
-          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', topic: '', context: null })
+          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', topic: '', context: null, usage: null })
         }
         setTick(Date.now())
-      }, [sessionId, sort, kind])
+      }, [sessionId, sort, kind, usageOn])
 
       React.useEffect(() => {
         let alive = true
@@ -1847,6 +1897,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       // 预览高度：拖完就记住
       React.useEffect(() => { writePref(RATIO_KEY, String(ratio)) }, [ratio])
+
+      // 「使用情况」开关：开了就记住（只记开关本身，**记账数据一律活在内核内存里**，
+      // 面板不落盘 —— 与「界面几何状态不落盘」是同一条纪律）。
+      React.useEffect(() => { writePref(USAGE_KEY, usageOn ? '1' : '0') }, [usageOn])
 
       /**
        * 为一个条目造预览状态：图片/视频直接 ready（字节地址交给 <img>/<video>），
@@ -2173,6 +2227,29 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         ? t('topic.relevanceTerms', { topic: state.topic })
         : topicText
 
+      /* v0.15「使用情况」：只把**事实**读出来 —— 先看的那篇读没读、辅助读了几篇、
+         一共读了几次、几次落在包外、上下文换过几回。
+         ⚠️ 不许出现分数 / 百分比 / 评分条 / 置信度 / 「AI 判断」这类词：用户要知道的是
+         「这份上下文有没有被用上」，不是「它好不好用」。**没有任何一行是估算出来的。** */
+      const usageText = (() => {
+        if (!usageOn) return ''
+        const u = state.usage
+        if (!u || !u.stats) return t('usage.none')
+        const s = u.stats
+        const parts = []
+        if (s.primaryRel) {
+          parts.push(s.primaryFollowThrough
+            ? t('usage.primaryRead', { rel: s.primaryRel })
+            : t('usage.primaryUnread', { rel: s.primaryRel }))
+        }
+        const sup = (s.byTier && s.byTier.supporting) || { read: 0, total: 0 }
+        if (sup.total > 0) parts.push(t('usage.supporting', { read: sup.read, total: sup.total }))
+        if (s.reads) parts.push(t('usage.reads', { n: s.reads }))
+        if (s.outside) parts.push(t('usage.outside', { n: s.outside }))
+        if (s.churn && s.churn.snapshots) parts.push(t('usage.changes', { n: s.churn.snapshots }))
+        return parts.join(' · ')
+      })()
+
       // 不同类型用不同量词：文档「篇」、媒体「个」、混排「项」。
       const countKey = kind === KIND_MEDIA
         ? (filtering ? 'count.media.filtered' : 'count.media')
@@ -2199,6 +2276,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           },
         }, state.root || '—'),
         h('div', { className: 'knit-count' }, countText),
+        // v0.15：默认关的自查开关。开着才有 `&usage=1` —— 宿主也只在那一刻开始记账。
+        h('button', {
+          type: 'button',
+          className: `knit-btn${usageOn ? ' active' : ''}`,
+          'aria-pressed': usageOn,
+          title: t('usage.toggleTitle'),
+          onClick: () => setUsageOn((value) => !value),
+        }, t('usage.toggle')),
         h('button', { className: 'knit-btn', onClick: load, title: t('action.refreshNow') }, t('action.refresh'))),
       h('div', { className: 'knit-bar' },
         h('div', { className: 'knit-seg' },
@@ -2234,6 +2319,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: () => pickKind(value),
           }, t(labelKey)))),
       h('div', { className: 'knit-topic', title: topicTitle }, topicText),
+      // v0.15：开了才显示。一行事实，没有卡片、没有分数条。
+      usageOn ? h('div', { className: 'knit-usage', title: t('usage.note') }, usageText || t('usage.none')) : null,
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——

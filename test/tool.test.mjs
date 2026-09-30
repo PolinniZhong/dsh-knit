@@ -72,13 +72,14 @@ function fakeExec(session) {
  *
  * @param {object} exec - 执行上下文
  * @param {object} args - 参数
- * @param {{read?: Function, contextFor?: Function}} [deps] - 覆盖注入的依赖
+ * @param {{read?: Function, contextFor?: Function, audit?: object}} [deps] - 覆盖注入的依赖
  * @returns {Promise<object>} 工具结果
  */
 async function runTool(exec, args = {}, deps = {}) {
   const read = 'read' in deps ? deps.read : undefined
   const contextFor = 'contextFor' in deps ? deps.contextFor : buildContextFor
-  return knitDocsDefinition(scan, read, contextFor).execute(args, exec)
+  const audit = 'audit' in deps ? deps.audit : undefined
+  return knitDocsDefinition(scan, read, contextFor, audit).execute(args, exec)
 }
 
 /**
@@ -162,8 +163,10 @@ test('apply: webServer 与 tools 都缺席时不抛错', () => {
 
 test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致', () => {
   const definition = knitDocsDefinition(scan)
-  // 两个参数都可选 → 没有 required，根对象也没有 additionalProperties
-  assert.deepEqual(Object.keys(definition.parameters.properties), ['query', 'limit'])
+  // 三个参数都可选 → 没有 required，根对象也没有 additionalProperties
+  // v0.15 加了 `audit`（默认 false：不传它完全不走 Context Feedback）
+  assert.deepEqual(Object.keys(definition.parameters.properties), ['query', 'limit', 'audit'])
+  assert.equal(definition.parameters.properties.audit.type, 'boolean')
   assert.equal(definition.parameters.type, 'object')
   assert.equal(definition.parameters.required, undefined)
   // 输出是严格的：根与 items 都 additionalProperties: false，且字段必填
@@ -207,6 +210,13 @@ test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致'
   // 与 `docs`（时间序退回的那一列，形状比三层窄）。两者都不能进 required。
   assert.equal(definition.output.schema.properties.totals.type, 'object')
   assert.deepEqual(definition.output.schema.properties.totals.required, ['matched', 'total'])
+  // v0.15：`usage` 是**可选**的字符串（`audit: true` 时才出现）—— 绝不能进 required，
+  // 否则不传 audit 的每一次调用都会在校验层失败。
+  assert.equal(definition.output.schema.properties.usage.type, 'string')
+  assert.ok(
+    !definition.output.schema.required.includes('usage'),
+    'usage 必须可选：不传 audit 时它连键都不出现',
+  )
   assert.equal(definition.output.schema.properties.docs.type, 'array')
   assert.deepEqual(
     Object.keys(definition.output.schema.properties.docs.items.properties).sort(),
@@ -701,4 +711,119 @@ test('execute: 返回的 totals 带上 matched 与 total', async () => {
   assert.ok(out.totals.matched >= 1, `命中了应当 > 0，实际 ${out.totals.matched}`)
   const head = renderToolText(out).split('\n')[0]
   assert.ok(!head.includes('0 matching'), head)
+})
+
+/* ── v0.15 · Context Audit 通道 ──────────────────────────
+ *
+ * 工具**不认识** `feedback.js`：它只认识一个被注入的桥
+ * （`{summary, note}`）。这几条锁的就是这条接线的契约：
+ *   · 不传 `audit: true` → 桥一个方法都不许被碰，返回里也没有 `usage` 键；
+ *   · 传了 → **先 `summary()` 再 `note()`**（summary 报告的是**上一份**包）；
+ *   · 桥坏了 → 工具照常返回（这是「Knit 坏了不许影响 Agent」那条纪律）。
+ */
+
+/** 造一个记账桥，记录调用顺序。 */
+function fakeBridge({ summary = () => 'Usage since the last pack: 0 reads', note = () => null } = {}) {
+  const calls = []
+  return {
+    calls,
+    bridge: {
+      summary: (root, sessionId, session) => {
+        calls.push({ fn: 'summary', root, sessionId, hasSession: !!session })
+        return summary(root, sessionId, session)
+      },
+      note: (root, sessionId, session, pack) => {
+        calls.push({ fn: 'note', root, sessionId, hasSession: !!session, pack })
+        return note(root, sessionId, session, pack)
+      },
+    },
+  }
+}
+
+test('audit: 不传 audit 时返回里没有 usage 键，桥一个方法都不许被碰', async () => {
+  const session = fakeSession([userMessage(1, 'sidebar 相关性排序')])
+  const { bridge, calls } = fakeBridge()
+  const out = await runTool(fakeExec(session), {}, { audit: bridge })
+  assert.ok(!('usage' in out), '默认（不传 audit）时不许出现 usage 键')
+  assert.deepEqual(calls, [], '默认时不许碰记账桥 —— 它默认不是观测者，是关闭的')
+  assert.ok(allItems(out).length > 0, '少了 usage 不该影响排序结果')
+})
+
+test('audit: true 时先问 summary 再 note，并把这一行放进返回的 usage', async () => {
+  const session = fakeSession([userMessage(1, 'sidebar 相关性排序')])
+  const { bridge, calls } = fakeBridge()
+  const out = await runTool(fakeExec(session), { audit: true }, { audit: bridge })
+  assert.equal(out.usage, 'Usage since the last pack: 0 reads')
+  assert.deepEqual(
+    calls.map((c) => c.fn),
+    ['summary', 'note'],
+    '顺序是契约：summary 报告的是**上一份**包，必须先问；note 记的是刚交出的这份',
+  )
+  const noted = calls.find((c) => c.fn === 'note')
+  assert.equal(noted.root, PROJECT_ROOT, 'note 拿到的是工作区根')
+  assert.equal(noted.sessionId, 'sess-tool-test', 'note 拿到的是会话 id')
+  assert.equal(noted.hasSession, true, 'note 还拿到会话本身（它要去读事件）')
+  assert.ok(noted.pack && noted.pack.totals, 'note 记的是刚交出去的那份包（含 totals）')
+  assert.equal(noted.pack.totals.total, 3)
+})
+
+test('audit: 桥抛错 / 返回非字符串时，工具照常返回且不带 usage', async () => {
+  const session = fakeSession([userMessage(1, 'sidebar 相关性排序')])
+  const boom = fakeBridge({
+    summary: () => { throw new Error('记账坏了') },
+    note: () => { throw new Error('记账坏了') },
+  })
+  const out = await runTool(fakeExec(session), { audit: true }, { audit: boom.bridge })
+  assert.ok(!('usage' in out), '桥坏了就没有 usage —— 但不许把整次调用搞失败')
+  assert.ok(allItems(out).length > 0, '排序结果必须照常给出')
+
+  const weird = fakeBridge({ summary: () => 42, note: () => null })
+  const out2 = await runTool(fakeExec(session), { audit: true }, { audit: weird.bridge })
+  assert.ok(!('usage' in out2), '桥返回非字符串时当「没什么可说的」，不许把 42 塞进文本')
+
+  const empty = fakeBridge({ summary: () => '' })
+  const out3 = await runTool(fakeExec(session), { audit: true }, { audit: empty.bridge })
+  assert.ok(!('usage' in out3), '空串同样不加这个键')
+})
+
+test('audit: 只给 audit 桥、没有会话（非 agent 调用方）时抛错照旧，不静默出空结果', async () => {
+  const { bridge } = fakeBridge()
+  await assert.rejects(
+    () => runTool({}, { audit: true }, { audit: bridge }),
+    /requires an owning agent session/,
+  )
+})
+
+test('audit: audit 传字符串 "true" 不算数（只有真布尔才记账）', async () => {
+  const session = fakeSession([userMessage(1, 'sidebar 相关性排序')])
+  const { bridge, calls } = fakeBridge()
+  const out = await runTool(fakeExec(session), { audit: 'true' }, { audit: bridge })
+  assert.ok(!('usage' in out), '宽松的真值判断会让「字符串 true」也打开记账 —— 不接受')
+  assert.deepEqual(calls, [])
+})
+
+test('registerKnitDocsTool: 第五个参数（记账桥）被透传给工具定义', () => {
+  const { ctx, state } = fakeToolCtx()
+  const { bridge } = fakeBridge()
+  registerKnitDocsTool(ctx, scan, undefined, buildContextFor, bridge)
+  assert.equal(state.definitions.length, 1)
+  assert.deepEqual(Object.keys(state.definitions[0].parameters.properties), ['query', 'limit', 'audit'])
+})
+
+test('renderToolText: 有 usage 时它单独占最后一行，且不影响三层正文', () => {
+  const value = {
+    mode: 'relevance', topic: '排序', total: 44,
+    primary: [{ rel: 'a.md', title: '甲', summary: '摘要', mtimeMs: 1, source: 'doc', reason: { code: 'titleMatch', terms: ['排序'], fields: 1 } }],
+    supporting: [], related: [],
+    totals: { matched: 32, total: 44 },
+    usage: 'Usage since the last pack: 2 reads',
+  }
+  const text = renderToolText(value)
+  const lines = text.split('\n')
+  assert.equal(lines[lines.length - 1], 'Usage since the last pack: 2 reads')
+  assert.equal(lines[lines.length - 2], '', '摘要与 usage 之间留一个空行')
+  assert.match(text, /甲/, '三层正文照旧')
+  // 没有 usage 时不留空行（不许出现尾部空行这种「看不出差别」的漂移）
+  const without = renderToolText({ ...value, usage: undefined })
+  assert.ok(!without.endsWith('\n'), without)
 })

@@ -26,6 +26,12 @@ import { buildLinkGraph, linksOf } from './links.js'
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
 // `renderContextText` 却没人调用 —— 那是个会与 `tool.js` 漂移的第二渲染器，已删。
 import { buildContext } from './context.js'
+// v0.15：Context Feedback / Context Audit —— 「Context Pack 之后真的被用了吗」。
+// ⚠️ 只做三件确定性的事：从会话事件里抽**真实的 `read`**、把交出去的包记成 Snapshot、
+// 把两者接起来算 Usage。**不订阅 event bus、不落盘、不联网、不调模型、不改 Retrieval。**
+import {
+  createStore, activateAudit, isAudited, ingestEvents, noteSnapshot, usageFor, getAuditSummary,
+} from './feedback.js'
 
 export const name = 'dsh-knit'
 
@@ -1041,6 +1047,130 @@ function sendMedia(req, res, info) {
   stream.pipe(res)
 }
 
+/* ── v0.15 · Context Feedback 的宿主侧封装 ────────────────────────────
+ *
+ * 这一层只做三件事：
+ *   1. 从 `session.snapshotEvents()` **拉**事件（不订阅任何总线）喂给 feedback store；
+ *   2. 把刚交出去的 Context Pack 记成 Context Snapshot；
+ *   3. 给面板与 `knit_docs` 提供「**上一份**包之后发生了什么」。
+ *
+ * 记账只在**被显式打开**的会话里发生（面板的「使用情况」开关，或 `knit_docs` 的
+ * `audit: true`）—— 默认一个字节都不攒。所有入口都 try/catch：
+ * 记账坏了不许影响面板与工具（规格 §33 的降级纪律）。
+ */
+
+/** 进程内唯一的 feedback store（按会话分片，会话数与篇数都有硬上限）。 */
+const feedbackStore = createStore()
+
+/**
+ * 安全读会话事件。拿不到返回 `null` 而**不是空数组** —— 空数组会被下游当成
+ * 「这个会话真的没有任何事件」，那是两件不同的事。
+ * @param {object} session - 宿主会话
+ * @returns {object[]|null} 事件数组或 null
+ */
+function sessionEvents(session) {
+  try {
+    if (!session || typeof session.snapshotEvents !== 'function') return null
+    const events = session.snapshotEvents()
+    return Array.isArray(events) ? events : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 把会话事件喂给 feedback store。幂等靠 `seq` 游标 —— 面板每 5 秒轮询一次，
+ * 每次都会把**同一批历史事件**再拉一遍，游标保证同一篇读只记一次。
+ * @param {string} root - 工作区根（归一化绝对路径用）
+ * @param {string} sessionId - 会话 id
+ * @param {object} session - 宿主会话
+ * @returns {{ok: boolean, reads: number, cursor: number}} 结果
+ */
+function ingestFeedback(root, sessionId, session) {
+  const events = sessionEvents(session)
+  if (!events || !sessionId) return { ok: false, reads: 0, cursor: -1 }
+  return ingestEvents(feedbackStore, sessionId, events, { root })
+}
+
+/**
+ * 打开某个会话的记账（面板的「使用情况」开关走它）。
+ * @param {string} sessionId - 会话 id
+ * @returns {boolean} 是否成功
+ */
+export function activateFeedback(sessionId) {
+  return activateAudit(feedbackStore, sessionId)
+}
+
+/**
+ * 这个会话在记账吗。
+ * @param {string} sessionId - 会话 id
+ * @returns {boolean} 是否记账
+ */
+export function feedbackActive(sessionId) {
+  return isAudited(feedbackStore, sessionId)
+}
+
+/**
+ * 线路上的紧凑使用情况：面板只需要**计数**与最近一次变化，不需要 200 条明细。
+ * @param {object|null} usage - `usageFor()` 的结果
+ * @param {number} [limit] - 明细最多带几条
+ * @returns {object|null} 紧凑视图
+ */
+export function publicUsage(usage, limit = 20) {
+  if (!usage || !usage.stats) return null
+  return {
+    at: usage.at,
+    stats: { ...usage.stats, outsideReads: usage.stats.outsideReads.slice(0, limit) },
+    delta: usage.delta ? {
+      appeared: usage.delta.appeared.slice(0, limit),
+      disappeared: usage.delta.disappeared.slice(0, limit),
+      moved: usage.delta.moved.slice(0, limit),
+      taskChanged: !!usage.delta.taskChanged,
+    } : null,
+  }
+}
+
+/**
+ * 注入给 `knit_docs` 的桥 —— 工具不认识 `feedback.js`，只认识这两个方法
+ * （与 `scan` / `read` / `contextFor` 同样的注入理由）。
+ * ⚠️ `summary()` 必须在 `note()` **之前**调用：它报告的是**上一份**包的用法。
+ */
+const auditBridge = {
+  usage(root, sessionId, session) {
+    try {
+      if (!sessionId) return null
+      ingestFeedback(root, sessionId, session)
+      return usageFor(feedbackStore, sessionId)
+    } catch {
+      return null
+    }
+  },
+  summary(root, sessionId, session) {
+    try {
+      if (!sessionId) return ''
+      ingestFeedback(root, sessionId, session)
+      return getAuditSummary(usageFor(feedbackStore, sessionId))
+    } catch {
+      return ''
+    }
+  },
+  note(root, sessionId, session, pack) {
+    try {
+      if (!sessionId || !pack) return null
+      // 走到这里说明记账是**显式**的（面板带了 `usage=1`，或 agent 传了 `audit: true`
+      // 且 `tool.js` 只在那一刻调 note）—— 所以在这里开闸是安全的。
+      activateAudit(feedbackStore, sessionId)
+      const { cursor } = ingestFeedback(root, sessionId, session)
+      return noteSnapshot(feedbackStore, sessionId, pack, {
+        seq: Number.isInteger(cursor) ? cursor : -1,
+        at: Date.now(),
+      })
+    } catch {
+      return null
+    }
+  },
+}
+
 /**
  * 宿主插件体：等 webServer / sessions 到位后挂只读路由。
  * @param {import('@deepseek-ai/cordis').Context} ctx - 宿主根上下文
@@ -1075,6 +1205,16 @@ export function apply(ctx) {
           // v0.14：相关模式下顺带给出任务上下文分层。
           // ⚠️ 带上 `context` 是**可选**的（老客户端忽略它），而 `docs` 一字未动。
           body.context = await contextPayload(root, payload, sort, kind)
+          // v0.15：面板把「使用情况」开关打开后，请求会带 `usage=1` —— 那一刻开始记账。
+          // ⚠️ 默认（不带这个参数且本会话从未打开过）**一个字节都不记**。
+          if (sessionId && url.searchParams.get('usage') === '1') activateFeedback(sessionId)
+          if (sessionId && feedbackActive(sessionId)) {
+            const session = sessionOf(webCtx, sessionId)
+            // ⚠️ 顺序是刻意的：先取 usage（它报告的是**上一份**包之后发生了什么），
+            // 再把这一份包记成新快照 —— 从下一次请求起，它才是「上一份」。
+            body.usage = publicUsage(auditBridge.usage(root, sessionId, session))
+            if (body.context) auditBridge.note(root, sessionId, session, body.context)
+          }
           sendJson(res, 200, body)
           return
         }
@@ -1101,6 +1241,11 @@ export function apply(ctx) {
             total: payload.total,
             withLinks: payload.mode === 'relevance' && kind === 'doc',
           }))
+          // v0.15：走这条路的调用方（只要上下文、不要列表）同样会推进 Context Snapshot ——
+          // 否则「上下文变了」这件事会漏记。**只在已记账的会话里**（同 recent 的闸门）。
+          if (sessionId && feedbackActive(sessionId)) {
+            auditBridge.note(root, sessionId, sessionOf(webCtx, sessionId), context)
+          }
           sendJson(res, 200, { ok: true, root, mode: payload.mode, topic: payload.topic, context })
           return
         }
@@ -1166,7 +1311,9 @@ export function apply(ctx) {
   // 两条路互不依赖：没有 tools 服务时，浏览器那半边照常工作。
   ctx.inject(['tools'], (toolCtx) => {
     toolCtx.effect(
-      () => registerKnitDocsTool(toolCtx, scan, readDocument, buildContextFor),
+      // v0.15：多注入一个 `auditBridge` —— `knit_docs` 的 `audit: true` 走它拿
+      // 「上一份包之后发生了什么」，并把这次交出的包记成新快照。
+      () => registerKnitDocsTool(toolCtx, scan, readDocument, buildContextFor, auditBridge),
       'dsh-knit: knit_docs tool',
     )
     console.log(`[${name}] agent tool ready: knit_docs`)

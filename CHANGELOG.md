@@ -3,6 +3,58 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.15.0] - 2026-09-30
+
+**从「构建一份当前任务上下文」再往前一步：让上下文能回答「它到底有没有被用上」。**
+排序（BM25）一行没改，Context Pack 的装配规则一行没改，**没有模型、没有联网、没有长期记忆** ——
+这一版加的是**一层可核验的使用反馈**：把 agent 真实读过哪些文件（会话日志里的
+`tool/call(name="read")` 与按 `callId` 配对的 `tool/result`）跟「**读发生那一刻**生效的那份
+Context Pack」对起来，得到五个计数：**Primary follow-through / First read tier /
+Supporting coverage / Outside-context / Delta churn**。**只报事实**：没有分数、没有百分比、
+没有评分条、没有置信度。
+
+⚠️ **两条硬边界（别越）**：
+
+1. **默认关。** 只有人显式打开（面板头部「使用情况」开关 → 请求带 `usage=1`，或
+   `knit_docs` 传 `audit:true`）才开始记账；没打开时**不读一个事件、不攒一条数据**。
+   理由是这笔账有代价（每次轮询都要读一遍会话事件），不该由 Knit 替用户决定。
+2. **不重复 DSH Trajectory。** 证据的**唯一来源**是会话里**已经存在**的 `tool/call` /
+   `tool/result` 事件（`session.snapshotEvents()`，沿用既有拉取式架构，用 `seq` 做幂等游标）——
+   **没有新的事件总线、没有 Runtime Trace、没有 Event Store**；数据只在内核内存里，
+   重启即失（不落盘、不进 `localStorage`）。
+
+### 加了什么
+
+| 新增 | 说明 |
+|---|---|
+| **`src/host/feedback.js`** | Context Snapshot / Context Delta / Usage matching。纯逻辑、只 import `node:path`。`snapshotOf()` 把一份包压成 `{seq, at, topic, task, total, items:[{rel,tier,rank}], sig}`；`diffContext()` 给「进 / 出 / 换层」；`normalizeReadEvidence()` 把真实事件流化成「哪一刻读了哪篇」（⚠️ `tool/call` 的 `arguments` 是 JSON **字符串**，必须 `JSON.parse`；`message.isError === true` 的读**不记账**；工作区根之外的路径丢掉）；`ingestEvents()` / `noteSnapshot()` / `usageFor()`。会话与读都有上限（`MAX_SESSIONS 24` / `MAX_READS_PER_SESSION 200` / `MAX_SNAPSHOTS_PER_SESSION 2` / `MAX_DELTAS_PER_SESSION 20` / `MAX_PENDING_CALLS 64`），满员按 **LRU** 淘汰最久没碰的会话 |
+| **读落在哪一层，看的是「读发生那一刻」的包** | 每篇读按 `firstReadSeq` 找 `seq ≤` 它的**最新一份快照**。少了这一步，一次话题切换会把之前所有读重新贴上「包外」的标签，指标全是噪声 |
+| **`/knit/api/recent?usage=1`** | 开闸信号：**第一次带它就等于对本次会话说「开始记账」**，此后不带参数也回传 `usage`。`/api/context` 只推进快照、**从不激活**。顺序是契约：`usage` 先算（它报告的是**上一份**包），快照后记 |
+| **`knit_docs` 的 `audit` 参数（默认 `false`）** | `audit:true` 时在工具结果末尾追加一行 `Usage since the last pack: …`（报告**上一份**包），并把这次装配记进快照。不传 `audit` 的一次普通调用**一个记账方法都不碰**（有测试钉住） |
+| **面板头部的「使用情况」开关（默认关）** | 打开后列表上方多一行弱化文字：`先看的「x.md」已读 · 辅助 1/2 · 读了 7 次 · 包外 2 篇 · 上下文换过 2 次`。**没有分数 / 百分比 / 进度条 / 品牌色**，风格与「相关性排序」那行同档 |
+| **`tools/context-feedback-eval.mjs`** | 拿真实会话日志（`~/.dsh/sessions/<工作区>/<会话>/session.v4.jsonl.zstd`）**离线回放**；`--control` 时一份包都不交，做对照组。把「包外」拆成 **`missed`**（Knit 索引里有、却没进包 —— 真漏）与 **`outOfScope`**（压根不在索引里，例如 `.js`）：不拆开的话 `outside` 恒高，读起来像「Context Pack 没用」，其实是**量错了东西** |
+| **`test/feedback.test.mjs` · `test/context-delta.test.mjs` · `test/context-feedback-eval.test.mjs`** | 17 + 16 + 7 条：路径归一化的八种输入 / 配对与游标幂等 / 上限与降级不抛 / Delta 四类 / 审计开关 / **Control（不交包 ⇒ 读全在包外）vs Treatment（交包 ⇒ `firstReadTier === 'primary'`）的确定性对照** / 坏行不废整批 |
+
+### 真机读数（本机 `08_Knit`，会话 `session-09a33302`，**只量事实、不下结论**）
+
+- **Treatment**（交包）：**392** 份包 · Primary follow-through **YES** · Supporting coverage **1.00** ·
+  包外 **25/32 篇（共 392 次）**，其中 Knit 看得到的 11 篇里漏了 **35** 次、真心漏的只有 4 篇
+  （`knit/CHANGELOG.md` · `knit/README.md` · `03_发布/验收-v0.14-重启后待执行.md` · `README.md`）·
+  Delta churn：**换过 66 次 / 进 177 / 出 177 / 换层 271 / 任务变了 14**。
+- **Control**（`--control`，不交包）：**0** 份包 · 包外 **32/32** · `missed` 11 篇（140 次）· churn 0 ·
+  自检退出码 0（**量尺没坏**）。
+- ⇒ 可复述的只有一句：**agent 读的东西绝大多数是代码文件** —— 32 篇里 21 篇根本不在 Knit 的索引内
+  （`.js` / `.json`）。这是**量尺的读数**，不能读成「Context Pack 没用」，也不能读成「有用」。
+
+**测试：`395 → 447 → 450`**（+33 `feedback`/`context-delta`、+7 `context-feedback-eval`、
++7 `tool` 的 audit 通道、+5 `host-http` 的真实回环 HTTP、+3 `client` 的「使用情况」；
+`i18n` 与 `client` 里几条旧断言随「头部多了一个按钮」同步）。`test/context-feedback-eval.test.mjs`
+与另两个新文件都**手写进了 `package.json` 的 `scripts.test`**（测试文件现共 19 个）。
+
+⚠️ 这一版**宿主侧**（`src/host/*`）改了，要**重启 DSH** 才生效（`curl -s
+"http://127.0.0.1:3080/knit/api/raw?rel=nope.png"`：空 body 的 404 ＝ 旧代码；
+`{"ok":false,"code":"knit/not-found"}` ＝ 新代码在跑）；前端那个开关只需 `Cmd + Shift + R`。
+
 ## [0.14.0] - 2026-09-29
 
 **从「按当前对话给文档排序」升级成「按对话构建当前任务最需要的项目上下文」。**

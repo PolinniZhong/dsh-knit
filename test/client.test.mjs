@@ -1927,3 +1927,102 @@ test('样式：组与组之间只靠 16px 空间（不再画横线），序号�
   assert.match(source, /\.knit-num\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
   assert.match(source, /\.knit-sum\{font-size:12px;line-height:19px;/)
 })
+
+/* ── v0.15「使用情况」 ───────────────────────────────────────────────
+   三条纪律要一起守住：① **默认关**（没打开就一个事件都不读）；
+   ② 打开后请求带 `usage=1`（那是宿主侧的开闸信号，不是可选参数）；
+   ③ 显示的只有**事实**：读了几次、落在哪一层、上下文换过几回 ——
+   **没有分数、没有百分比、没有评分条**（用户明确要求过）。 */
+
+/** 一份带 usage 的宿主载荷：先看的那篇（docs/algo.md）已被读。 */
+function usagePayload() {
+  return contextPayload({
+    usage: {
+      at: 1_700_000_000_000,
+      stats: {
+        reads: 7,
+        distinct: 3,
+        outside: 2,
+        outsideReads: ['knit/src/host/index.js'],
+        firstReadTier: 'primary',
+        firstReadRel: 'docs/algo.md',
+        firstReadAt: 1,
+        primaryRel: 'docs/algo.md',
+        primaryFollowThrough: true,
+        byTier: {
+          primary: { total: 1, read: 1 },
+          supporting: { total: 2, read: 1 },
+          related: { total: 1, read: 0 },
+        },
+        supportingCoverage: 0.5,
+        churn: { snapshots: 2, deltas: 2, retained: 2, appeared: 1, disappeared: 0, moved: 0, taskChanged: 0 },
+      },
+      delta: { appeared: ['docs/eval.md'], disappeared: [], moved: [], taskChanged: false },
+    },
+  })
+}
+
+test('使用情况：默认关 —— 请求里没有 usage=1，DOM 里也没有那一行', async () => {
+  const { calls } = installFetch(() => usagePayload())
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.ok(!calls.some((url) => url.includes('usage=1')), '默认关：一个会话事件都不该被读')
+  assert.equal(byExactClass(nodes, 'knit-usage').length, 0, '默认关：不显示那一行')
+})
+
+test('使用情况：打开后请求带 usage=1，那一行只报事实（没有分数 / 百分比）', async () => {
+  const { calls } = installFetch(() => usagePayload())
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const toggle = byExactClass(nodes, 'knit-btn').find((node) => textOf(node) === '使用情况')
+  assert.ok(toggle, '头部必须有「使用情况」按钮')
+  assert.equal(toggle.props['aria-pressed'], false, '默认关')
+  toggle.props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.ok(calls.some((url) => url.includes('usage=1')), '打开后必须带 usage=1')
+  const line = byExactClass(nodes, 'knit-usage')[0]
+  assert.ok(line, '打开后必须出现那一行')
+  const text = textOf(line)
+  assert.match(text, /已读/, '先看的那篇被读了要如实说出来')
+  assert.match(text, /辅助 1\/2/)
+  assert.match(text, /读了 7 次/)
+  assert.match(text, /包外 2 篇/)
+  assert.match(text, /上下文换过 2 次/)
+  assert.ok(!text.includes('%'), '不许有百分比')
+  assert.ok(!/评分|置信|分数/.test(text), '不许有评分 / 置信度这类词')
+})
+
+test('样式：使用情况那一行是弱化文字 —— 没有卡片 / 进度条 / 品牌色', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  assert.match(source, /\.knit-usage\{[^}]*font-size:10\.5px/)
+  assert.ok(!/\.knit-usage\{[^}]*background/.test(source), '不画卡片底色')
+  assert.ok(!/\.knit-usage\{[^}]*knit-accent/.test(source), '不用品牌色')
+  assert.ok(!/\.knit-usage\{[^}]*width:\s*\d/.test(source), '不是进度条')
+  // 开关本身也不许染色
+  assert.ok(!/\.knit-btn\.active\{[^}]*knit-accent/.test(source), '开关的选中态走中性灰')
+})

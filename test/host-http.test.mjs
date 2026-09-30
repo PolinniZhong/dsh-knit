@@ -38,15 +38,17 @@ const PROJECT_ROOT = makeWorkspace([
  * 那个回调会拿到一个没有 `tools` 的假 ctx —— 那是**替身的谎**，不是代码的 bug
  * （AGENTS.md §6.1 的教训）。真实的 cordis 在回调前保证依赖可用。
  *
+ * @param {object} [session] - 假会话（默认只有一个 header.cwd，没有任何事件）
  * @returns {Promise<{base:string, close:Function}>} 地址根与关闭函数
  */
-async function startKnitServer() {
+async function startKnitServer(session) {
   let handler = null
+  const fakeSession = session || { header: { cwd: PROJECT_ROOT } }
   const provided = {
     webServer: {
       register({ handler: h }) { handler = h; return () => {} },
     },
-    sessions: { get: () => ({ header: { cwd: PROJECT_ROOT } }) },
+    sessions: { get: () => fakeSession },
     effect(fn) { fn() },
   }
   apply({
@@ -275,6 +277,195 @@ test('HTTP 端到端：/api/context 返回同一份 Context Model', async () => 
     // 安全头与其余 JSON 路由一致
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
     assert.equal(r.headers.get('cache-control'), 'no-store')
+  } finally {
+    await close()
+  }
+})
+
+/* ── v0.15 · /api/recent 的「使用情况」通道 ──────────────────
+ *
+ * 这几条走真实回环 HTTP，锁的是**最容易漂移的那一层**：
+ * 记账默认关闭、`usage=1` 才开闸、开着之后幂等、根外的读不计数、
+ * 会话事件取不到时接口照常 200。
+ */
+
+/**
+ * 造一个会说话的假会话：`header.cwd` + `snapshotEvents()`。
+ * @param {object[]} events - 会话事件
+ * @returns {object} 假会话
+ */
+function sessionWithEvents(events) {
+  return { header: { cwd: PROJECT_ROOT }, snapshotEvents: () => events }
+}
+
+/**
+ * 一条用户消息事件。
+ * @param {number} seq - 序号
+ * @param {string} text - 文本
+ * @returns {object} 事件
+ */
+function userMessage(seq, text) {
+  return {
+    type: 'user/message',
+    seq,
+    time: 1000 + seq,
+    data: { role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } },
+  }
+}
+
+/**
+ * 一次 `read` 工具调用（`arguments` 是 JSON **字符串** —— 与真机逐字一致）。
+ * @param {number} seq - 序号
+ * @param {string} filePath - 参数里的路径
+ * @param {string} [callId] - 调用 id
+ * @returns {object} 事件
+ */
+function readCall(seq, filePath, callId = `c${seq}`) {
+  return {
+    type: 'tool/call',
+    seq,
+    time: 1000 + seq,
+    data: { turn: 1, step: 1, callId, name: 'read', arguments: JSON.stringify({ file_path: filePath }) },
+  }
+}
+
+/**
+ * 一次工具返回。默认成功；`isError: true` 表示失败（**失败不计入使用**）。
+ * @param {number} seq - 序号
+ * @param {string} callId - 对应的调用 id
+ * @param {boolean} [isError] - 是否失败
+ * @returns {object} 事件
+ */
+function toolResult(seq, callId, isError = false) {
+  return {
+    type: 'tool/result',
+    seq,
+    time: 1000 + seq,
+    sourceEventSeqs: [seq - 1],
+    data: {
+      turn: 1, step: 1,
+      message: {
+        role: 'tool',
+        source: { kind: 'tool', callId },
+        toolCallId: callId,
+        content: [{ type: 'text', text: '<path>…</path>' }],
+        isError,
+        id: `m${seq}`,
+      },
+    },
+  }
+}
+
+test('HTTP 端到端：/api/recent 默认不记账，usage=1 才开闸并回传使用情况', async () => {
+  const { base, close } = await startKnitServer(sessionWithEvents([
+    userMessage(1, 'hub 这份文档'),
+    readCall(2, 'docs/hub.md'),
+    toolResult(3, 'c2'),
+  ]))
+  try {
+    // ① 默认：一个字节都不记 —— 没有 usage 键，也没有任何记账状态
+    let body = await (await fetch(`${base}/api/recent?sessionId=s1&sort=relevance`)).json()
+    assert.ok(!('usage' in body), '默认不该回传 usage（更不该偷偷记账）')
+
+    // ② 打开：这一刻开始记，并且**当场**就能看到已经发生的那次读
+    body = await (await fetch(`${base}/api/recent?sessionId=s1&sort=relevance&usage=1`)).json()
+    assert.ok(body.usage, 'usage=1 应当回传使用情况')
+    assert.equal(body.usage.stats.reads, 1, '一次成功的 read 应被记成一次使用')
+    assert.equal(body.usage.stats.distinct, 1)
+    assert.equal(body.usage.stats.firstReadRel, 'docs/hub.md')
+    // ⚠️ `at` 是**上一份包**交出去的时间；第一次记账时还没有上一份，所以是 0。
+    // 这不是缺陷，是顺序：usage 先算、快照后记（从下一次请求起才有「上一份」）。
+    assert.equal(body.usage.at, 0)
+    // 面板只需要计数，不需要本机绝对路径
+    assert.ok(!JSON.stringify(body.usage).includes(PROJECT_ROOT), 'usage 里不许出现绝对路径')
+
+    // ③ 开着之后，后续请求不带 usage=1 也照样回传（状态在会话上，不在参数上）
+    body = await (await fetch(`${base}/api/recent?sessionId=s1&sort=relevance`)).json()
+    assert.ok(body.usage, '一旦打开，后续请求仍应回传（面板靠它持续刷新）')
+    assert.ok(body.usage.at > 0, '交过包之后就有了「上一份」的时间')
+    // 端到端把「读」与「分层」接上的那一条：这次读落在上一份包的主看篇里
+    assert.equal(body.usage.stats.primaryFollowThrough, true)
+    assert.equal(body.usage.stats.firstReadTier, 'primary')
+    assert.equal(body.usage.stats.outside, 0)
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：记账幂等 —— 轮询十次，同一次读只算一次', async () => {
+  const { base, close } = await startKnitServer(sessionWithEvents([
+    userMessage(1, 'hub 这份文档'),
+    readCall(2, 'docs/hub.md'),
+    toolResult(3, 'c2'),
+  ]))
+  try {
+    let last = null
+    for (let i = 0; i < 10; i += 1) {
+      last = await (await fetch(`${base}/api/recent?sessionId=s2&sort=relevance&usage=1`)).json()
+    }
+    assert.equal(last.usage.stats.reads, 1, '5 秒轮询会把同一批历史事件反复拉一遍，游标必须保证幂等')
+    assert.equal(last.usage.stats.distinct, 1)
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：根外的读与失败的工具返回都不计入使用', async () => {
+  const { base, close } = await startKnitServer(sessionWithEvents([
+    userMessage(1, 'hub 这份文档'),
+    // 根外（绝对路径）—— 隐私上直接丢掉，连计数都不留
+    readCall(2, '/etc/passwd'),
+    toolResult(3, 'c2'),
+    // 根内但读失败了 —— 「尝试读」不是「读到」
+    readCall(4, 'docs/leaf.md'),
+    toolResult(5, 'c4', true),
+    // 非 read 的工具不算
+    { type: 'tool/call', seq: 6, time: 1006, data: { turn: 1, step: 1, callId: 'c6', name: 'grep', arguments: JSON.stringify({ pattern: 'hub' }) } },
+    toolResult(7, 'c6'),
+  ]))
+  try {
+    const body = await (await fetch(`${base}/api/recent?sessionId=s3&sort=relevance&usage=1`)).json()
+    assert.equal(body.usage.stats.reads, 0, `根外 / 失败 / 非 read 都不算，实际 ${body.usage.stats.reads}`)
+    assert.deepEqual(body.usage.stats.outsideReads, [])
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：会话事件取不到时接口照常 200，只是没有读数（降级）', async () => {
+  const { base, close } = await startKnitServer({
+    header: { cwd: PROJECT_ROOT },
+    snapshotEvents: () => { throw new Error('会话存储坏了') },
+  })
+  try {
+    const r = await fetch(`${base}/api/recent?sessionId=s4&sort=relevance&usage=1`)
+    const body = await r.json()
+    assert.equal(r.status, 200, '记账坏了不许把列表接口搞成 500')
+    assert.ok(Array.isArray(body.docs))
+    assert.equal(body.usage.stats.reads, 0)
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：/api/context 也推进快照，但只在已记账的会话里', async () => {
+  const { base, close } = await startKnitServer(sessionWithEvents([userMessage(1, 'hub 这份文档')]))
+  try {
+    // 没打开 → 不记
+    let body = await (await fetch(`${base}/api/context?sessionId=s5`)).json()
+    assert.ok(body.ok)
+    assert.ok(!('usage' in body), '/api/context 本来就不回传 usage')
+
+    // 打开 → 这个路由交出的包同样进账（否则「上下文变了」会漏记）
+    await fetch(`${base}/api/recent?sessionId=s5&sort=relevance&usage=1`)
+    await fetch(`${base}/api/context?sessionId=s5`)
+    body = await (await fetch(`${base}/api/recent?sessionId=s5&sort=relevance`)).json()
+    assert.ok(body.usage, '已记账的会话应当继续回传使用情况')
+    assert.ok(body.usage.at > 0, '快照应当已经记下（at 有值）')
+    // 同签名不记新快照：同一份包被两个路由反复交出**不算**「上下文变了」。
+    // 否则面板 5 秒轮询一次，churn 立刻变成纯噪音。
+    assert.equal(body.usage.stats.churn.snapshots, 0, '一模一样的一份包不许记成「变化」')
+    assert.equal(body.usage.delta, null, '没有变化就没有 Delta')
   } finally {
     await close()
   }

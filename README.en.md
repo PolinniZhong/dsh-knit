@@ -346,12 +346,52 @@ recorded in [`docs/README.md`](docs/README.md).*
 
 ---
 
+## Did it actually get used? (v0.15)
+
+Knit orders "what to read first right now" — but **whether that order was right could only be felt,
+never checked**. v0.15 adds a layer of **verifiable usage feedback**: the files the agent really read,
+matched against the context pack that was in effect **at the moment of the read**.
+
+**Off by default.** There is a "Usage" toggle in the panel head; turning it on adds one muted line
+above the list:
+
+```
+primary read (docs/xxx.md) · supporting 1/2 · 7 reads · 2 outside the pack · context changed 2×
+```
+
+It reports **facts only**: was the primary doc read, how many reads happened, how many fell outside
+the pack, how often the context changed. **No score, no percentage, no progress bar** — these numbers
+are counted, not estimated.
+
+Three boundaries:
+
+- **Off by default**: while it is off, Knit reads **no events and stores nothing**. This accounting
+  has a cost (every poll would walk the session's events), and that is the user's call, not ours.
+- **No duplicate of the DSH trajectory**: the only evidence source is the `tool/call` / `tool/result`
+  events the session **already has** (successful `read`s). **No new event bus, no runtime trace,
+  no event store.**
+- **Nothing is persisted**: the numbers live in kernel memory only and are gone after a DSH restart —
+  do not treat them as long-term statistics.
+
+Agents get the same thing optionally: `knit_docs` accepts `audit: true` (default `false`), which
+appends one line, `Usage since the last pack: …` (a report on the **previous** pack).
+
+To check offline: `node tools/context-feedback-eval.mjs` replays the latest real session log;
+`--control` is the "deliver no pack at all" arm. ⚠️ It splits "outside the pack" in two —
+**in Knit's index but not in the pack** (a real miss) versus **not in the index at all** (`.js` /
+`.json`, which Knit never indexes). Without that split the outside ratio stays high and reads like
+"the Context Pack is useless", when in fact **the wrong thing was measured**.
+
+---
+
 ## What it reads, and what it doesn't
 
 - Scans `.md`, images and video **inside the current session workspace** (anything resolving
   outside is rejected); for media it reads metadata only, never the pixels
 - Reads only **the current session's** conversation events (used for ranking)
 - The `knit_docs` tool is **read-only**: it writes no files and persists no index
+- v0.15 usage accounting is **off by default**: when enabled it reads only the **current session's
+  existing** tool events (successful `read`s) — still no file writes, no persisted counters, gone on restart
 - **Makes no outbound network requests**: the client's `fetch` calls all point to
   the plugin's own same-origin routes
 - **No install-time scripts** (no `install` / `postinstall`)

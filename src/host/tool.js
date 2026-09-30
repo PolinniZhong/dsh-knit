@@ -107,6 +107,15 @@ const PARAMETERS = {
       description: `How many documents to consider (1-${MAX_LIMIT}, default ${DEFAULT_LIMIT}). `
         + 'They are grouped into the context tiers, not returned as one flat list.',
     },
+    // v0.15：可选的「使用情况」审计。**默认 false** —— 不传它时这次调用的
+    // 入参与返回值与 v0.14 逐字一致，老调用方一个字都不用改。
+    audit: {
+      type: 'boolean',
+      description: 'Set true to append a one-line usage summary of the PREVIOUS context pack: '
+        + 'whether its primary document has been read since, how many supporting documents were read, '
+        + 'and how many reads fell outside the pack. Counts only — no scores, no confidence. '
+        + 'Default false.',
+    },
   },
 }
 
@@ -196,6 +205,10 @@ const OUTPUT_SCHEMA = {
       },
       required: ['matched', 'total'],
     },
+    // v0.15：**可选**的一行「使用情况」（只有 `audit: true` 时才有）。
+    // 它说的全是计数与事实 —— 没有分数、没有百分比、没有置信度、没有 trajectory。
+    // 不传 `audit` 时这个字段根本不出现（而不是给个空串）。
+    usage: { type: 'string' },
     // 时间序（对话内容还不足，退回一列「最近改动的」）走这条。**形状比三层窄** ——
     // 没有命中词，就没有 `source` / `reason` 可给，不编造。只有 time 模式有。
     docs: {
@@ -438,6 +451,10 @@ export function renderToolText(value, readSnippet) {
   if (related.length > 0) {
     out.push('', 'Related (background — do not start here):', ...lines(related))
   }
+  // v0.15：可选的「使用情况」一行。**只有 `audit: true` 时 `execute` 才会填它**，
+  // 所以默认调用的输出与 v0.14 逐字一致。
+  const usage = (value && typeof value.usage === 'string') ? value.usage : ''
+  if (usage) out.push('', usage)
   return out.join('\n')
 }
 
@@ -463,6 +480,29 @@ function whyText(reason) {
 }
 
 /**
+ * 取「上一份 Context Pack 之后发生了什么」的一行摘要（v0.15）。
+ *
+ * `audit` 是**注入**进来的桥（宿主侧 `feedback.js` 的封装），工具自己不认识 feedback ——
+ * 与 `scan` / `read` / `contextFor` 同样的理由：一层做一件事，且避免 index.js ↔ tool.js 循环 import。
+ * 桥没给、桥抛了、桥返回了非字符串：一律当「没有可说的」，返回空串。
+ *
+ * @param {object} [audit] - `{summary(root, sessionId, session), note(root, sessionId, session, pack)}`
+ * @param {string} root - 工作区根
+ * @param {string} sessionId - 会话 id
+ * @param {object} session - 宿主会话
+ * @returns {string} 一行摘要或空串
+ */
+function auditSummary(audit, root, sessionId, session) {
+  if (!audit || typeof audit.summary !== 'function' || !sessionId) return ''
+  try {
+    const line = audit.summary(root, sessionId, session)
+    return typeof line === 'string' ? line : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
  * 造出 `knit_docs` 的 `ToolDefinition`。
  *
  * 形状与官方 `defineTool(...)` 的产物一致：`{ name, description, parameters, output, execute }`。
@@ -475,9 +515,12 @@ function whyText(reason) {
  *   `contextFor(root, {ranked, topic, task, total})` → Context Pack。
  *   **同样注入**（v0.14）：装配规则长在 `context.js` 里，工具只负责投影。
  *   不给就退化成 v0.13 的平铺列表 —— 但那只是兜底，正常路径 always 会传。
+ * @param {object} [audit] - Context Feedback 的桥（v0.15，**可选**）：
+ *   `{ summary(root, sessionId, session) → string, note(root, sessionId, session, pack) → void }`。
+ *   不给就完全没有审计能力 —— 工具的入参与返回值与 v0.14 逐字一致。
  * @returns {object} 工具定义
  */
-export function knitDocsDefinition(scan, read, contextFor) {
+export function knitDocsDefinition(scan, read, contextFor, audit) {
   /**
    * 给一篇文档抽命中段落。
    *
@@ -524,6 +567,8 @@ export function knitDocsDefinition(scan, read, contextFor) {
 
       const query = typeof (args && args.query) === 'string' ? args.query.trim() : ''
       const limit = clampLimit(args && args.limit)
+      // v0.15：审计是**显式**的（默认 false）。不传它就完全不走 feedback 那条路。
+      const auditRequested = !!(args && args.audit === true)
 
       const payload = await scan(root, limit, {
         session,
@@ -605,6 +650,19 @@ export function knitDocsDefinition(scan, read, contextFor) {
         return snippet ? { ...item, snippet } : item
       }))
 
+      // ── v0.15 · Context Feedback ──────────────────────────────────────
+      // 顺序是刻意的：先取「**上一份**包之后发生了什么」（usage 是回过头看的），
+      // 再把这一份包记成新的 Context Snapshot —— 从下一次调用起，它才是「上一份」。
+      // 两步都只是记账，任何失败都只让摘要少一行，绝不让整次工具调用失败。
+      const usage = auditRequested ? auditSummary(audit, root, sessionId, session) : ''
+      if (auditRequested && audit && typeof audit.note === 'function' && sessionId) {
+        try {
+          audit.note(root, sessionId, session, pack)
+        } catch {
+          // 记账失败不影响排序结果 —— 这是「Knit 坏了也不许影响 Agent」那条纪律
+        }
+      }
+
       return {
         mode: 'relevance',
         topic: typeof pack.topic === 'string' ? pack.topic : '',
@@ -619,6 +677,8 @@ export function knitDocsDefinition(scan, read, contextFor) {
         primary: await withSnippets(pack.primary || []),
         supporting: await withSnippets(pack.supporting || []),
         related: await withSnippets(pack.related || []),
+        // 只有 `audit: true` 且真的取到摘要时才有这个字段（否则连键都不出现）
+        ...(usage ? { usage } : {}),
       }
     },
   }
@@ -633,8 +693,9 @@ export function knitDocsDefinition(scan, read, contextFor) {
  * @param {Function} scan - 宿主的扫描函数
  * @param {Function} [read] - 宿主的单篇读取函数（抽命中段落用；可选）
  * @param {Function} [contextFor] - 宿主的上下文装配函数（v0.14；可选）
+ * @param {object} [audit] - Context Feedback 的桥（v0.15；可选）
  * @returns {() => void} 注销函数
  */
-export function registerKnitDocsTool(ctx, scan, read, contextFor) {
-  return ctx.tools.register(knitDocsDefinition(scan, read, contextFor))
+export function registerKnitDocsTool(ctx, scan, read, contextFor, audit) {
+  return ctx.tools.register(knitDocsDefinition(scan, read, contextFor, audit))
 }
