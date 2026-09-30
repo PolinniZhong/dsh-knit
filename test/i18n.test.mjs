@@ -180,13 +180,13 @@ test('渲染：英文环境下整个面板出英文', async () => {
   const { nodes } = await renderPanel('en', () => listPayload())
 
   assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2 docs')
-  // 默认排序偏好是「相关」，但宿主只给了 time 模式 → 如实说明「对话不足，暂按时间」
-  assert.match(textOf(byClass(nodes, 'knit-topic')[0]), /Not enough conversation yet/)
+  // 排序说明那一行 2026-09-30 已整体删除（排序方式由切换按钮自己表达），
+  // 所以这里只剩切换按钮本身的文案。
   assert.deepEqual(
     byClass(nodes, 'knit-seg-btn').map(textOf),
     ['Relevant', 'Recent'],
   )
-  assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, 'Filter title / summary / path')
+  assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, 'Filter docs')
   // v0.15：头部有**两个**按钮 —— 使用情况（默认关）与刷新
   assert.deepEqual(byClass(nodes, 'knit-btn').map(textOf), ['Usage', 'Refresh'])
 })
@@ -195,12 +195,11 @@ test('渲染：中文环境下整个面板出中文', async () => {
   const { nodes } = await renderPanel('zh', () => listPayload())
 
   assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2 篇')
-  assert.match(textOf(byClass(nodes, 'knit-topic')[0]), /对话内容还不足/)
   assert.deepEqual(
     byClass(nodes, 'knit-seg-btn').map(textOf),
     ['相关', '最新'],
   )
-  assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, '过滤标题 / 摘要 / 路径')
+  assert.equal(byClass(nodes, 'knit-filter')[0].props.placeholder, '过滤文档')
   assert.deepEqual(byClass(nodes, 'knit-btn').map(textOf), ['使用情况', '刷新'])
 })
 
@@ -217,28 +216,27 @@ test('渲染：占位符按语言正确替换（含过滤计数）', async () =>
   assert.equal(byClass(filtered, 'knit-doc').length, 1)
 })
 
-test('渲染：相关性模式下关键词退到 title，可见文本只有一句 Sorted by relevance', async () => {
-  const { nodes } = await renderPanel('en', () => listPayload({
+test('渲染：排序说明行已整体删除（相关 / 最新 / 中英文都不再有）', async () => {
+  // 相关模式（宿主还给了命中关键词）：那一行**连 title 里的关键词一起**消失
+  const rel = await renderPanel('en', () => listPayload({
     mode: 'relevance',
     topic: 'sidebar、registry',
   }))
-  // 2026-09-29 用户要求弱化关键词：UI 上不许再出现 Sorted by “sidebar、registry”
-  const topicNode = byClass(nodes, 'knit-topic')[0]
-  assert.equal(textOf(topicNode), 'Sorted by relevance', '可见文本只剩一句中性说明')
-  assert.match(String(topicNode.props.title), /matched keywords: sidebar、registry/,
-    '关键词退到 title 里当低层 metadata')
-})
+  assert.equal(byClass(rel.nodes, 'knit-topic').length, 0, '相关模式下没有排序说明行')
+  assert.ok(!JSON.stringify(ownTexts(rel.nodes)).includes('Sorted by relevance'),
+    '这段文案不许从别的地方漏回来')
 
-test('渲染：显式切到「最新」后，话题行说明按修改时间排', async () => {
-  const en = await renderPanel('en', () => listPayload())
-  byClass(en.nodes, 'knit-seg-btn').find((n) => textOf(n) === 'Recent').props.onClick()
-  const after = await en.rerender()
-  assert.match(textOf(byClass(after, 'knit-topic')[0]), /Sorted by modified time/)
+  // 切到「最新」：也不回来
+  byClass(rel.nodes, 'knit-seg-btn').find((n) => textOf(n) === 'Recent').props.onClick()
+  const after = await rel.rerender()
+  assert.equal(byClass(after, 'knit-topic').length, 0, '切到最新也没有排序说明行')
 
+  // 中文侧同样
   const zh = await renderPanel('zh', () => listPayload())
-  byClass(zh.nodes, 'knit-seg-btn').find((n) => textOf(n) === '最新').props.onClick()
-  const afterZh = await zh.rerender()
-  assert.match(textOf(byClass(afterZh, 'knit-topic')[0]), /按修改时间倒序/)
+  assert.equal(byClass(zh.nodes, 'knit-topic').length, 0, '中文侧也没有排序说明行')
+  const zhText = JSON.stringify(ownTexts(zh.nodes))
+  assert.ok(!zhText.includes('相关性排序') && !zhText.includes('按修改时间倒序'),
+    '中文排序说明也不许从别的地方漏回来')
 })
 
 test('渲染：英文空态 / 错误态文案', async () => {

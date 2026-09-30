@@ -150,7 +150,7 @@ test('注册：better-sidebar 缺失时官方右侧栏照常注册', () => {
 
 /* ── 渲染：排序模式 ─────────────────────────────────── */
 
-test('渲染：relevance 模式不做任何相关度可视化，只解释排序依据', async () => {
+test('渲染：relevance 模式不做任何相关度可视化（排序即答案）', async () => {
   installFetch(() => listPayload({
     mode: 'relevance',
     topic: '相关性、sidebar',
@@ -179,13 +179,12 @@ test('渲染：relevance 模式不做任何相关度可视化，只解释排序�
 
   assert.equal(byClass(nodes, 'knit-time').length, 2, '时间对所有行都一样显示')
 
-  // 2026-09-29 用户要求**弱化关键词**：可见文本只剩一句中性的「相关性排序」，
-  // 命中了哪几个词退到 title 里当低层 metadata（关键词是系统依据，不是主角）。
-  const topicNode = byClass(nodes, 'knit-topic')[0]
-  assert.equal(textOf(topicNode), '相关性排序', '可见文本里不许再出现关键词')
-  assert.ok(!textOf(topicNode).includes('sidebar'), '关键词不进可见文本')
-  assert.match(String(topicNode.props.title), /命中的关键词：相关性、sidebar/,
-    '关键词退到 title 里，悬停才给')
+  // 2026-09-30 用户裁决：排序说明那一行（.knit-topic）**整体删除** ——
+  // 排序方式由头部那个「相关 / 最新」切换按钮自己表达，再补一句是重复；
+  // 命中的关键词随行一起消失（它当时只在这一行的 title 里）。
+  // 这段守卫从当年的「可见文本里不许出现关键词」升级成「那一行根本不存在」——
+  // 只要行还在，关键词就可能再漏出来。
+  assert.equal(byClass(nodes, 'knit-topic').length, 0, '排序说明行已整体删除')
 })
 
 test('渲染：相关度分数只影响顺序，不影响任何一行的渲染', async () => {
@@ -267,7 +266,8 @@ test('渲染：time 模式不显示分数，显示相对时间', async () => {
 
   assert.equal(byClass(nodes, 'knit-rel-num').length, 0, '时间模式不应有分数')
   assert.equal(byClass(nodes, 'knit-time').length, 2, '应显示相对时间')
-  assert.ok(byClass(nodes, 'knit-topic').map(textOf)[0].includes('修改时间'))
+  // 排序说明行已整体删除：切到「最新」也不会把它带回来
+  assert.equal(byClass(nodes, 'knit-topic').length, 0, '排序说明行已整体删除')
 })
 
 test('渲染：请求 URL 带上当前排序方式', async () => {
@@ -1129,26 +1129,53 @@ test('样式：类型切换是下划线式页签，选中态不用品牌色也�
   assert.match(rule[1], /border-bottom-color:/, '选中态靠下划线表达层级')
   assert.ok(!rule[1].includes('background:var(--knit-active-bg'),
     '下划线式页签不许再退回灰底按钮——两者叠加会同时占用两种「选中」表达')
-  // 页签条本身要有那条 hairline，否则下划线悬空
-  assert.match(source, /\.knit-types\{[^}]*border-bottom:1px solid/, '页签条要有底边')
+  // ⚠️ 2026-09-30 用户裁决（**覆盖**上面那条「页签条要有底边」）：那条全宽 hairline
+  // 与下面的列表割裂，删掉。层级现在只由选中项自己那条 2px 下划线表达 ——
+  // 它是画在自己文字下面的，所以不是「下划线悬空」。
+  assert.ok(!/\.knit-types\{[^}]*border/.test(source), '页签条不再画底边')
 })
 
-test('样式：列表行的「正在预览」是中性描边，不再是品牌色描边', async () => {
+test('样式：列表行的「正在预览」只有灰底，描边已整体删除', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
 
-  // v0.14（Design §12 / §8）：用户 2026-09-29 裁决改成 neutral border。
-  // ⚠️ 这条**覆盖**了 AGENTS.md §4.1.2 里那句「列表行『正在预览』的品牌色描边是故意留的」。
-  // 理由是 Design §8「用灰阶建立层级，而不是用颜色建立层级」。
+  // v0.14（Design §12 / §8）：2026-09-29 用户裁决先把品牌色描边改成 neutral border。
+  // ⚠️ 2026-09-30 用户裁决**再覆盖一次**：「悬停跟选中，最外层那个描边，我觉得也不需要了」
+  // ⇒ 描边整条删掉，选中态只剩灰底。这条断言因此从「必须是中性描边」翻成「不许有任何描边」。
   const rule = source.match(/\.knit-doc\.active\{([^}]*)\}/)
   assert.ok(rule, '必须还有 .knit-doc.active 这条规则')
   assert.ok(!rule[1].includes('--knit-accent'),
     `列表行选中态不许再出现品牌色：${rule[1]}`)
-  assert.match(rule[1], /border-color:var\(--dsw-alias-border-l4/,
-    '选中态用中性描边（与键盘光标同一档工具色）')
+  assert.ok(!rule[1].includes('border'),
+    `选中态不许再有描边（2026-09-30 用户裁决）：${rule[1]}`)
   assert.match(rule[1], /background:var\(--knit-active-bg/,
-    '选中态仍然保留灰底——描边只说明「在哪儿」，填充才说明「选中了」')
+    '选中态保留灰底——现在它是唯一的分层信号')
+})
+
+test('样式：这一轮的「去线 / 去描边」都不许回潮（2026-09-30 用户裁决）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // ① 列表行的描边：静止那圈透明占位 + 悬停 / 选中各自上的色，三处一起删
+  assert.ok(!css.includes('border:.5px solid transparent'), '那条 .5px 透明边框占位已删')
+  assert.ok(!/\.knit-doc:hover\{[^}]*border-color/.test(css), '悬停态没有描边')
+  assert.ok(!/\.knit-doc\.active\{[^}]*border-color/.test(css), '选中态没有描边')
+  // ⚠️ 边框删了就得用 padding 补回它占掉的 .5px×2，否则每一行矮 1px、左右各窄 .5px
+  assert.match(css, /\.knit-doc\{[^}]*padding:10\.5px 11\.5px/,
+    'padding 要把删掉的边框补回来')
+  // ② 引用条自己不再画线（预览头那条由另一条用例守）
+  assert.ok(!/\.knit-links\{[^}]*border/.test(css), '引用条不画线')
+  // ③ 排序说明行的四个 i18n 键随行一起删掉，不许留在字典里「以后可能用」
+  for (const key of ['topic.relevancePlain', 'topic.relevanceTerms', 'topic.needsConversation', 'topic.time']) {
+    assert.ok(!source.includes(`'${key}'`), `${key} 已随那一行删除`)
+  }
+  // ④ 过滤框提示改成不列字段的一句话（两种语言都在）
+  assert.match(source, /'filter\.placeholder': '过滤文档'/)
+  assert.match(source, /'filter\.placeholder': 'Filter docs'/)
 })
 
 test('样式：悬停 / 选中的灰底各降一档（悬停 −60% / 选中 −40%），两个主题都给了值', async () => {
@@ -1384,9 +1411,10 @@ test('样式：预览面板底色恒为纯阅读底色，不靠底色分层；�
   // 分层三件套仍在：上边界 + 圆角 + 柔影
   assert.match(css, /\.knit-preview\{[^}]*border-top-left-radius:12px/)
   assert.match(css, /\.knit-preview\{[^}]*box-shadow:0 -8px 24px/)
-  // 头部对齐官方 .dhJKeW_header：38px + border-l3
+  // 头部高度仍对齐官方 .dhJKeW_header：38px；但官方那条 border-l3 底边
+  // 已按 2026-09-30 用户裁决删掉（与引用条那条一起，两条细线把引用区夹得割裂）
   assert.match(css, /\.knit-preview-head\{[^}]*height:38px/)
-  assert.match(css, /\.knit-preview-head\{[^}]*border-bottom:\.5px solid var\(--dsw-alias-border-l3/)
+  assert.ok(!/\.knit-preview-head\{[^}]*border-bottom/.test(css), '预览头不再画底边')
   // 全屏时要去掉圆角与柔影（那时没有「浮在列表上」的隐喻）
   assert.match(css, /\.knit-root\.fullscreen \.knit-preview\{[^}]*border-radius:0/)
   // ⚠️ 旧行为已废：不再有 .knit-preview.reading，也没有背景过渡
@@ -1919,8 +1947,13 @@ test('样式：组与组之间只靠 16px 空间（不再画横线），序号�
   // 用户要求「减少横向分割线」：组间距靠空间，不靠 border-top
   assert.match(source, /\.knit-tier \+ \.knit-tier\{margin-top:16px\}/)
   assert.ok(!/\.knit-tier \+ \.knit-tier\{[^}]*border-top/.test(source), '组之间不该再有横线')
-  // 顶部那行排序依据也不再带全宽下划线
-  assert.ok(!/\.knit-topic\{[^}]*border-bottom/.test(source), '排序依据那一行不画线')
+  // 排序说明那一行（原名 .knit-topic）2026-09-30 已**整体删除** ——
+  // 当年这条断言问的是「那一行有没有画线」，现在问的是「那一行还在不在」。
+  // ⚠️ 必须剥掉注释再查 CSS：历史注释里还会提到这个类名（那是给后人 grep 的）。
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+  assert.ok(!css.includes('.knit-topic'), '排序依据那一行的样式已整体删除')
+  assert.ok(!source.includes("'knit-topic'"), '排序依据那一行的节点已整体删除')
   // 字号：标题 14px / 行高 1.4 ＝ 19.6px；序号的 line-height 必须与它同步，
   // 这是「序号与标题第一行垂直居中」的唯一手段（改一处必须改两处）
   assert.match(source, /\.knit-title\{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1\.4;/)

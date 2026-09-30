@@ -51,15 +51,9 @@ window.__ModuleLoader__.load({
       'kind.media': '图片与视频',
       'kind.title': '切换要列出的产物类型',
 
-      'filter.placeholder': '过滤标题 / 摘要 / 路径',
+      'filter.placeholder': '过滤文档',
       'filter.aria': '过滤文档',
 
-      // 关键词**退到 title 里当低层 metadata**（2026-09-29 用户要求弱化）：
-      // 可见的只有「相关性排序」一句，命中了哪几个词只在悬停时给。
-      'topic.relevanceTerms': '按相关度排序 · 命中的关键词：{topic}',
-      'topic.relevancePlain': '相关性排序',
-      'topic.needsConversation': '对话内容还不足，暂按最新排序',
-      'topic.time': '按修改时间倒序',
       'usage.toggle': '使用情况',
       'usage.toggleTitle': '打开后开始统计这个会话：先看的那篇有没有被读、有多少次读落在包外、上下文换过几回。只记事实，不给分数。',
       'usage.none': '还没有记录',
@@ -203,15 +197,9 @@ window.__ModuleLoader__.load({
       'kind.media': 'Images & video',
       'kind.title': 'Switch which artifacts are listed',
 
-      'filter.placeholder': 'Filter title / summary / path',
+      'filter.placeholder': 'Filter docs',
       'filter.aria': 'Filter documents',
 
-      // Keywords are **low-level metadata** now (2026-09-29): the visible text is just
-      // "Sorted by relevance" — which terms matched only shows up on hover.
-      'topic.relevanceTerms': 'Sorted by relevance · matched keywords: {topic}',
-      'topic.relevancePlain': 'Sorted by relevance',
-      'topic.needsConversation': 'Not enough conversation yet — sorted by time',
-      'topic.time': 'Sorted by modified time',
       'usage.toggle': 'Usage',
       'usage.toggleTitle': 'Measure this session: whether the primary doc was read, how many reads fell outside the pack, how often the context changed. Facts only — no score.',
       'usage.none': 'Nothing recorded yet',
@@ -607,14 +595,12 @@ body[data-ds-dark-theme] .knit-root{
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1));outline:none}
 .knit-filter:focus{border-color:var(--knit-accent)}
 .knit-filter::placeholder{color:var(--dsw-alias-label-caption,#80868b)}
-.knit-topic{flex:none;padding:0 12px 9px;font-size:10.5px;line-height:1.4;
-  color:var(--dsw-alias-label-caption,#80868b);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* ⚠️ 这里以前有一条 border-bottom（全宽横线）。2026-09-29 用户要求**减少全宽分割线**
-   ——「页面上横线一多，读起来就像文件管理表格」。层级改由空间与字号建立：
-   这一行只用 bottom padding 与列表拉开距离，不画线。 */
 /* v0.15「使用情况」：**一行事实**，不画卡片、不画进度条、不用品牌色。
-   它就在「相关性排序」那行下面 —— 与它同档的弱化文字，不是一块新面板。 */
+   它占的就是原来「相关性排序」那一行的位置 —— 2026-09-30 用户裁决那一行
+   整个删掉（排序方式由「相关 / 最新」那个切换按钮自己表达，再说一遍是重复），
+   所以它现在是头部下面唯一的一行弱化文字，不是一块新面板。
+   ⚠️ 全宽横线一律不画：2026-09-29 用户要求**减少全宽分割线** ——
+   「页面上横线一多，读起来就像文件管理表格」。层级由空间与字号建立。 */
 .knit-usage{flex:none;padding:0 12px 9px;font-size:10.5px;line-height:1.45;
   color:var(--dsw-alias-label-caption,#80868b);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -678,20 +664,24 @@ body[data-ds-dark-theme] .knit-root{
    现在静止态直接 transparent，露出宿主侧边栏的底色（.knit-root / .knit-list 都不画底色）；
    ⚠️ 右栏删除后这段注释里提到的 .knit-pack 已经不存在了（2026-09-29），
    hover 与 .active 各有自己的令牌，
-   两者都**不该**跟着改成 transparent（那样一屏灰里就认不出选中态了）。 */
+   两者都**不该**跟着改成 transparent（那样一屏灰里就认不出选中态了）。
+   ⚠️ 2026-09-30 用户反馈：「悬停跟选中，最外层那个描边，我觉得也不需要了，还是有点影响」
+   ⇒ 原来那圈 .5px solid transparent（悬停 / 选中时才上色）**整条删掉**。
+   padding 各加 .5px 补回那条边框占掉的宽度，行的几何尺寸与改前逐像素一致
+   （所以下面这两条 padding 数字是有来历的，不是随手写的小数）。 */
 .knit-doc{display:grid;grid-template-columns:22px minmax(0,1fr);column-gap:8px;align-items:start;
-  padding:10px 11px;border-radius:10px;cursor:pointer;
-  border:.5px solid transparent;background:transparent;
-  transition:background .18s,border-color .18s,transform .18s,opacity .18s}
-.knit-doc:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
-  border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.1));transform:translateX(-2px)}
-/* 选中（正在预览）用**中性描边**（Design §12 / 2026-09-29 用户裁决）。
-   ⚠️ 这里曾经是品牌色描边。用户本次的决定是「按 Design 改成 neutral border」，
-   理由是 Design §8「用灰阶建立层级，而不是用颜色建立层级」——
-   选中态要能从一屏灰里被认出来，但不该在整个界面里唯一地跳成蓝色。
-   两个态不再靠色相区分，而是靠「选中＝整行描边 + 灰底」。 */
-.knit-doc.active{border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22));
-  background:var(--knit-active-bg,rgba(255,255,255,.085))}
+  padding:10.5px 11.5px;border-radius:10px;cursor:pointer;
+  background:transparent;
+  transition:background .18s,transform .18s,opacity .18s}
+.knit-doc:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));transform:translateX(-2px)}
+/* 选中（正在预览）＝**只有灰底**（2026-09-30 用户裁决）。
+   ⚠️ 这条的上一版是「中性描边 + 灰底」（2026-09-29 裁决，用来取代更早的品牌色描边）。
+   用户这次的原话是「文档列表悬停跟选中，最外层那个描边，我觉得也不需要了」⇒
+   描边整条删掉，**选中态只剩灰底**。
+   ⚠️ 灰底是选中唯一的分层信号，**不许**跟着改成 transparent（一屏灰里就认不出选中了）。
+   ⚠️ hover 与选中的区别现在**只**是底色深浅（--knit-hover-bg / --knit-active-bg），
+   不再有任何一圈线。 */
+.knit-doc.active{background:var(--knit-active-bg,rgba(255,255,255,.085))}
 /* .knit-doc.cursor **故意不设样式**：键盘焦点靠「移动即预览」的预览面板表达，
    再加描边会与 .active 的整块背景重复，显得突兀。
    （曾经有一条 「.knit-multicol .knit-doc.cursor」 的中性环，是为多列网格补的 ——
@@ -789,11 +779,13 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 .knit-resize::after{content:'';width:44px;height:3px;border-radius:2px;
   background:var(--dsw-alias-border-l3,rgba(255,255,255,.2));transition:background .15s,width .15s}
 .knit-resize:hover::after{background:var(--knit-accent);width:64px}
-/* 头对齐官方文档预览面板（.dhJKeW_header）：38px 高 + border-l3，
-   里面放路径面包屑而不是标题 —— 正文 H1 已经写了标题，重复只添乱。 */
+/* 头对齐官方文档预览面板（.dhJKeW_header）：38px 高，
+   里面放路径面包屑而不是标题 —— 正文 H1 已经写了标题，重复只添乱。
+   ⚠️ 2026-09-30 用户裁决：官方那条 border-l3 底边**不要** ——
+   「查看文档详情被引用，上下那两条横线，细细的横线，我觉得也不需要的」。
+   头部与引用条 / 正文之间现在只靠留白分层（配合 .knit-links 同时去掉的那条）。 */
 .knit-preview-head{box-sizing:border-box;display:flex;align-items:center;gap:4px;
-  height:38px;padding:0 6px 0 12px;flex:none;
-  border-bottom:.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.14))}
+  height:38px;padding:0 6px 0 12px;flex:none}
 /* 路径面包屑：**可点** —— 用系统默认应用打开这篇本地文档（阅读时多一个入口）。
    目录可收缩并出省略号，文件名不收缩，所以长路径下仍然看得见是哪个文件。 */
 .knit-preview-path{flex:1 1 auto;min-width:0;display:flex;align-items:center;
@@ -821,9 +813,11 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 
 /* ── 引用条（v0.12）────────────────────────────────────
    夹在预览头与正文之间的一层。全用中性令牌：它是「信息」，不是「操作」。
+   ⚠️ 2026-09-30 用户裁决：它自己那条 border-l2 底边**删掉** —— 与预览头的底边
+   一上一下两条细线把这一小块夹成了独立一截，用户的原话是「有点割裂」。
+   现在这一层不画任何横线，收紧的 padding 就是它的边界。
    注意 CSS 里不要写反引号 —— 这段样式是模板字符串，一个反引号就会把它截断。 */
-.knit-links{flex:none;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));
-  font-size:11px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-links{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
 .knit-links-state{padding:5px 12px;color:var(--dsw-alias-label-caption,#80868b)}
 .knit-links-head{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;
   padding:5px 12px;background:transparent;border:none;cursor:pointer;text-align:left;
@@ -847,14 +841,16 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 
 /* ── 类型切换（文档 / 图片与视频 / 全部）────────────── */
 /* v0.14（Design §20）：**不再是三个并排的灰底按钮**，改成下划线式页签 ——
-   底部一条 hairline，选中的那个用「深色文字 + 2px 深色下划线」表达。
+   选中的那个用「深色文字 + 2px 深色下划线」表达。
    ⚠️ 2026-09-29 用户裁决：这条**覆盖**了早先那条「选中填充背景灰就可以」。
    当时用户的原话是「选中的时候不用加绿色、蓝色的描边，就跟下面列表一样」——
    诉求是「别用品牌色描边」；现在连灰底也不要了，层级交给下划线，
    依然不许出现 --knit-accent / --knit-accent-fill（Design §8：灰阶分层）。
+   ⚠️ 2026-09-30 用户反馈：页签条底下原本还有一条全宽 hairline（border-l1）——
+   「最细最淡那条横线」与下面的列表割裂，**删掉**。层级现在只由选中项自己那条
+   2px 下划线表达，页签条本身不画线（也不是「下划线悬空」：它画在自己的文字下面）。
    ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。 */
-.knit-types{display:flex;gap:14px;padding:0 12px;flex:none;
-  border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.06))}
+.knit-types{display:flex;gap:14px;padding:0 12px;flex:none}
 .knit-type-btn{flex:none;height:28px;padding:0;cursor:pointer;
   border:none;border-bottom:2px solid transparent;background:transparent;
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:11.5px;
@@ -979,7 +975,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 .knit-root.fullscreen .knit-head,
 .knit-root.fullscreen .knit-bar,
 .knit-root.fullscreen .knit-types,
-.knit-root.fullscreen .knit-topic,
 .knit-root.fullscreen .knit-list{display:none}
 /* 全屏时预览铺满整个面板：圆角与向上柔影是「浮在列表上」的隐喻，这里没有列表，去掉 */
 .knit-root.fullscreen .knit-preview{flex:1 1 auto;max-height:none;
@@ -1632,7 +1627,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 紧跟 sort：测试按 hook 顺序预置前两位（notice/sort），kind 放第三位不影响老用例。
       const [kind, setKind] = React.useState(readKindPref)
       const [state, setState] = React.useState({
-        status: 'loading', docs: [], root: '', total: 0, error: '', mode: 'time', topic: '',
+        status: 'loading', docs: [], root: '', total: 0, error: '', mode: 'time',
         // v0.14：当前任务上下文（Context Pack）。宿主只在「文档档 + 相关序 + 有命中」时给，
         // 其余情形是 null —— 那时面板退回它一直在用的平铺列表（行为与 v0.13 逐字一致）。
         context: null,
@@ -1685,7 +1680,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       const load = React.useCallback(async () => {
         if (!sessionId) {
-          setState({ status: 'error', docs: [], root: '', total: 0, error: t('error.noSession'), mode: 'time', topic: '', context: null })
+          setState({ status: 'error', docs: [], root: '', total: 0, error: t('error.noSession'), mode: 'time', context: null })
           return
         }
         try {
@@ -1702,16 +1697,15 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
               total: data.total || 0,
               error: '',
               mode: data.mode || 'time',
-              topic: data.topic || '',
               context: data.context || null,
               usage: data.usage || null,
             })
 
           } else {
-            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', topic: '', context: null, usage: null })
+            setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', context: null, usage: null })
           }
         } catch (error) {
-          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', topic: '', context: null, usage: null })
+          setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', context: null, usage: null })
         }
         setTick(Date.now())
       }, [sessionId, sort, kind, usageOn])
@@ -2216,16 +2210,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                     ? contextBody(contextView)
                     : docsGrid(visibleDocs)
 
-      // 排序依据那行**弱化**了（2026-09-29 用户要求）：可见的只有一句
-      // 「相关性排序」，命中的关键词退到 title 里当低层 metadata ——
-      // 关键词是**系统依据**，不该被大号加粗地推到用户眼前。
-      // ⚠️ 可见文本里**不能**出现关键词：test/i18n.test.mjs 有守卫。
-      const topicText = relevance
-        ? t('topic.relevancePlain')
-        : (sort === 'relevance' ? t('topic.needsConversation') : t('topic.time'))
-      const topicTitle = relevance && state.topic
-        ? t('topic.relevanceTerms', { topic: state.topic })
-        : topicText
+      // 排序说明那一行（.knit-topic）**2026-09-30 已整体删除**：排序方式由头部那个
+      // 「相关 / 最新」切换按钮自己表达（按钮上就写着当前选的是哪个），再补一句
+      // 「相关性排序」是重复。命中的关键词**跟着一起消失** —— 它当时只在这行的
+      // title 里（可见文本本来就不许出现关键词，test/i18n.test.mjs 有守卫）。
+      // ⚠️ i18n 里那四个 topic.* 键已同时删除，不要为了「以后可能用」留着。
 
       /* v0.15「使用情况」：只把**事实**读出来 —— 先看的那篇读没读、辅助读了几篇、
          一共读了几次、几次落在包外、上下文换过几回。
@@ -2318,7 +2307,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             title: t('kind.title'),
             onClick: () => pickKind(value),
           }, t(labelKey)))),
-      h('div', { className: 'knit-topic', title: topicTitle }, topicText),
       // v0.15：开了才显示。一行事实，没有卡片、没有分数条。
       usageOn ? h('div', { className: 'knit-usage', title: t('usage.note') }, usageText || t('usage.none')) : null,
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
