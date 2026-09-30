@@ -656,7 +656,9 @@ body[data-ds-dark-theme] .knit-root{
    其他数据放在右边」）。第一列＝序号那条竖直的轴（.knit-num），第二列＝其余全部数据
    （.knit-body）。用 grid 而不是「有号才插一个元素」，是因为没有号的条目（时间序 /
    筛选结果 /「其他相关文档」）也要和有的条目**左边缘对齐** —— 轨道一直在，
-   正文就永远不会因为少一个序号而左移。 */
+   正文就永远不会因为少一个序号而左移。
+   2026-10-01 补：光对齐还不够 —— **混着**才刺眼（整屏没号时没人觉得缺东西）。所以
+   这一屏里有号时，没号的行在同一列渲染一个 .knit-gapmark（·）把格子顶住。 */
 /* 行的**静止态没有底色**（2026-09-29 用户反馈：「深色模式下，文档列表没有选中，鼠标没有悬停，
    不需要有背景。或者是说，跟深色模式的最底下的背景一样」）。
    ⚠️ 这里以前写的是 bg-layer-1 —— 浅色主题下它和面板底色都是 #fff（根本看不出来），
@@ -705,8 +707,14 @@ body[data-ds-dark-theme] .knit-root{
    它＝.knit-title 的 14px × 1.4。格的 align-items:start 让这一列从卡片顶边
    开始排，所以只要这个行盒与标题行盒等高，两个字号不同的文本就自然居中。
    **改 .knit-title 的字号或行高时，这里必须同步改**，否则序号会与标题错开。 */
-.knit-num{grid-column:1;font-size:10.5px;line-height:19.6px;font-variant-numeric:tabular-nums;
+.knit-num,.knit-gapmark{grid-column:1;font-size:10.5px;line-height:19.6px;font-variant-numeric:tabular-nums;
   color:var(--dsw-alias-label-caption,#80868b)}
+/* 中性占位标记（2026-10-01 用户反馈）：「其他相关文档」那一节没有序号，空着的那一格
+   被读成「漏了一个号」（原话：「没有序号以后左边就空了，视觉上比较割裂，就觉得是个 bug 一样」）。
+   没号的行就在同一列放一个最轻的 · —— 不冒充序号，也不让轨道断掉。
+   ⚠️ 只有**这一屏里有号**时才渲染（时间序 / 平铺列表整屏都没号 ⇒ 一个标记都没有：
+   一屏里要么都有、要么都没有；混着才是刺眼的原因）。
+   ⚠️ 几何与 .knit-num 共用同一条选择器 —— 这就是「改一处必须改另一处」的执行方式。 */
 /* 右边这一列＝其余全部数据（标题行 / 摘要 / 理由）。
    ⚠️ min-width:0 不能省：轨道是 minmax(0,1fr)，但**单元格本身**默认也是按
    min-content 撑的，不写它标题的省略号和摘要的两行截断就不生效（会把行撑宽）。 */
@@ -1339,7 +1347,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       return `knit-opt-${safe}-${(hash >>> 0).toString(36)}`
     }
 
-    function DocRow({ doc, now, active, cursor, relevance, why, num, primary, onSelect, onOpenTab, optionId }) {
+    function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, onSelect, onOpenTab, optionId }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
 
       return h('div', {
@@ -1358,9 +1366,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // 用户原话：「文档列表序号放在独立最左边，其他数据放在右边」。所以序号从行一里
       // 搬了出来，成为 .knit-doc 这条两列 grid 的第一列，其余数据全在右边堆叠。
       // v0.14（Design §11）：只有 Context Pack 前三层的条目有号；「其他相关文档」里的
-      // 没有 —— 那些不属于这个包，编号会把它们谎报成包的一部分。**没有号时整个节点不渲染**，
-      // 左边那一列由 grid 轨道保着（正文照样和有条目的行对齐，不会左移）。
-      num ? h('span', { className: 'knit-num' }, String(num).padStart(2, '0')) : null,
+      // 没有 —— 那些不属于这个包，编号会把它们谎报成包的一部分。
+      // 2026-10-01：**不再「没有号就整个节点不渲染」**。这一屏里有号时（`mark`，由
+      // `docsGrid` 下发），这一列放一个中性占位标记，否则空着的那一格会被读成漏了一个号。
+      // 整屏没号（时间序 / 平铺列表）时 `mark` 为假 —— 一个标记都不渲染。
+      num ? h('span', { className: 'knit-num' }, String(num).padStart(2, '0'))
+        : (mark ? h('span', { className: 'knit-gapmark', 'aria-hidden': 'true' }, '·') : null),
       // 右边这一列＝其余全部数据。列位置由 .knit-body 的 grid-column 定死 ——
       // 靠自动排布的话，没有序号时正文会掉进第一列。
       h('div', { className: 'knit-body' },
@@ -1763,10 +1774,16 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * 把「这一组的条目」映射成带序号 / Primary 标记的 `DocRow`。
        *
        * ⚠️ `num` 只有 Context Pack 前三层才有（见 `renderEntry` 的说明）：
-       * 时间序、筛选结果、「其他相关文档」都不编号。
+       * 时间序、筛选结果、「其他相关文档」都不编号 —— 但**这一屏里有号时**，没号的行会在
+       * 同一列拿到 `mark`（渲染 `.knit-gapmark` 占位），算法见下面。
        */
-      const docsGrid = (docs, numbers, primary) => docs.map((doc) =>
-        renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary)))
+      const docsGrid = (docs, numbers, primary) => {
+        // 一屏里「要么都有号、要么都没有」（2026-10-01）：只要这个视图里存在序号，
+        // 没号的那些行（「其他相关文档」）就在同一列渲染占位标记；整屏没号时不渲染。
+        const mark = Boolean(numbers && numbers.size > 0)
+        return docs.map((doc) =>
+          renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary), mark))
+      }
 
       const relevance = state.mode === 'relevance'
       const filtering = query.trim().length > 0
@@ -2145,7 +2162,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
 
       /** 渲染一个条目：媒体一律出方形卡片（媒体视图与「全部」的媒体区共用），其余出文档行。 */
-      const renderEntry = (doc, num, primary) => {
+      const renderEntry = (doc, num, primary, mark) => {
         const common = {
           key: doc.path || doc.rel,
           doc,
@@ -2160,7 +2177,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // `whyText` 只认 Context Pack 条目上挂的 `reason` —— 平铺列表里没有这个字段，
         // 于是返回空串，那一行不渲染。
         // `num` / `primary` 只有分层视图会传（Design §11 / §13）；平铺列表照旧无序号。
-        return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, primary })
+        // `mark`＝没号时同列的占位标记，只在「这一屏里有号」时为真。
+        return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary })
       }
 
       /** 「全部」的分区标题：类型名 + 「已显示 / 总数」+ 被截断时的「查看全部」。 */

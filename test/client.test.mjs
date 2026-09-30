@@ -1072,13 +1072,19 @@ test('文档：序号是最左边一列，行一＝「点 + 标题 + 时间」�
       '一行＝最左边一列序号 + 右边一列其余数据',
     )
   }
-  // 没有序号的行（时间序 / 筛选结果 /「其他相关文档」）**不渲染序号节点**，但它们
-  // 也**不许掉进第一列** —— 靠 .knit-body 的 grid-column 定死位置（用自动排布就会掉）。
+  // 没有序号的行（时间序 / 筛选结果 /「其他相关文档」）**也不许掉进第一列** ——
+  // 靠 .knit-body 的 grid-column 定死位置（用自动排布就会掉）。
+  // 2026-10-01：这一列**不再整格空着**（用户原话：「其他相关文档…没有序号以后左边就空了，
+  // 视觉上比较割裂，就觉得是个 bug 一样」）。这一屏里有号时，没号的行在同一列渲染一个
+  // 中性占位标记 `.knit-gapmark`（·）—— 不冒充序号，也不让轨道断掉。
   const unnumbered = docs.filter((d) => !classesUnder(d).includes('knit-num'))
   assert.ok(unnumbered.length > 0, '这个 payload 里有不编号的条目')
   for (const doc of unnumbered) {
-    assert.equal(String((doc.children[0] && doc.children[0].props.className) || ''), 'knit-body',
-      '没有序号时正文也要落在第二列，和有条目的行左边缘对齐')
+    assert.deepEqual(
+      doc.children.slice(0, 2).map((c) => String((c && c.props && c.props.className) || '')),
+      ['knit-gapmark', 'knit-body'],
+      '没号的行用同列的占位标记顶住，正文仍然落在第二列',
+    )
   }
 
   const rows = byExactClass(nodes, 'knit-row1')
@@ -1256,7 +1262,9 @@ test('样式：文档列表没有网格 —— 多列那套已整体删除，容
   // **垂直居中**靠的正是这两个数字对齐，改一处必须改另一处
   // （v0.14 规格 §15 把文档标题提到 14px，所以这一对数字一起变了）。
   assert.match(css, /\.knit-title\{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1\.4;/)
-  assert.match(css, /\.knit-num\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
+  // 2026-10-01：`.knit-gapmark`（没号时的中性占位标记）与序号**共用同一条选择器**，
+  // 所以「序号的行高必须等于标题行高」这条纪律自动覆盖它。
+  assert.match(css, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
 
   // ⚠️ 行的**静止态没有底色**（2026-09-29 用户看了暗色主题之后要求：
   //    「深色模式下，文档列表没有选中，鼠标没有悬停，不需要有背景。或者是说，跟深色模式的最底下的
@@ -1275,7 +1283,7 @@ test('样式：文档列表没有网格 —— 多列那套已整体删除，容
   //    （用户原话：「文档列表序号放在独立最左边，其他数据放在右边」）。
   //    第二列必须是 minmax(0,1fr)：不然长标题会把行撑宽，省略号失效。
   assert.match(css, /\.knit-doc\{display:grid;grid-template-columns:22px minmax\(0,1fr\)/)
-  assert.match(css, /\.knit-num\{grid-column:1;/)
+  assert.match(css, /\.knit-num,\.knit-gapmark\{grid-column:1;/)
   assert.match(css, /\.knit-body\{grid-column:2;min-width:0\}/,
     '第二列的位置与 min-width:0 都要写死 —— 少一个长标题就会把行撑宽')
 })
@@ -1883,6 +1891,24 @@ test('上下文：行首序号跨三档连续，且「其他相关文档」不�
   assert.equal(docs.length, 5)
   assert.equal(docs[4].props['data-knit-rel'], 'docs/other.md', '最后一档是「其他相关文档」')
   assert.equal(byExactClass(nodes, 'knit-num').length, 4, '它不在这个包里，所以不编号')
+  // 2026-10-01：它那一格不空着了 —— 同列一个中性标记（用户要「不要像 bug」，
+  // 同时保住「所有行左边缘对齐」）。但它**不是**序号：整数序列里没有第 5 个数字。
+  assert.deepEqual(byExactClass(nodes, 'knit-gapmark').map(textOf), ['·'])
+  assert.equal(classesUnder(docs[4]).includes('knit-num'), false, '占位标记不许被当成序号')
+})
+
+test('上下文：占位标记跟「这一屏有没有号」走 —— 混着才有，整屏没号就一个都没有', async () => {
+  // 有号的一屏：只有「其他相关文档」那一行拿到标记
+  const { nodes } = await mountWithPayload(contextPayload())
+  assert.equal(byExactClass(nodes, 'knit-num').length, 4)
+  assert.deepEqual(byExactClass(nodes, 'knit-gapmark').map(textOf), ['·'])
+  // 过滤到「无关」之后只剩「其他相关文档」这一档：整屏没号 ⇒ 一个标记都不许有
+  // （这才是「像 bug」的真正判据：混着才刺眼，整屏一致就没人觉得缺东西）
+  const mounted = await mountWithPayload(contextPayload())
+  byClass(mounted.nodes, 'knit-filter')[0].props.onChange({ target: { value: '无关' } })
+  const after = mounted.render()
+  assert.equal(byExactClass(after, 'knit-num').length, 0, '只剩包外那一档 ⇒ 没有号')
+  assert.equal(byExactClass(after, 'knit-gapmark').length, 0, '没有号的一屏里也不放占位标记')
 })
 
 test('上下文：Primary 那颗点是位置信号，只有主上下文那一行有', async () => {
@@ -1900,6 +1926,8 @@ test('上下文：时间序不分层，行首也不编号（平铺列表照旧�
   const { nodes } = await mountWithPayload(contextPayload({ mode: 'time' }))
   assert.equal(byExactClass(nodes, 'knit-tier').length, 0, '时间序不分层')
   assert.equal(byExactClass(nodes, 'knit-num').length, 0, '平铺列表不编号')
+  assert.equal(byExactClass(nodes, 'knit-gapmark').length, 0,
+    '整屏都没号时一个占位标记都不渲染 —— 一屏里要么都有、要么都没有')
   assert.equal(byExactClass(nodes, 'knit-dot').length, 0, '平铺列表没有主上下文点')
   assert.equal(byClass(nodes, 'knit-doc').length, 5, '文档本身照常列全')
 })
@@ -1957,7 +1985,7 @@ test('样式：组与组之间只靠 16px 空间（不再画横线），序号�
   // 字号：标题 14px / 行高 1.4 ＝ 19.6px；序号的 line-height 必须与它同步，
   // 这是「序号与标题第一行垂直居中」的唯一手段（改一处必须改两处）
   assert.match(source, /\.knit-title\{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1\.4;/)
-  assert.match(source, /\.knit-num\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
+  assert.match(source, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
   assert.match(source, /\.knit-sum\{font-size:12px;line-height:19px;/)
 })
 
