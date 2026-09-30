@@ -44,7 +44,17 @@ function listPayload(count = 3) {
 
 /**
  * 装载模块并 apply 到一个带 sessions 的假上下文。
- * @param {{docs?: number, current?: string}} [options] - 列表条数与当前会话 id
+ *
+ * ⚠️ 这里的 `sessions.list` 假件**必须照着现行契约写**：
+ * `SessionListState { ids, byId, phase, projectionsBySession }`——
+ * **没有 `current`**。2026-09-30 之前它假的是 `{ current: 's-1' }`，
+ * 一个现行内核里根本不存在的字段，于是 450 条测试全绿、真机上悬停浮层
+ * 却永远显示「0 篇」。要测旧内核的兜底路径就传 `legacyCurrent`。
+ *
+ * 当前会话 id 走**座位 props**（session 作用域的标准 props `sessionId`），
+ * 所以渲染入口按钮时要传 `{ sessionId: 's-1' }`。
+ *
+ * @param {{docs?: number, legacyCurrent?: string}} [options] - 列表条数、旧内核的 current
  * @returns {{exports: object, log: object, fetches: string[]}} 结果
  */
 function boot(options = {}) {
@@ -53,6 +63,7 @@ function boot(options = {}) {
   const fetches = []
   const { locale } = makeLocale({ active: 'zh' })
   const count = options.docs === undefined ? 3 : options.docs
+  const legacy = options.legacyCurrent
 
   globalThis.fetch = async (url) => {
     fetches.push(url)
@@ -63,7 +74,13 @@ function boot(options = {}) {
     slots: { inject(n, cb) { cb(); return () => {} }, register() { return () => {} } },
     sessions: {
       list: {
-        getSnapshot: () => ({ current: options.current === undefined ? 's-1' : options.current }),
+        getSnapshot: () => ({
+          ids: [],
+          byId: {},
+          phase: 'ready',
+          projectionsBySession: {},
+          ...(legacy === undefined ? {} : { current: legacy }),
+        }),
       },
     },
   }
@@ -97,16 +114,16 @@ test('悬停：进入后延迟才显示，不是一碰就弹', async () => {
   const Button = exports.__test.makeEntryButton(() => true)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.equal(peekOf(nodes), undefined, '初始没有浮层')
 
   anchorOf(nodes).props.onMouseEnter()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.equal(peekOf(nodes), undefined, '刚进入还不该有（要等延时）')
   assert.ok(harness.pendingTimers() >= 1, '应排了一个延时')
 
   harness.tick()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.ok(peekOf(nodes), '延时到点后才出现')
 })
 
@@ -115,11 +132,11 @@ test('悬停：延时到点后浮层出现，并去拉列表', async () => {
   const Button = exports.__test.makeEntryButton(() => true)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()                       // 跑掉「延迟显示」
   await harness.flush()                // 等拉列表
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   const peek = peekOf(nodes)
   assert.ok(peek, '延时到点后应出现浮层')
@@ -133,11 +150,11 @@ test('悬停：浮层列出文档标题与相对时间', async () => {
   const Button = exports.__test.makeEntryButton(() => true)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   const docs = byClass(nodes, 'knit-peek-doc')
   assert.equal(docs.length, 3, '三篇都列出来')
@@ -146,18 +163,52 @@ test('悬停：浮层列出文档标题与相对时间', async () => {
 })
 
 test('悬停：没有当前会话时给出空态而不是一直转圈', async () => {
-  const { exports } = boot({ current: '' })
+  const { exports } = boot()
   const Button = exports.__test.makeEntryButton(() => true)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: '' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: '' }))
 
   assert.ok(peekOf(nodes), '浮层仍在')
   assert.match(textOf(byClass(nodes, 'knit-peek-hint')[0]), /还没有/)
+})
+
+/* ── 当前会话 id 的来源（2026-09-30 真机故障的回归闸门）──── */
+
+test('会话 id：取座位 props（session 标准 props），不依赖列表快照的 current', async () => {
+  // 真机故障：现行内核的 sessions.list 快照没有 current，
+  // 老写法读 snapshot.current ⇒ 恒空 ⇒ 浮层永远「0 篇」。
+  const { exports, fetches } = boot()          // 假件按现行契约写：没有 current
+  const Button = exports.__test.makeEntryButton(() => true)
+
+  harness.reset()
+  let nodes = harness.render(h(Button, { sessionId: 's-9' }))
+  anchorOf(nodes).props.onMouseEnter()
+  harness.tick()
+  await harness.flush()
+  nodes = harness.render(h(Button, { sessionId: 's-9' }))
+
+  assert.equal(fetches.length, 1, '应照常去拉列表')
+  assert.match(fetches[0], /sessionId=s-9/, '用座位给的会话 id')
+  assert.equal(byClass(nodes, 'knit-peek-doc').length, 3, '浮层里真的列出文档')
+})
+
+test('会话 id：旧内核没有座位 props 时，退回列表快照的 current', async () => {
+  const { exports, fetches } = boot({ legacyCurrent: 's-7' })
+  const Button = exports.__test.makeEntryButton(() => true)
+
+  harness.reset()
+  let nodes = harness.render(h(Button, {}))     // 旧内核：座位不给 sessionId
+  anchorOf(nodes).props.onMouseEnter()
+  harness.tick()
+  await harness.flush()
+
+  assert.equal(fetches.length, 1, '兜底路径也应拉列表')
+  assert.match(fetches[0], /sessionId=s-7/, '退回快照里的 current')
 })
 
 /* ── 离开收起 ───────────────────────────────────────── */
@@ -167,11 +218,11 @@ test('离开：延迟收起，鼠标移进浮层可取消', async () => {
   const Button = exports.__test.makeEntryButton(() => true)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.ok(peekOf(nodes), '先显示出来')
 
   // 离开按钮 → 排一个收起延时
@@ -179,13 +230,13 @@ test('离开：延迟收起，鼠标移进浮层可取消', async () => {
   // 还没到点，鼠标移进浮层 → 取消收起
   peekOf(nodes).props.onMouseEnter()
   harness.tick()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.ok(peekOf(nodes), '移进浮层后不该被收起')
 
   // 真正离开浮层
   peekOf(nodes).props.onMouseLeave()
   harness.tick()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.equal(peekOf(nodes), undefined, '离开后应收起')
 })
 
@@ -197,17 +248,17 @@ test('点击按钮：收起浮层并打开面板', async () => {
   const Button = exports.__test.makeEntryButton(() => { opened.push(1); return true })
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   let prevented = false
   let stopped = false
   buttonOf(nodes).props.onClick({ preventDefault() { prevented = true }, stopPropagation() { stopped = true } })
 
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.equal(peekOf(nodes), undefined, '点击后浮层应收起')
   assert.equal(opened.length, 1, '应打开面板')
   assert.equal(prevented, true)
@@ -220,15 +271,15 @@ test('点击浮层里的某一篇：打开面板并记住要预览哪一篇', as
   const Button = exports.__test.makeEntryButton(() => { opened.push(1); return true })
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   byClass(nodes, 'knit-peek-doc')[1].props.onClick()   // 点第二篇
 
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
   assert.equal(peekOf(nodes), undefined, '点完应收起浮层')
   assert.equal(opened.length, 1, '应打开面板')
 
@@ -248,11 +299,11 @@ test('点击浮层里的某一篇：只消费一次，不粘住下一次打开',
   const { KnitBody } = exports.__test
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   byClass(nodes, 'knit-peek-doc')[0].props.onClick()
 
@@ -276,11 +327,11 @@ test('浮层：没有可用宿主时点击也不抛错', async () => {
   const Button = exports.__test.makeEntryButton(() => false)
 
   harness.reset()
-  let nodes = harness.render(h(Button, {}))
+  let nodes = harness.render(h(Button, { sessionId: 's-1' }))
   anchorOf(nodes).props.onMouseEnter()
   harness.tick()
   await harness.flush()
-  nodes = harness.render(h(Button, {}))
+  nodes = harness.render(h(Button, { sessionId: 's-1' }))
 
   assert.doesNotThrow(() => buttonOf(nodes).props.onClick({ preventDefault() {}, stopPropagation() {} }))
 })

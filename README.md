@@ -398,7 +398,7 @@ agent 侧同样可选：`knit_docs` 加 `audit: true`（默认 `false`），工�
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 450 项，零依赖，不需要先 npm install
+npm test          # 452 项，零依赖，不需要先 npm install
 ```
 
 **改动生效方式**：宿主半边（`src/host/`）改了**必须重启 DSH**（实测不热加载）；
@@ -422,7 +422,7 @@ knit/
 │   ├── host/feedback.js  # 使用反馈：快照 / Delta / 读归层（纯逻辑，只读既有会话事件）
 │   ├── host/tool.js      # agent 文档工具 knit_docs（手写 ToolDefinition）
 │   └── client/client.js  # 双宿主注册 + 面板 UI
-└── test/                 # 450 项测试
+└── test/                 # 452 项测试
     ├── eval/             # 检索质量评测：语料 + 用例 + 冻结的 v0.5.2 基线
     └── context/          # 上下文分层评测：24 篇语料 + 12 条任务型用例
 ```

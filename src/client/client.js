@@ -2410,10 +2410,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @returns {Function} 组件
      */
     /**
-     * 取当前会话 id（悬停浮层要用它拉列表）。
+     * 旧内核的兜底读法：从 `sessions` 列表快照里读「当前会话」。
      *
-     * 入口按钮坐在 list 座位上，座位不给任何 owner 参数，所以只能从
-     * sessions 列表里读「当前会话」——与聊天视图解析 cwd 用的是同一条路。
+     * ⚠️ **这不是主路径**。2026-09-30 实测当前内核的契约：
+     * `ctx.sessions.list` 的快照是 `SessionListState`
+     * `{ ids, byId, phase, projectionsBySession }` —— **没有 `current` 字段**
+     * （契约注释写着「navigation belongs to view owners」，当前会话归视图所有）。
+     * 所以这个函数在现代内核上恒返回空串；悬停浮层的主路径是座位 props 里的
+     * `sessionId`（见 `makeEntryButton`）。保留它只是让更老的内核上不至于全空。
      *
      * @returns {string} 会话 id，取不到为空串
      */
@@ -2484,11 +2488,23 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * @returns {Function} 组件
      */
     function makeEntryButton(onOpen) {
-      return function KnitEntryButton() {
+      return function KnitEntryButton(props) {
         const [peek, setPeek] = React.useState(null)
         const btnRef = React.useRef(null)
         const showTimer = React.useRef(null)
         const hideTimer = React.useRef(null)
+
+        // 当前会话 id：这个座位是 **session 作用域**
+        // （`conversation.session.header.utilities`），框架通过标准 props
+        // 直接把当前会话 id 递进来（`SessionStandardProps.sessionId`，
+        // 由 `dsh-client-ui-session` 声明、座位契约注释也写明
+        // 「Header actions derive their state from standard Session props」）。
+        // 这是唯一可靠的来源 —— 老写法读 `sessions` 列表快照的 `current`，
+        // 而那个字段在现行契约里不存在（见 `currentSessionId` 的注释）。
+        // 属性留在 ref 里给定时器回调用，每次渲染刷新。
+        const seatSessionId = (props && props.sessionId) || ''
+        const sidRef = React.useRef(seatSessionId)
+        sidRef.current = seatSessionId || currentSessionId()
 
         /** 清掉两个定时器。 */
         const clearTimers = () => {
@@ -2498,7 +2514,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
         /** 拉浮层要显示的那几篇。 */
         const loadPeek = async () => {
-          const sessionId = currentSessionId()
+          const sessionId = sidRef.current
           if (!sessionId) {
             setPeek((cur) => (cur ? { ...cur, status: 'ready', docs: [], total: 0 } : cur))
             return

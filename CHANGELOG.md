@@ -8,7 +8,7 @@
 > ⚠️ 这一版**已提交、未打 tag、未 publish** —— npm 上的最新版仍是 `0.15.0`。
 > 真要发布时，把这里「未发布」改成日期，并按 `03_发布/发布清单-v0.15.0.md` 那五步走。
 
-**只动界面，不动功能**：没有新指标、没有新接口，BM25 一行没改，Context Pack 的装配规则一行没改。
+**界面收敛 + 一处真机修复**：没有新指标、没有新接口，BM25 一行没改，Context Pack 的装配规则一行没改。
 
 用户看过 v0.15 的真实界面之后提了五处收敛（2026-09-30），共同点是同一条审美主张 ——
 **能用空间表达的层级，就别再画线**：
@@ -21,9 +21,29 @@
 | **引用区上下两条细线都删** | 预览头的 `border-bottom: .5px border-l3` 与引用条的 `border-bottom: 1px border-l2` 一起删（38px 头部高度保留，排版不动，只是不画线）。这两条线把「被引用」夹在中间，视觉上割裂 |
 | **过滤框提示简化** | `过滤标题 / 摘要 / 路径` → **「过滤文档」**（英文 `Filter title / summary / path` → `Filter docs`）：不列字段清单，字段范围由行为本身说明 |
 
+### 修好：悬停浮层永远显示「0 篇」
+
+真机上对话头部右侧那个 Knit 图标，悬停后浮层只有「**0 篇 / 这个工作区里还没有 Markdown 文档。**」，
+可面板里同一个工作区的文档一切正常。根因**不在列表逻辑，而在取「当前会话 id」的方式**：
+
+- 入口按钮坐在 `conversation.session.header.utilities` 这个 **session 作用域**的座位上，框架通过
+  **标准 props 直接把当前会话 id 递进来**（`SessionStandardProps.sessionId`，由 `dsh-client-ui-session`
+  以 `props: ["sessionId"]` 注入；座位契约也写明「Header actions derive their state from standard Session props」）。
+- Knit 从 v0.5.0 起读的却是 `ctx.sessions.list` 快照里的 `snapshot.current` —— **现行契约里没有这个字段**：
+  `SessionListState` 只有 `{ ids, byId, phase, projectionsBySession }`，契约注释是
+  「navigation belongs to view owners」。⇒ 恒取到空串 ⇒ 每次都走「没有当前会话」分支 ⇒ 空态。
+
+改法：**座位 props 的 `sessionId` 优先**，取不到时才退回老读法（`snapshot.current`，给更老的内核兜底）。
+「点浮层里某一篇直接展开它的预览」这条通路一直是好的，只是列表为空时点不到 —— 会话 id 一恢复它就回来了。
+
+⚠️ **测试为什么没拦住**：`test/peek.test.mjs` 的假上下文把 `sessions.list.getSnapshot()` 假成了
+`{ current: 's-1' }` —— 一个现行内核里根本不存在的字段，于是 450 条测试全绿、真机上永远是空态。
+现在假件照着契约写成 `{ ids, byId, phase, projectionsBySession }`，**当前会话 id 一律走座位 props**，
+并新增两条回归用例：① 座位 props 生效（快照里没有 `current` 也要照常拉列表）；② 老内核退回 `current`。
+
 测试侧同步改了钉住这五条的断言，并把**「删除」本身写成防回潮断言** —— 新增一条用例守着：
 那三处描边、两条分割线、那一行的类名、四个文案键，**只要回来就红**。
-测试数不变（合并了两条 i18n 用例、新增一条）：**450 / 450**。
+测试数：**452 / 452**（合并两条 i18n 用例、新增一条防回潮用例，再加上述两条会话 id 回归用例）。
 
 顺带修掉 `knit/README.md` / `knit/README.en.md` 里两处陈旧数字：`395 项测试` → `450`（v0.15.0 时漏改），
 并在目录树里补上 v0.15.0 就存在、却一直没列出的 `src/host/feedback.js`。

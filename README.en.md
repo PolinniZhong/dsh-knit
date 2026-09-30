@@ -439,7 +439,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 450 tests, zero dependencies, no npm install needed
+npm test          # 452 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -463,7 +463,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: snapshots / delta / read-to-tier (pure; reads existing session events)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 450 tests
+└── test/                 # 452 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```
