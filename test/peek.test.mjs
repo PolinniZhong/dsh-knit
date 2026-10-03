@@ -160,6 +160,9 @@ test('悬停：浮层列出文档标题与相对时间', async () => {
   assert.equal(docs.length, 3, '三篇都列出来')
   assert.match(textOf(docs[0]), /文档 0/)
   assert.equal(byClass(nodes, 'knit-peek-time').length, 3, '每篇带相对时间')
+  // 2026-10-01 用户要求：列表下面那条横线与「点击打开面板」页脚都删掉 ——
+  // 有文档的浮层里**一个 hint 都不该有**（hint 只留给 loading / 空态）
+  assert.equal(byClass(nodes, 'knit-peek-hint').length, 0, '有文档时浮层没有多余提示行')
 })
 
 test('悬停：没有当前会话时给出空态而不是一直转圈', async () => {

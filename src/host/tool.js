@@ -486,16 +486,14 @@ function whyText(reason) {
  * 与 `scan` / `read` / `contextFor` 同样的理由：一层做一件事，且避免 index.js ↔ tool.js 循环 import。
  * 桥没给、桥抛了、桥返回了非字符串：一律当「没有可说的」，返回空串。
  *
- * @param {object} [audit] - `{summary(root, sessionId, session), note(root, sessionId, session, pack)}`
- * @param {string} root - 工作区根
+ * @param {object} [audit] - `{summary(sessionId), note(sessionId, pack)}`
  * @param {string} sessionId - 会话 id
- * @param {object} session - 宿主会话
  * @returns {string} 一行摘要或空串
  */
-function auditSummary(audit, root, sessionId, session) {
+function auditSummary(audit, sessionId) {
   if (!audit || typeof audit.summary !== 'function' || !sessionId) return ''
   try {
-    const line = audit.summary(root, sessionId, session)
+    const line = audit.summary(sessionId)
     return typeof line === 'string' ? line : ''
   } catch {
     return ''
@@ -515,8 +513,9 @@ function auditSummary(audit, root, sessionId, session) {
  *   `contextFor(root, {ranked, topic, task, total})` → Context Pack。
  *   **同样注入**（v0.14）：装配规则长在 `context.js` 里，工具只负责投影。
  *   不给就退化成 v0.13 的平铺列表 —— 但那只是兜底，正常路径 always 会传。
- * @param {object} [audit] - Context Feedback 的桥（v0.15，**可选**）：
- *   `{ summary(root, sessionId, session) → string, note(root, sessionId, session, pack) → void }`。
+ * @param {object} [audit] - Context Feedback 的桥（v0.16，**可选**）：
+ *   `{ summary(sessionId) → string, note(sessionId, pack) → void }`。
+ *   桥不再需要工作区根与会话对象：读证据由宿主的 `session/event` 订阅进 store。
  *   不给就完全没有审计能力 —— 工具的入参与返回值与 v0.14 逐字一致。
  * @returns {object} 工具定义
  */
@@ -654,10 +653,10 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
       // 顺序是刻意的：先取「**上一份**包之后发生了什么」（usage 是回过头看的），
       // 再把这一份包记成新的 Context Snapshot —— 从下一次调用起，它才是「上一份」。
       // 两步都只是记账，任何失败都只让摘要少一行，绝不让整次工具调用失败。
-      const usage = auditRequested ? auditSummary(audit, root, sessionId, session) : ''
+      const usage = auditRequested ? auditSummary(audit, sessionId) : ''
       if (auditRequested && audit && typeof audit.note === 'function' && sessionId) {
         try {
-          audit.note(root, sessionId, session, pack)
+          audit.note(sessionId, pack)
         } catch {
           // 记账失败不影响排序结果 —— 这是「Knit 坏了也不许影响 Agent」那条纪律
         }

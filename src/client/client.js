@@ -37,7 +37,6 @@ window.__ModuleLoader__.load({
       'count.all.filtered': '{hit} / {total} 项',
       'action.refresh': '刷新',
       'path.openTitle': '在文件管理器中打开',
-      'peek.openPanel': '点击打开面板',
       'peek.empty': '这个工作区里还没有 Markdown 文档。',
       'action.refreshNow': '立即刷新',
 
@@ -57,6 +56,7 @@ window.__ModuleLoader__.load({
       'usage.toggle': '使用情况',
       'usage.toggleTitle': '打开后开始统计这个会话：先看的那篇有没有被读、有多少次读落在包外、上下文换过几回。只记事实，不给分数。',
       'usage.none': '还没有记录',
+      'usage.epoch': '当前上下文 · Epoch {n}',
       'usage.primaryRead': '先看的「{rel}」已读',
       'usage.primaryUnread': '先看的「{rel}」还没读',
       'usage.supporting': '辅助 {read}/{total}',
@@ -130,7 +130,7 @@ window.__ModuleLoader__.load({
       'preview.fullscreenTitle': '全屏阅读',
       'preview.exitFullscreenTitle': '退出全屏（Esc）',
       'preview.openLocal': '{path}\n用系统默认应用打开这篇文档',
-      'preview.openLocalBtn': '在本地打开',
+      'preview.openLocalBtn': '本地打开',
       'preview.close': '收起预览',
       'preview.resizeTitle': '拖动调整高度',
       // v0.12 引用条。⚠️ 不放任何表情符号（test/i18n.test.mjs 有守卫）。
@@ -183,7 +183,6 @@ window.__ModuleLoader__.load({
       'count.all.filtered': '{hit} / {total} items',
       'action.refresh': 'Refresh',
       'path.openTitle': 'Open in file manager',
-      'peek.openPanel': 'Click to open the panel',
       'peek.empty': 'No Markdown documents in this workspace yet.',
       'action.refreshNow': 'Refresh now',
 
@@ -203,6 +202,7 @@ window.__ModuleLoader__.load({
       'usage.toggle': 'Usage',
       'usage.toggleTitle': 'Measure this session: whether the primary doc was read, how many reads fell outside the pack, how often the context changed. Facts only — no score.',
       'usage.none': 'Nothing recorded yet',
+      'usage.epoch': 'Context · Epoch {n}',
       'usage.primaryRead': 'primary read ({rel})',
       'usage.primaryUnread': 'primary not read yet ({rel})',
       'usage.supporting': 'supporting {read}/{total}',
@@ -794,16 +794,18 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    头部与引用条 / 正文之间现在只靠留白分层（配合 .knit-links 同时去掉的那条）。 */
 .knit-preview-head{box-sizing:border-box;display:flex;align-items:center;gap:4px;
   height:38px;padding:0 6px 0 12px;flex:none}
-/* 路径面包屑：**可点** —— 用系统默认应用打开这篇本地文档（阅读时多一个入口）。
-   目录可收缩并出省略号，文件名不收缩，所以长路径下仍然看得见是哪个文件。 */
+/* 路径：**可点** —— 用系统默认应用打开这篇本地文档（阅读时多一个入口）。
+   目录一律不展开，只留一个「…/」占位（2026-10-01 用户要求：「前面那一串都用三个点点点表示」，
+   头部宽度让给文件名）；文件名不收缩。**完整相对路径不丢** —— 在 .knit-preview-path 的悬停提示里。
+   ⚠️ 本段在 CSS 那一个大模板串里：注释里**不能出现反引号**（写 .knit-preview-path 这种
+   带反引号的类名会把模板提前截断，客户端半边整个加载失败 —— 2026-10-01 又踩一次）。 */
 .knit-preview-path{flex:1 1 auto;min-width:0;display:flex;align-items:center;
   margin-right:6px;font-size:12px;white-space:nowrap;overflow:hidden;
   background:transparent;border:none;padding:0;font-family:inherit;text-align:left;
   color:inherit;cursor:pointer}
 .knit-preview-path:disabled{cursor:default}
 .knit-preview-path:hover:not(:disabled) .knit-preview-name{text-decoration:underline}
-.knit-preview-dir{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  color:var(--dsw-alias-label-tertiary,rgba(255,255,255,.4))}
+.knit-preview-dir{flex:0 0 auto;color:var(--dsw-alias-label-tertiary,rgba(255,255,255,.4))}
 .knit-preview-name{flex:0 0 auto;color:var(--dsw-alias-label-primary,#e8eaed)}
 /* 正文区把滚动条提到 l2 —— 与官方文档预览面板同一档（那边的 .body 也覆盖这两个变量）。
    不重写 ::-webkit-scrollbar，只覆盖变量，所以宽度/圆角/悬停都跟 DSH 完全一致。 */
@@ -969,8 +971,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 .knit-peek-time{flex:none;font-size:10.5px;color:var(--dsw-alias-label-caption,#80868b)}
 .knit-peek .knit-peek-hint{padding:7px;font-size:10.5px;
   color:var(--dsw-alias-label-caption,#80868b)}
-.knit-peek-list + .knit-peek-hint{margin-top:4px;padding-top:8px;
-  border-top:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08))}
 
 .knit-entry{display:inline-flex;align-items:center;justify-content:center;flex:none;
   width:28px;height:28px;padding:0;border:none;border-radius:8px;cursor:pointer;
@@ -1392,8 +1392,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           : h('div', { className: 'knit-sum empty' }, t('summary.empty')),
         // ⚠️ **列表行里不再有路径**（2026-09-29 用户要求）：「文档列表中的文档路径，我觉得
         //    不需要出现了，因为点开查看文档详情的时候已经有了，所以这里是重复的，隐藏掉」。
-        //    —— 这是**重复信息**，不是「多列砍字段」那种静默降级：预览头的面包屑
-        //    （`.knit-preview-path`：目录浅 + 文件名亮，还可点）始终显示完整路径。
+        //    —— 这是**重复信息**，不是「多列砍字段」那种静默降级：预览头
+        //    （`.knit-preview-path`：目录收敛成 `…/` + 文件名亮，还可点）已经能定位到是哪一篇，
+        //    完整相对路径在它的悬停提示里。
         //    所以删掉的是 `.knit-meta` 这一个节点，**摘要仍然任何情况下都不许 display:none**。
         //    行的定位不走可见路径：`data-knit-rel` 仍在（键盘 / 预览映射靠它）。
         // v0.14：为什么这一篇在这个层里。只有 Context Pack 的条目才有 ——
@@ -1584,9 +1585,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       },
         fullscreen ? null : h('div', { className: 'knit-resize', onPointerDown: onResizeStart, title: t('preview.resizeTitle') }),
         h('div', { className: 'knit-preview-head' },
-          // 路径面包屑，**可点**：用系统默认应用打开这篇本地文档 —— 阅读时多一个
+          // 路径，**可点**：用系统默认应用打开这篇本地文档 —— 阅读时多一个
           // 「跳到本地」的入口。不放标题：正文 H1 已经写了，重复会让
           // 「列表行 / 预览头 / 正文」出现三遍同一个词，反而分不清哪块是详情。
+          // 目录收敛成 `…/`（2026-10-01 用户要求），完整相对路径在 title 里。
           h('button', {
             type: 'button',
             className: 'knit-preview-path',
@@ -1595,7 +1597,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: () => { if (onOpenLocal) onOpenLocal() },
           },
           previewPath.dir
-            ? h('span', { className: 'knit-preview-dir' }, previewPath.dir)
+            ? h('span', { className: 'knit-preview-dir' }, '…/')
             : null,
           h('span', { className: 'knit-preview-name' }, previewPath.name)),
           h('button', {
@@ -1603,9 +1605,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: onToggleFullscreen,
             title: fullscreen ? t('preview.exitFullscreenTitle') : t('preview.fullscreenTitle'),
           }, fullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')),
-          // 「在本地打开」＝ 之前那个「新标签页」的位置（v0.10）。
+          // 「本地打开」＝ 之前那个「新标签页」的位置（v0.10）。
           // 「新标签页」开的是官方文档预览，但面板里已经有就地预览，重复度高、用得少；
-          // 而「用默认应用打开这篇文档」原本只藏在路径面包屑的悬停提示里 ——
+          // 而「用默认应用打开这篇文档」原本只藏在路径的悬停提示里 ——
           // 把值钱的那个放到显眼处，把鸡肋的那个让位（双击列表行仍能开新标签页）。
           h('button', {
             className: 'knit-btn',
@@ -1626,11 +1628,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     /**
      * 面板主体。两个宿主共用。
      *
-     * @param {{sessionId?:string, openInTab?:Function}} props - 渲染入参。
+     * @param {{sessionId?:string, openInTab?:Function, visible?:boolean}} props - 渲染入参。
      *   `openInTab(doc)` 返回空串表示成功，返回文案表示失败原因。
+     *   `visible === false` 表示宿主那边这块面板**看不见**（官方右侧栏收起 / 不是当前标签）——
+     *   那时一次都不取数、也不落状态（见下）。
      * @returns {import('react').ReactElement} 元素
      */
-    function KnitBody({ sessionId, openInTab }) {
+    function KnitBody({ sessionId, openInTab, visible }) {
       ensureStyle()
 
       const [notice, setNotice] = React.useState('')
@@ -1689,7 +1693,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         return () => observer.disconnect()
       }, [])
 
-      const load = React.useCallback(async () => {
+      /* 官方右侧栏收起之后，标签身体**仍然挂着**（dockkit 的 `keepMounted`），v0.16 之前
+         这里照旧每 5 秒敲一次 `/knit/api/recent` 并 `setState`：白烧一次全工作区扫描，
+         还往宿主正在收起的那层 DOM 里插一帧重渲染。现在取数先问一句「还看得见吗」，看不见
+         **连请求都不发**；请求在途时被折叠的那一次，回来也不落状态（`alive` 由轮询的
+         cleanup 翻假）。重新可见时那个 effect 会重跑 ⇒ 立刻补一次，不必等下一个 5 秒。 */
+      const load = React.useCallback(async (alive) => {
+        const live = () => typeof alive !== 'function' || alive()
+        if (!live()) return
         if (!sessionId) {
           setState({ status: 'error', docs: [], root: '', total: 0, error: t('error.noSession'), mode: 'time', context: null })
           return
@@ -1700,6 +1711,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}${usageOn ? '&usage=1' : ''}`
           const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
           const data = await res.json()
+          if (!live()) return
           if (data && data.ok) {
             setState({
               status: 'ready',
@@ -1716,21 +1728,25 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', context: null, usage: null })
           }
         } catch (error) {
+          if (!live()) return
           setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', context: null, usage: null })
         }
         setTick(Date.now())
       }, [sessionId, sort, kind, usageOn])
 
       React.useEffect(() => {
+        // 看不见就一个定时器都不挂：`visible` 变回 true 时本 effect 重跑，立刻 load 一次。
+        if (visible === false) return undefined
         let alive = true
         let timer = null
+        const isAlive = () => alive
         const run = async () => {
-          await load()
+          await load(isAlive)
           if (alive) timer = setTimeout(run, POLL_MS)
         }
         run()
         return () => { alive = false; if (timer) clearTimeout(timer) }
-      }, [load])
+      }, [load, visible])
 
       /* ── 过滤：纯客户端，不重新请求宿主 ─────────────── */
       const visibleDocs = React.useMemo(() => {
@@ -2244,6 +2260,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         if (!u || !u.stats) return t('usage.none')
         const s = u.stats
         const parts = []
+        // SDD §20：只多一句「当前上下文 · Epoch N」—— `epochId` 是**累计编号**（换一次 +1），
+        // 不是「第几份包」；一份包都没交过时是 null，整句不显示。
+        if (Number.isInteger(u.epochId)) parts.push(t('usage.epoch', { n: u.epochId }))
         if (s.primaryRel) {
           parts.push(s.primaryFollowThrough
             ? t('usage.primaryRead', { rel: s.primaryRel })
@@ -2489,8 +2508,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       h('div', { className: 'knit-peek-head' },
         h(KnitGlyph, { size: 13 }),
         h('span', null, t('count', { n: total }))),
-      h('div', { className: 'knit-peek-list' }, body),
-      h('div', { className: 'knit-peek-hint' }, t('peek.openPanel')))
+      h('div', { className: 'knit-peek-list' }, body))
     }
 
     /**
@@ -2624,6 +2642,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const tabInfo = typeof useTabInfo === 'function' ? useTabInfo() : null
       const actions = tabInfo && tabInfo.tab ? tabInfo.tab.actions : null
 
+      // 座位契约里的 `tab.visible`：右栏收起、或本标签不是当前那个时是 `false`
+      // （`SidebarRightTabInfo.tab.visible`，「Docked bodies require expansion and selection」）。
+      // **折叠期间 dockkit 不卸载 tag 身体**，所以要自己停下来 —— 见 KnitBody 轮询那段。
+      const visible = !tabInfo || !tabInfo.tab || tabInfo.tab.visible !== false
+
       const openInTab = React.useCallback((doc) => {
         if (!actions || typeof actions.openResource !== 'function') {
           return t('error.noOpenResource')
@@ -2636,7 +2659,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         }
       }, [actions, sessionId])
 
-      return h(KnitBody, { sessionId, openInTab })
+      return h(KnitBody, { sessionId, openInTab, visible })
     }
 
     /**
@@ -2897,12 +2920,19 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           return
         }
 
+        //    hidden: true 是给 better-sidebar v0.24.1+ 的「原生表面」用的：那一版起它把
+        //    每个 descriptor 镜像成官方右侧栏的一个类型（id `dsh-better-sidebar:<id>`、
+        //    kind 取这里的 id），并在 descriptor 没写 hidden 时**连带注册一条 guide 条目**。
+        //    于是「开始」页上出现两行一模一样的「Knit 最近文档」：① 的 kind 'knit' 与镜像的
+        //    kind 'knit:recent'。hidden 只掐掉镜像那条 guide 条目（+ 菜单项），类型、座位与
+        //    ctx.betterSidebar.openTab 都还在 —— 入口保留 ① 那条（不看宿主装没装都在）。
         bsCtx.effect(() => bs.registerTab({
           id: BS_TAB_ID,
           title: () => t('guide.title'),
           icon: KnitGlyph,
           order: 30,
           single: true,                       // 同类型只开一个
+          hidden: true,                       // 别让镜像在官方 guide 里再挂一行（见上）
           component: (props) => h(BetterSidebarTabBody, props),
         }), 'dsh-knit: better-sidebar tab')
 

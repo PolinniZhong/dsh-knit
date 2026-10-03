@@ -1,20 +1,27 @@
 #!/usr/bin/env node
 /**
- * Context Feedback Eval —— 「Context Pack 交出去之后，真的被用了吗」的量尺（v0.15）。
+ * Context Feedback Eval —— 「Context Pack 交出去之后，真的被用了吗」的量尺（v0.16）。
  *
  * **为什么要有它**：v0.14 已经能算出「这个任务该先看哪一篇」，但没有任何证据表明
  * agent 真的去读了那一篇。`feedback.js` 把这件事变成可测量的事实，这个脚本负责
  * **在真实会话日志上**把五个指标算出来：
  *
  *   · Primary follow-through —— 主看的那篇最终被读了吗
- *   · First read tier       —— 第一次读落在哪一层（primary / supporting / outside）
+ *   · First read tier       —— 第一次读落在哪一层（primary / supporting / related / outside）
  *   · Supporting coverage   —— 辅助篇里被读到的比例
  *   · Outside-context       —— 有多少次读**不在**当时那份包里面
- *   · Delta churn           —— 上下文换过几次、进出换层各多少
+ *   · Context churn         —— 上下文换过几次、进出换层各多少
+ *   · Continued / re-entry  —— 离开上下文后还读了几次、重新进来后又读了几次
  *
  * **它是回放的，不是监听的**：拿一份会话日志（`~/.dsh/sessions/<工作区>/<会话>/session.v4.jsonl.zstd`），
  * 按时间顺序把每个「真实 read 发生的那一刻」重演一遍 —— 用**磁盘上这份代码**的
- * `scan()` + `buildContextFor()` 现算出那一刻的包，再喂给**同一个** `feedback.js`。
+ * `scan()` + `buildContextFor()` 现算出那一刻的包，再喂给**同一个** `feedback.js`
+ * （`noteSnapshot()` / `ingestEvents()` / `usageFor()`）。
+ *
+ * ⚠️ **归因规则只有一份**：runtime 与这里都不自己算「这一读落在哪一层」——
+ * 都走 `feedback.js` 的 `snapshotAt()` / `attributeRead()`。所以两边的**规则**逐字一致；
+ * 对不齐的只是「交付时刻」（面板轮询 / 工具调用是采样，这里是每个读一份合成包），
+ * 那是**数字**层面的差异，不是规则层面的（见 `Knit_评审-v0.16-基于DSH开放能力.md` §2）。
  * 所以：不需要重启宿主、不需要订阅 event bus、零网络、零模型、不写盘。
  * 历史会话也能补测（v0.14 的实验会话一样能算）。
  *
@@ -60,7 +67,10 @@ export function metricsFor(usage) {
     supportingCoverage: stats.supportingCoverage === undefined ? null : stats.supportingCoverage,
     outside: stats.outside || 0,
     outsideReads: stats.outsideReads || [],
-    contextChanges: churn.snapshots || 0,
+    contextChanges: churn.changes || 0,
+    epochs: churn.epochs || 0,
+    continuedReadsAfterExit: stats.continuedReadsAfterExit || 0,
+    reentries: stats.reEntries || 0,
     appeared: churn.appeared || 0,
     disappeared: churn.disappeared || 0,
     moved: churn.moved || 0,
@@ -120,18 +130,40 @@ export function findLatestSessionLog(sessionsDir = join(homedir(), '.dsh', 'sess
   let bestAt = -1
   for (const workspace of listDirs(sessionsDir)) {
     for (const session of listDirs(workspace)) {
-      for (const name of ['session.v4.jsonl.zstd', 'session.v4.jsonl']) {
-        const file = join(session, name)
+      for (const file of sessionLogsIn(session)) {
         try {
           const at = statSync(file).mtimeMs
           if (at > bestAt) { bestAt = at; best = file }
         } catch {
-          // 没有这个文件（或读不动）：继续找
+          // 读不动：继续找
         }
       }
     }
   }
   return best
+}
+
+/**
+ * 列一个会话目录里的日志，**格式版本从新到旧**。
+ *
+ * ⚠️ 不写死 `session.v4.jsonl.zstd`：宿主的 `SESSION_FORMAT_VERSION` 会往前走，
+ * 而且同一台机器上老会话还留在 v0 / v3 上（本机三代并存）。只认形状，不认具体版本号。
+ *
+ * @param {string} dir - 会话目录
+ * @returns {string[]} 日志绝对路径
+ */
+export function sessionLogsIn(dir) {
+  let names = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return []
+  }
+  return names
+    .map((name) => ({ name, match: /^session\.v(\d+)\.jsonl(\.zstd)?$/.exec(name) }))
+    .filter((entry) => entry.match)
+    .sort((a, b) => Number(b.match[1]) - Number(a.match[1]) || a.name.localeCompare(b.name))
+    .map((entry) => join(dir, entry.name))
 }
 
 /**
@@ -145,10 +177,8 @@ export function findSessionLogById(sessionId, sessionsDir = join(homedir(), '.ds
   for (const workspace of listDirs(sessionsDir)) {
     for (const session of listDirs(workspace)) {
       if (basename(session) !== sessionId) continue
-      for (const name of ['session.v4.jsonl.zstd', 'session.v4.jsonl']) {
-        const file = join(session, name)
-        if (existsSync(file)) return file
-      }
+      const [file] = sessionLogsIn(session)
+      if (file) return file
     }
   }
   return null
@@ -311,10 +341,12 @@ async function main() {
   console.log(`  其中 Knit 看得到的：${scope.inScope} 篇（漏 ${scope.missedReads} 次）· 看不到的：${scope.outOfScope} 篇（非 .md / 超出上限）`)
   if (scope.missed.length) console.log(`  ⚠️ 真的漏了：${scope.missed.join('、')}`)
   if (m.outsideReads.length) console.log(`  不在包里的：${m.outsideReads.join('、')}`)
-  console.log(`Delta churn            : 换过 ${m.contextChanges} 次 · 进 ${m.appeared} / 出 ${m.disappeared} / 换层 ${m.moved}${m.taskChanged ? ` · 任务变了 ${m.taskChanged}` : ''}`)
+  console.log(`Context churn          : ${m.epochs} 个 Epoch（换过 ${m.contextChanges} 次）· 进 ${m.appeared} / 出 ${m.disappeared} / 换层 ${m.moved}${m.taskChanged ? ` · 任务变了 ${m.taskChanged}` : ''}`)
+  console.log(`Continued / re-entry   : 离开后还读了 ${m.continuedReadsAfterExit} 篇 · 重新进来后又读了 ${m.reentries} 篇`)
   console.log('')
   // 量尺自检：Control 臂如果还能测出「落在层里」的读，那说明**量尺坏了**，不是结论。
-  if (flag('--control') && m.firstReadTier !== null) {
+  // v0.16：一次都没读才是 null；读过但在包外是 'outside' —— 后者在 Control 臂是**正常的**。
+  if (flag('--control') && m.firstReadTier !== null && m.firstReadTier !== 'outside') {
     console.error('✗ Control 臂不该有落在层里的读 —— 量尺本身坏了')
     return 1
   }

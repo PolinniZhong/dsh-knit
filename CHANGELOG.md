@@ -3,10 +3,153 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.16.0] - 2026-10-01 · 未发布
+
+> ⚠️ **未打 tag、未 publish** —— npm 上的最新版仍是 `0.15.0`。
+> 这一版把上一节那批「未发布」的界面收敛**一起**带上。
+
+**Context Effectiveness（依据 `01_ Knit PRD/SDD-v0.16-Context-Effectiveness.md`）**：
+一次读落在哪一层，**在读发生那一刻结算并冻结**；并正式引入 **Context Epoch**。
+检索侧一行没改（BM25 / IDF / 分层 / Context Pack 装配规则一个字没动），
+**没有分数、没有百分比、没有新面板**。
+
+### 修好：历史归因会被「现在」改口（split-brain）
+
+v0.15 里「这次读落在哪一层」被算了两遍：读入库那一刻算一遍（`recordRead()` → `snapshotAt()`，
+冻进 `firstTier`），出报告那一刻又拿**最新**那份快照重算一遍（`usageFrom()`）——
+`byTier[].read` / `outside` / `supportingCoverage` / `firstReadTier` 全吃重算值。
+于是同一条读可以同时是 `firstTier='primary'` 与 `tier='related'`。真实场景就是：
+
+```
+10:00 交 Context A（primary = A.md）→ 10:01 读 A.md → 10:03 换 Context B → 10:04 看 usage
+⇒ A.md 被算成「包外」—— 历史被现在改口了。
+```
+
+现在只有一条规则，由 `src/host/feedback.js` 的两个纯函数说了算：
+
+| 函数 | 语义 |
+|---|---|
+| `snapshotAt(snapshots, readSeq)` | 取 `seq <= readSeq` 的**最新**快照 = 读发生时生效的那一份 |
+| `attributeRead(snapshot, rel)` | 输出 `{ snapshotSeq, epochId, tierAtRead, rankAtRead, insideAtRead }`，读时冻结 |
+
+`recordRead()` 在读那一刻调它并冻进 `firstRead` / `lastRead`；`usageFrom()` 只读冻结值。
+`reads[]` 行上的 `tier` / `rank` / `outside` 也一律是**首读**的归因（不再是「它现在在哪一层」），
+旧字段名（`firstTier` / `firstReadAt` / `outsideCount` …）与旧键 `churn.snapshots` 全部保留为兼容别名。
+
+### 修好：右栏收起之后，Knit 还在每 5 秒敲一次宿主
+
+**现象（2026-10-01 用户报）**：一旦点开过文件、再把右栏那一栏关掉或收起来，过一会儿它会变成
+**一片空白** —— 没有芯片、没有文字，也没有「这类内容还没有可用的查看方式」。
+
+**查到的**：官方右侧栏收起时**不卸载**标签身体（dockkit 的 `keepMounted`），而 `KnitBody` 的轮询
+过去只看「挂载了没有」——于是收起来之后照旧每 5 秒请求一次 `/knit/api/recent`（一次全工作区扫描）
+并 `setState`，等于往宿主正在收起 / 展开的那棵子树上又插了一帧重渲染。
+实测（headless Chrome 里的真客户端）：收起状态 12 秒里发了 **2 次**请求；那一栏确实还在
+`visibility:hidden` 里挂着（`knitVisible.visibility === 'hidden'`、`knitRoot === true`）。
+
+**修法**：用座位契约里现成的 `tab.visible` 做闸门。官方在
+`@deepseek-ai/dsh-client-ui-sidebar-right` 里算的是
+
+```js
+visible: active && (pane.host === 'float' || layout.expanded && (title || pane.activeTabId === tabId))
+```
+
+也就是「收起」与「不是当前标签」两种情况都是 `false`。座位适配层把它传给 `KnitBody`：看不见时
+**连请求都不发**，在途的那次回来也不落状态；`visible` 变回 `true` 时那个 effect 会重跑 ⇒
+**立刻补一次**，不必等下一个 5 秒。
+
+- 实测（同一台真客户端）：收起 13 秒 **0 次**请求（修前 2 次）；重新展开 7 秒内 **2 次**（立刻 + 5 秒那次）。
+- 拿不到 `tab.visible` 时（别的宿主 / 降级路径）**当作看得见**，不会把面板冻住。
+
+### 修好：右侧栏「开始」页出现两行一模一样的入口
+
+**现象（2026-10-01 用户报）**：右侧栏「开始」页上有两行同名胶囊（都是「Knit 最近文档」），
+点哪一行都进 Knit。
+
+**查到的**：`dsh-better-sidebar` v0.24.1 起有个「原生表面」——把它自己每个 tab descriptor
+镜像成官方右侧栏的一个类型（`id = dsh-better-sidebar:<descriptor.id>`、`kind = descriptor.id`），
+并且**在 descriptor 没写 `hidden` 时连带注册一条 guide 条目**：
+
+```js
+...descriptor.hidden === true || isEditor ? {} : { guide: [{ id: descriptor.id, order: descriptor.order ?? 100, … }] }
+```
+
+于是「开始」页同时挂着 ① 我们自己的类型（`kind: 'knit'`）与镜像（`kind: 'knit:recent'`），
+标题都取 `guide.title` ⇒ 两行同名。（并不是 Knit 注册了两次。）
+
+**修法**：给 `ctx.betterSidebar.registerTab` 的 descriptor 加 `hidden: true`。它只掐掉那一条镜像
+guide 条目（连带 + 菜单项），镜像的类型 / 座位 / `ctx.betterSidebar.openTab` 都还在；入口保留 ①
+那条 —— 不依赖宿主装没装 better-sidebar。
+
+- 实测（真客户端 + 刷新）：修前 5 条胶囊里两条 Knit；修后只剩 `data-sidebar-right-guide-entry="knit"` 一条，
+  点它照旧开 `tab8`「Knit」。
+
+### 新增：Context Epoch
+
+- **一份快照 = 一个 Epoch**：`epochId` 从 1 开始，**内容真的换了才 +1**
+  （签名 = `task` + 三层 `tier:rank:rel`，与 v0.15 同一套判据）——5 秒轮询不会灌进几十个 Epoch。
+- **`usage.epochs[]` 与快照栈同生共死**：每项 `{ epochId, snapshotSeq, topic, task,
+  primary/supporting/related: { rel|total, read }, outsideReads, continuedReadsAfterExit, reEntries }`。
+  **只供内部 / 离线回放 / 将来的评估** —— v0.16 不把它上任何工具输出。
+- 保留上限：`MAX_SNAPSHOTS_PER_SESSION` **2 → 20**、`MAX_DELTAS_PER_SESSION` **20 → 50**。
+  归因在读时结算，保留数量只决定「离开 / 重新进入」能回溯多远（**宁可漏记，也不猜**）。
+- `churn` 口径：新增 `epochs`（换过几个不同的上下文 = 最后一份的编号），`changes = epochs - 1`；
+  客户端在用的 `snapshots` / `deltas` 保留为 `changes` 的别名（文案「上下文换过 N 次」不变）。
+
+### 新增：两个事实字段（只记事实，不加解释）
+
+| 字段 | 判据（只在保留窗口内推导） |
+|---|---|
+| `continuedReadAfterExit` | 这次读**在当时那份快照之外**，且更早的某份快照里有这篇 |
+| `reEntry` | 这次读**在当时那份快照之内**，更早的某份快照里也有，但中间至少有一份没有它 |
+
+⚠️ 它们**不许**被读成「Agent 不认可新上下文」——那是推断，不是事实（SDD §5 Evidence Over Interpretation）。
+`firstReadTier` 多一个取值 `'outside'`（读过、但读在包外）；`null` 只留给「一次都还没读」。
+
+### 改法：读证据不再拉会话事件，改成订阅 `session/event`
+
+`session.snapshotEvents()` 已被 DSH 标为 deprecated（`dsh-session/README.md:62`：
+"new production calls are prohibited"）。v0.16 把读证据的来源换成宿主事件流：
+
+- `apply(ctx)` 顶部 `ctx.on('session/event', onSessionEvent, { global: true })`；回调首行按 `session.id`
+  **早退** —— 没开审计的会话只花一次 Map 查找，不建快照、不统计、不进内存。
+- `ingestEvents(store, sessionId, [event], { root })` **单事件**入库；游标幂等不变。
+- **两个行为变化**：① 订阅之前发生的事**不再回补**（不碰废弃 API 就读不到历史）——
+  打开「使用情况」的那一刻起才开始计数；② fork 出来的会话**不再把父会话继承的读算进自己账上**
+  （seed 事件不派发；v0.15 从 `state.seq = -1` 拉全量时会算进去）。
+
+### 界面：只多一句「当前上下文 · Epoch N」
+
+不加 Dashboard、不加图表、不动布局；开关打开后那一行**开头**多一个累计编号，其余逐字不变。
+
+### 量尺
+
+`tools/context-feedback-eval.mjs`：日志文件名改成**按形状认**（`session.v<N>.jsonl[.zstd]`，
+v0-v4 三代并存都能读，以前写死 v4）；`metricsFor()` 增 `epochs` / `continuedReadsAfterExit` / `reentries`、
+`contextChanges` 改读 `churn.changes`；Control 自检的判据放宽成「不许有**落在层里**的读」
+（`'outside'` 在对照组是正常的）。
+
+⚠️ **对齐的是规则，不是数字**：离线量尺与 runtime 共用同一份归因（都调 `feedback.js`），
+但**交付时刻**不同 —— 面板轮询 / 工具调用是采样，量尺是「每次读前合成一份包」。
+逐字段一致是**规则**级；数字级对齐做不到（SDD §3 G4 已据此改名并写明原因）。
+
+### 测试
+
+- 新增 `test/context-effectiveness.test.mjs`（12 条）：历史归因（§24.3）、离开后仍被读（§24.4）、
+  重新进入（§24.5）、**规则一致**（§24.6：runtime 记下的归因逐字段等于 `snapshotAt()` +
+  `attributeRead()` 现算的结果）、Epoch 边界与上限。
+- `test/context-delta.test.mjs` 里那条钉着 split-brain 的双轨断言（`firstTier='primary'` 与
+  `tier='related'` 同时成立）改写成「`tier` 也是首读的归因」。
+- `test/host-http.test.mjs` 的「使用情况」整段改成**事件驱动**（假 ctx 收 `session/event` 派发），
+  顺带覆盖：订阅前的事件不回补、同一 seq 派发 10 次仍只算一遍、畸形事件不影响接口。
+- 测试数：**453 / 453 → 468 / 468**。
+- `test/client.test.mjs` 新增 2 条**可见性**用例：`visible === false` 时一次都不取数、也不挂轮询；
+  座位契约的 `tab.visible` 一路传到 `KnitBody`（拿不到 `useTabInfo` 时按「看得见」处理）。
+
 ## [0.15.1] - 2026-09-30 · 未发布
 
-> ⚠️ 这一版**已提交、未打 tag、未 publish** —— npm 上的最新版仍是 `0.15.0`。
-> 真要发布时，把这里「未发布」改成日期，并按 `03_发布/发布清单-v0.15.0.md` 那五步走。
+> ⚠️ 这一版**已提交、未打 tag、未 publish**，随后**并进了 v0.16.0**（见上一节）——
+> npm 上的最新版仍是 `0.15.0`，下面这批界面收敛会**一起**出现在 0.16.0 里。
 
 **界面收敛 + 一处真机修复**：没有新指标、没有新接口，BM25 一行没改，Context Pack 的装配规则一行没改。
 
@@ -62,6 +205,30 @@
   于是「序号行高 ＝ 标题行高」这条纪律自动覆盖它（不用再同步第三处数字）。
 - ⚠️ **只有这一屏里有号时才渲染**：时间序 / 平铺列表整屏都没号 ⇒ 一个标记都没有。
   刺眼的从来是**混着**（一半有号、一半空着），整屏一致就没人觉得缺东西 —— 这条也有用例守着。
+
+### 改动：预览头路径收敛成「…/文件名」+ 按钮改「本地打开」
+
+用户 2026-10-01 原话：「前面那一串都用三个点点点来表示就行了…我觉得这样就够了。…我是想让右边的空间多一点。
+另外右边的在本地打开，我觉得修改成本地打开就行。这样改下来，整个 UI 就变得更加鲜亮了」。
+
+- **目录段不再上屏**：`.knit-preview-dir` 的内容由 `splitRelPath(preview.rel).dir`（整段目录）改成
+  **固定占位 `…/`**；`splitRelPath()` 函数本身一行没改（无目录时依旧只渲染文件名）。
+  **完整相对路径没丢** —— 它在 `.knit-preview-path` 的 `title` 里（悬停即见），
+  路径按钮本身仍然可点、仍然是用系统默认应用打开这篇文档。
+- **CSS**：`.knit-preview-dir{flex:0 0 auto;color:var(--dsw-alias-label-tertiary,…)}` —— 不再需要
+  `min-width:0` + `overflow:hidden` + `text-overflow:ellipsis` 那套收缩（目录已经不渲染了）。
+- **文案**：中文 `'preview.openLocalBtn'`：`在本地打开` → **`本地打开`**（英文 `Open locally` 不动）。
+- 测试同步：面包屑用例改成断言目录段文本 === `…/`、整条路径文本 === `…/需求 文档.md`，tooltip 仍带完整
+  `sub/需求 文档.md`；`test/path.test.mjs` 里「在本地打开」全部改成「本地打开」。测试数仍 **453 / 453**。
+
+### 改动：悬停浮层删掉页脚「点击打开面板」与它上面那条横线
+
+用户 2026-10-01 原话：「那个文档列表下面不是有"点击打开面板"还有上面那条横线，我觉得都可以删掉，有点多余了」。
+
+- 删掉 `KnitPeek` 末尾那个页脚节点与 `'peek.openPanel'` 两个文案键（中英各一条，别处没有引用）；
+- 删掉专门给页脚画线的 `.knit-peek-list + .knit-peek-hint{… border-top: …}` 这条 CSS 规则；
+- **保留** `.knit-peek .knit-peek-hint`（空态那句「这个工作区里还没有 Markdown 文档。」仍然在用）。
+- 浮层那两条通路（点某一篇直接展开预览、点图标打开面板）一行没动。测试数仍 **453 / 453**。
 
 ## [0.15.0] - 2026-09-30
 

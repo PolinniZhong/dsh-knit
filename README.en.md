@@ -15,7 +15,7 @@ one to jump straight there.*
 falls back to newest-first and states its basis.*
 *Since v0.14 the list is always one column: the rank number sits in its own column on the far left
 (vertically centred on the title's first line), then Primary dot + title + relative time (time on the
-right), then the summary. **The path lives in the preview header's breadcrumb only** — rows no longer repeat it.*
+right), then the summary. **The path lives in the preview header only** — the directory collapses to a `…/` placeholder (hover the path for the full relative path); rows no longer repeat it.*
 
 ![Order follows the conversation: send a message and the sidebar re-ranks the document list by it](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
 
@@ -166,7 +166,7 @@ from one flat list to **three tier groups**, each group name followed by a very 
 > The sketch leaves out each entry's summary. **The real structure is: a number in its own column
 > on the far left (vertically centred with the first line), and to its right a stack of one line —
 > Primary dot + title + relative time (right-aligned) — then the summary** (**no path** — it is not
-> shown in the list; the path lives in the preview header's breadcrumb). And the list is
+> shown in the list; the path lives in the preview header, with the directory collapsed to `…/`). And the list is
 > **always one column** however wide the pane gets.
 
 **No rules between groups**: hierarchy comes from 16px of space, the group name and type size,
@@ -301,7 +301,7 @@ feature request.
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
-| The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path breadcrumb** in the preview header, which is the one that stays | ✅ |
+| The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
 | One-click switch between **Docs / Images & video / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline | ✅ |
@@ -309,11 +309,11 @@ feature request.
 | Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
 | The **All** view splits into **two stacked sections**: docs (max 4, with "View all →" when truncated) and images & video (**never truncated**, count only) | ✅ |
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
-| **"Open locally"**: opens the previewed document in your default app (the path breadcrumb in the preview header is clickable too) | ✅ |
+| **"Open locally"**: opens the previewed document in your default app (the path in the preview header is clickable too, and its tooltip carries the full relative path) | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
-| **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout) | ✅ |
+| **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout; the popover is just header + list — no extra divider or hint line) | ✅ |
 | Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse (`←` `→` span rows in the **media grid only** — the document list is always one column, so they have no spatial meaning there) | ✅ |
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
@@ -346,18 +346,27 @@ recorded in [`docs/README.md`](docs/README.md).*
 
 ---
 
-## Did it actually get used? (v0.15)
+## Did it actually get used? (v0.16)
 
 Knit orders "what to read first right now" — but **whether that order was right could only be felt,
-never checked**. v0.15 adds a layer of **verifiable usage feedback**: the files the agent really read,
+never checked**. v0.15 added a layer of **verifiable usage feedback**: the files the agent really read,
 matched against the context pack that was in effect **at the moment of the read**.
+v0.16 nails that down: **attribution is settled and frozen at read time** — however the context
+changes later, the historical numbers never change their story (in v0.15 a read could be
+re-judged as "outside" by the present, which was a bug).
 
 **Off by default.** There is a "Usage" toggle in the panel head; turning it on adds one muted line
 above the list:
 
 ```
-primary read (docs/xxx.md) · supporting 1/2 · 7 reads · 2 outside the pack · context changed 2×
+Context · Epoch 4 · primary read (docs/xxx.md) · supporting 1/2 · 7 reads · 2 outside the pack · context changed 2×
 ```
+
+- **Context Epoch**: one **content-changed** context equals one epoch (identical content creates
+  none, so polling cannot flood it). `Epoch 4` is a cumulative number, not "the 4th pack".
+- **Two fact-only fields**: `continuedReadAfterExit` (it was still read after leaving this context)
+  and `reEntry` (it left, came back into the pack, and was read again). They must **never** be read
+  as "the agent rejected the new context" — that is inference, not fact.
 
 It reports **facts only**: was the primary doc read, how many reads happened, how many fell outside
 the pack, how often the context changed. **No score, no percentage, no progress bar** — these numbers
@@ -365,11 +374,15 @@ are counted, not estimated.
 
 Three boundaries:
 
-- **Off by default**: while it is off, Knit reads **no events and stores nothing**. This accounting
-  has a cost (every poll would walk the session's events), and that is the user's call, not ours.
+- **Off by default**: while it is off, Knit **counts nothing** (it subscribes to the host event
+  stream, but the callback bails out on the first line for unaudited sessions — one Map lookup).
+  That accounting is the user's call, not ours.
 - **No duplicate of the DSH trajectory**: the only evidence source is the `tool/call` / `tool/result`
   events the session **already has** (successful `read`s). **No new event bus, no runtime trace,
   no event store.**
+- **From now on only**: the subscription is v0.16's sole read-evidence source (the old
+  `session.snapshotEvents()` is deprecated by DSH), so **reads that happened before you flipped the
+  toggle are not backfilled** — counting starts at that moment.
 - **Nothing is persisted**: the numbers live in kernel memory only and are gone after a DSH restart —
   do not treat them as long-term statistics.
 
@@ -439,7 +452,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 453 tests, zero dependencies, no npm install needed
+npm test          # 468 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -460,10 +473,10 @@ knit/
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   ├── host/links.js     # reference parsing (pure; never touches ranking)
 │   ├── host/context.js   # context assembly: the three-tier Context Pack (pure, zero I/O)
-│   ├── host/feedback.js  # usage feedback: snapshots / delta / read-to-tier (pure; reads existing session events)
+│   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 453 tests
+└── test/                 # 468 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

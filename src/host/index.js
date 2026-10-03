@@ -944,22 +944,39 @@ export function parseRange(header, size) {
 }
 
 /**
+ * 从一个宿主会话对象解析工作区根。
+ *
+ * v0.16 起 `session/event` 的订阅回调里**只有 session 对象**（没有注入过的 webCtx），
+ * 所以这段逻辑必须能独立使用：面板路由与记账回调共用它，保证「算列表用的根」与
+ * 「归一化读路径用的根」永远是同一个 —— 否则同一次读会被一边算作包内、
+ * 一边算作包外（AGENTS.md §8.10 踩过这个坑）。
+ * @param {object} session - 宿主会话（可为空）
+ * @returns {string} 绝对路径根
+ */
+function rootOfSession(session) {
+  let root = ''
+  try {
+    if (session && session.header && typeof session.header.cwd === 'string') root = session.header.cwd
+  } catch { /* 取不到 cwd 就走兜底根 */ }
+  if (!root) root = process.cwd()
+  if (root.startsWith('~')) root = join(homedir(), root.slice(1))
+  return resolve(root)
+}
+
+/**
  * 解析一个会话的工作区根。
  * @param {object} webCtx - 注入了 sessions 的上下文
  * @param {string} sessionId - 会话 id（可为空）
  * @returns {string} 绝对路径根
  */
 function workspaceRootOf(webCtx, sessionId) {
-  let root = ''
+  let session
   try {
-    const session = sessionId && typeof webCtx.sessions.get === 'function'
+    session = sessionId && typeof webCtx.sessions.get === 'function'
       ? webCtx.sessions.get(sessionId)
       : undefined
-    if (session && session.header && typeof session.header.cwd === 'string') root = session.header.cwd
   } catch { /* 会话查不到就走兜底根 */ }
-  if (!root) root = process.cwd()
-  if (root.startsWith('~')) root = join(homedir(), root.slice(1))
-  return resolve(root)
+  return rootOfSession(session)
 }
 
 /**
@@ -1047,49 +1064,45 @@ function sendMedia(req, res, info) {
   stream.pipe(res)
 }
 
-/* ── v0.15 · Context Feedback 的宿主侧封装 ────────────────────────────
+/* ── v0.16 · Context Feedback 的宿主侧封装 ────────────────────────────
  *
  * 这一层只做三件事：
- *   1. 从 `session.snapshotEvents()` **拉**事件（不订阅任何总线）喂给 feedback store；
- *   2. 把刚交出去的 Context Pack 记成 Context Snapshot；
+ *   1. **订阅**宿主的 `session/event`，把真实发生过的 `read` 一条条喂给 feedback store；
+ *   2. 把刚交出去的 Context Pack 记成 Context Snapshot（带 `epochId`）；
  *   3. 给面板与 `knit_docs` 提供「**上一份**包之后发生了什么」。
  *
+ * ⚠️ v0.16 起**不再**从 `session.snapshotEvents()` 拉事件：那个 API 已被 DSH 标记
+ * deprecated（「new production calls are prohibited」），而且它会把这个会话从父会话
+ * fork 继承来的前缀事件也算进来。代价是：订阅之前发生过的事件不回溯 —— 宁可少记，
+ * 也不去猜一段没法按当时上下文归因的历史。
+ *
  * 记账只在**被显式打开**的会话里发生（面板的「使用情况」开关，或 `knit_docs` 的
- * `audit: true`）—— 默认一个字节都不攒。所有入口都 try/catch：
- * 记账坏了不许影响面板与工具（规格 §33 的降级纪律）。
+ * `audit: true`）—— 默认一条事件的处理成本就是一次 Map 查找。
+ * 所有入口都 try/catch：记账坏了不许影响面板与工具（规格 §33 的降级纪律）。
  */
 
 /** 进程内唯一的 feedback store（按会话分片，会话数与篇数都有硬上限）。 */
 const feedbackStore = createStore()
 
 /**
- * 安全读会话事件。拿不到返回 `null` 而**不是空数组** —— 空数组会被下游当成
- * 「这个会话真的没有任何事件」，那是两件不同的事。
+ * 订阅宿主的会话事件流，把真实的读记进 store。
+ *
+ * `{ global: true }` 是**必需**的：`session/event` 按 scope 过滤派发，而这个插件挂在
+ * 根上下文上、要看的却是各 agent scope 里的会话（宿主自己的 `invariant.js` 也这么订）。
+ *
+ * 三道闸门，顺序即开销顺序：**没记账的会话，一条事件只花一次 Map 查找**就返回。
+ * 任何异常一律咽掉 —— 记账坏了绝不许影响宿主。
  * @param {object} session - 宿主会话
- * @returns {object[]|null} 事件数组或 null
+ * @param {object} event - 会话事件（`tool/call` / `tool/result` / 其它）
+ * @returns {void}
  */
-function sessionEvents(session) {
+function onSessionEvent(session, event) {
   try {
-    if (!session || typeof session.snapshotEvents !== 'function') return null
-    const events = session.snapshotEvents()
-    return Array.isArray(events) ? events : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * 把会话事件喂给 feedback store。幂等靠 `seq` 游标 —— 面板每 5 秒轮询一次，
- * 每次都会把**同一批历史事件**再拉一遍，游标保证同一篇读只记一次。
- * @param {string} root - 工作区根（归一化绝对路径用）
- * @param {string} sessionId - 会话 id
- * @param {object} session - 宿主会话
- * @returns {{ok: boolean, reads: number, cursor: number}} 结果
- */
-function ingestFeedback(root, sessionId, session) {
-  const events = sessionEvents(session)
-  if (!events || !sessionId) return { ok: false, reads: 0, cursor: -1 }
-  return ingestEvents(feedbackStore, sessionId, events, { root })
+    const sessionId = session && typeof session.id === 'string' ? session.id : ''
+    if (!sessionId || !event) return
+    if (!isAudited(feedbackStore, sessionId)) return
+    ingestEvents(feedbackStore, sessionId, [event], { root: rootOfSession(session) })
+  } catch { /* 记账坏了不许影响宿主 */ }
 }
 
 /**
@@ -1120,6 +1133,7 @@ export function publicUsage(usage, limit = 20) {
   if (!usage || !usage.stats) return null
   return {
     at: usage.at,
+    epochId: usage.epochId,
     stats: { ...usage.stats, outsideReads: usage.stats.outsideReads.slice(0, limit) },
     delta: usage.delta ? {
       appeared: usage.delta.appeared.slice(0, limit),
@@ -1133,38 +1147,37 @@ export function publicUsage(usage, limit = 20) {
 /**
  * 注入给 `knit_docs` 的桥 —— 工具不认识 `feedback.js`，只认识这两个方法
  * （与 `scan` / `read` / `contextFor` 同样的注入理由）。
+ *
  * ⚠️ `summary()` 必须在 `note()` **之前**调用：它报告的是**上一份**包的用法。
+ * v0.16 起这个桥**不再收** root 与 session：读证据由订阅那条路进 store，
+ * 交包只是记一份快照（`seq` 用 store 自己的事件水位）。
  */
 const auditBridge = {
-  usage(root, sessionId, session) {
+  usage(sessionId) {
     try {
       if (!sessionId) return null
-      ingestFeedback(root, sessionId, session)
       return usageFor(feedbackStore, sessionId)
     } catch {
       return null
     }
   },
-  summary(root, sessionId, session) {
+  summary(sessionId) {
     try {
       if (!sessionId) return ''
-      ingestFeedback(root, sessionId, session)
       return getAuditSummary(usageFor(feedbackStore, sessionId))
     } catch {
       return ''
     }
   },
-  note(root, sessionId, session, pack) {
+  note(sessionId, pack) {
     try {
       if (!sessionId || !pack) return null
       // 走到这里说明记账是**显式**的（面板带了 `usage=1`，或 agent 传了 `audit: true`
       // 且 `tool.js` 只在那一刻调 note）—— 所以在这里开闸是安全的。
       activateAudit(feedbackStore, sessionId)
-      const { cursor } = ingestFeedback(root, sessionId, session)
-      return noteSnapshot(feedbackStore, sessionId, pack, {
-        seq: Number.isInteger(cursor) ? cursor : -1,
-        at: Date.now(),
-      })
+      // 不传 `seq`：noteSnapshot 用会话当前的**事件水位**，也就是「交这份包时
+      // 已经发生到第几个事件」—— seq ≤ 它的读才算在这份包里。
+      return noteSnapshot(feedbackStore, sessionId, pack, { at: Date.now() })
     } catch {
       return null
     }
@@ -1177,6 +1190,11 @@ const auditBridge = {
  * @returns {void}
  */
 export function apply(ctx) {
+  // v0.16：订阅会话事件流 —— 这是 Knit 唯一的读证据来源。
+  // ⚠️ 注册在这里，而不是 `inject(['webServer','sessions'])` 的回调里：
+  // `knit_docs` 的 `audit: true` 也能打开记账，没有 webServer 的环境照样要记。
+  ctx.on('session/event', onSessionEvent, { global: true })
+
   ctx.inject(['webServer', 'sessions'], (webCtx) => {
     const handler = async (req, res) => {
       if (!isLoopback(req.socket?.remoteAddress)) {
@@ -1209,11 +1227,10 @@ export function apply(ctx) {
           // ⚠️ 默认（不带这个参数且本会话从未打开过）**一个字节都不记**。
           if (sessionId && url.searchParams.get('usage') === '1') activateFeedback(sessionId)
           if (sessionId && feedbackActive(sessionId)) {
-            const session = sessionOf(webCtx, sessionId)
             // ⚠️ 顺序是刻意的：先取 usage（它报告的是**上一份**包之后发生了什么），
             // 再把这一份包记成新快照 —— 从下一次请求起，它才是「上一份」。
-            body.usage = publicUsage(auditBridge.usage(root, sessionId, session))
-            if (body.context) auditBridge.note(root, sessionId, session, body.context)
+            body.usage = publicUsage(auditBridge.usage(sessionId))
+            if (body.context) auditBridge.note(sessionId, body.context)
           }
           sendJson(res, 200, body)
           return
@@ -1244,7 +1261,7 @@ export function apply(ctx) {
           // v0.15：走这条路的调用方（只要上下文、不要列表）同样会推进 Context Snapshot ——
           // 否则「上下文变了」这件事会漏记。**只在已记账的会话里**（同 recent 的闸门）。
           if (sessionId && feedbackActive(sessionId)) {
-            auditBridge.note(root, sessionId, sessionOf(webCtx, sessionId), context)
+            auditBridge.note(sessionId, context)
           }
           sendJson(res, 200, { ok: true, root, mode: payload.mode, topic: payload.topic, context })
           return

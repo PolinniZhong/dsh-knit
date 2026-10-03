@@ -126,6 +126,9 @@ test('注册：有 betterSidebar 时注册一个 tab descriptor', () => {
   const d = log.bsTabs[0]
   assert.equal(d.id, 'knit:recent')
   assert.equal(d.single, true, '同类型只开一个')
+  // hidden 是给 better-sidebar v0.24.1+ 的「原生表面」看的：它会镜像成一个官方类型，
+  // 并在没有 hidden 时连带挂一条 guide 条目 ⇒ 「开始」页出现两行同名入口。
+  assert.equal(d.hidden, true, '不许镜像再挂一条 guide 入口（官方那条已够）')
   assert.equal(typeof d.component, 'function')
   assert.equal(d.title(), 'Knit 最近文档')
 })
@@ -351,11 +354,14 @@ test('渲染：预览头显示路径面包屑（目录 + 文件名），不再�
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
   assert.equal(byExactClass(nodes, 'knit-preview-head').length, 1)
-  assert.equal(byExactClass(nodes, 'knit-preview-dir').map(textOf).join(''), 'sub/')
+  // 2026-10-01：目录不再展开，收敛成一个 `…/` 占位（用户要求「前面那一串都用三个点点点表示」，把宽度让给文件名）
+  assert.equal(byExactClass(nodes, 'knit-preview-dir').map(textOf).join(''), '…/')
   assert.equal(byExactClass(nodes, 'knit-preview-name').map(textOf).join(''), '需求 文档.md')
+  // 整条路径的字面形态就是「…/文件名」—— 目录名一个字都不许漏到界面上
+  assert.equal(textOf(byExactClass(nodes, 'knit-preview-path')[0]), '…/需求 文档.md')
   // 头部不再放标题：正文 H1 已经写了，重复会让「列表 / 头 / 正文」出现三遍同一个词
   assert.equal(byClass(nodes, 'knit-preview-title').length, 0)
-  // 长目录被省略号截掉时，完整路径靠 tooltip 悬停仍能看到（与列表行的 row.tooltip 同一套）
+  // 目录被收敛掉之后，完整路径靠 tooltip 悬停仍能看到（与列表行的 row.tooltip 同一套）
   const pathBtn = byExactClass(nodes, 'knit-preview-path')[0]
   assert.match(String(pathBtn.props.title), /sub\/需求 文档\.md/, 'tooltip 里带完整相对路径')
   assert.equal(pathBtn.props.type, 'button', '路径是可点的')
@@ -2000,6 +2006,7 @@ function usagePayload() {
   return contextPayload({
     usage: {
       at: 1_700_000_000_000,
+      epochId: 4,
       stats: {
         reads: 7,
         distinct: 3,
@@ -2064,6 +2071,7 @@ test('使用情况：打开后请求带 usage=1，那一行只报事实（没有
   const line = byExactClass(nodes, 'knit-usage')[0]
   assert.ok(line, '打开后必须出现那一行')
   const text = textOf(line)
+  assert.match(text, /当前上下文 · Epoch 4/, '当前上下文的编号要如实说出来')
   assert.match(text, /已读/, '先看的那篇被读了要如实说出来')
   assert.match(text, /辅助 1\/2/)
   assert.match(text, /读了 7 次/)
@@ -2087,3 +2095,83 @@ test('样式：使用情况那一行是弱化文字 —— 没有卡片 / 进度
   // 开关本身也不许染色
   assert.ok(!/\.knit-btn\.active\{[^}]*knit-accent/.test(source), '开关的选中态走中性灰')
 })
+
+/* ── 可见性（v0.16 · 收起右栏时不许再敲宿主）────────────────────
+   官方右侧栏收起后，dockkit **不卸载**标签身体，v0.16 之前这里照旧每 5 秒请求一次
+   `/knit/api/recent` 并 `setState`：白烧一次全工作区扫描，还往宿主正在收起的那层 DOM 里
+   插一帧重渲染（2026-10-01 用户报的「右栏收起来变成一条空白」）。契约给的
+   `tab.visible` 就是「宿主还看得见吗」，用它做闸门。 */
+
+test('可见性：宿主说看不见时一次都不取数，也不挂轮询', async () => {
+  const { calls } = installFetch(() => listPayload())
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = (visible) => harness.render(h(KnitBody, { sessionId: 's1', visible }))
+  const listCalls = () => calls.filter((url) => url.includes('/knit/api/recent'))
+  // harness 的定时器是**整个测试文件共用**的（`reset()` 只清 hook 槽，不清定时器），所以看增量。
+  const timers = () => harness.pendingTimers()
+  const timersBefore = timers()
+
+  // 1. 折叠着挂载：连请求都不发，也不留定时器
+  render(false)
+  await harness.flush()
+  assert.equal(listCalls().length, 0, '看不见就不该敲宿主 —— 折叠期间身体仍然挂着')
+  assert.equal(timers() - timersBefore, 0, '看不见就不该挂轮询')
+
+  // 2. 重新可见：effect 重跑 ⇒ 立刻补一次，不必等下一个 5 秒
+  let nodes = render(true)
+  await harness.flush()
+  assert.equal(listCalls().length, 1, '重新可见必须立刻取一次')
+  assert.equal(timers() - timersBefore, 1, '看得见才挂下一次轮询')
+  nodes = render(true)
+  await harness.flush()
+  assert.equal(byClass(nodes, 'knit-doc').length, 2, '列表照常渲染')
+
+  // 3. 又看不见：新登记的 effect 直接返回，不再取数
+  const before = listCalls().length
+  render(false)
+  await harness.flush()
+  assert.equal(listCalls().length, before, '再次折叠就该停手')
+})
+
+test('可见性：官方座位把契约的 `tab.visible` 一路传到 KnitBody', async () => {
+  const { ctx, log } = fakeCtx({ sidebarRightTabs: true })
+  const { exports } = loadClientModule()
+  exports.apply(ctx)
+
+  const body = log.slots.find((s) => s.opts && s.opts.name === 'sidebar.right.pane.tab')
+  assert.ok(body, '官方座位必须注册 body')
+
+  // 座位给的真身：`tab.visible === false` 表示右栏收起 / 本标签不是当前那个
+  const seat = (visible) => ({
+    sessionId: 's1',
+    useTabInfo: () => ({ tab: { visible, actions: { openResource() {} } } }),
+  })
+  const listCalls = (calls) => calls.filter((url) => url.includes('/knit/api/recent'))
+
+  // ① 收起时挂载：适配层要把 visible=false 传下去，否则下面这个断言会红
+  let { calls } = installFetch(() => listPayload())
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  harness.render(h(body.component, seat(false)))
+  await harness.flush()
+  assert.equal(listCalls(calls).length, 0, '收起时不该取数（座位说了 visible=false）')
+
+  // ② 展开：同一个座位，立刻取一次
+  ;({ calls } = installFetch(() => listPayload()))
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  harness.render(h(body.component, seat(true)))
+  await harness.flush()
+  assert.equal(listCalls(calls).length, 1, '展开时必须取数')
+
+  // ③ 座位没给 `useTabInfo`（降级 / 别的宿主）：当作看得见，不能把面板冻住
+  ;({ calls } = installFetch(() => listPayload()))
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  harness.render(h(body.component, { sessionId: 's1' }))
+  await harness.flush()
+  assert.equal(listCalls(calls).length, 1, '拿不到 visible 时要照旧取数')
+})
+

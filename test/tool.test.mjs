@@ -140,6 +140,7 @@ test('apply: 只给 tools（webServer 缺席）时仍然注册工具', () => {
   // 这条会红 —— 那时 webServer 一缺席，工具也一起没了。
   const registered = []
   const rootCtx = {
+    on: () => {},
     inject: (deps, cb) => {
       if (deps.includes('tools')) {
         cb({
@@ -156,7 +157,7 @@ test('apply: 只给 tools（webServer 缺席）时仍然注册工具', () => {
 })
 
 test('apply: webServer 与 tools 都缺席时不抛错', () => {
-  assert.doesNotThrow(() => apply({ inject: () => {} }))
+  assert.doesNotThrow(() => apply({ on: () => {}, inject: () => {} }))
 })
 
 /* ── 定义形状（与官方 defineTool 的产物对齐）─────────── */
@@ -728,13 +729,14 @@ function fakeBridge({ summary = () => 'Usage since the last pack: 0 reads', note
   return {
     calls,
     bridge: {
-      summary: (root, sessionId, session) => {
-        calls.push({ fn: 'summary', root, sessionId, hasSession: !!session })
-        return summary(root, sessionId, session)
+      // v0.16：桥只收 `(sessionId)` / `(sessionId, pack)` —— 读证据由订阅那条路进 store
+      summary: (sessionId) => {
+        calls.push({ fn: 'summary', sessionId })
+        return summary(sessionId)
       },
-      note: (root, sessionId, session, pack) => {
-        calls.push({ fn: 'note', root, sessionId, hasSession: !!session, pack })
-        return note(root, sessionId, session, pack)
+      note: (sessionId, pack) => {
+        calls.push({ fn: 'note', sessionId, pack })
+        return note(sessionId, pack)
       },
     },
   }
@@ -760,9 +762,9 @@ test('audit: true 时先问 summary 再 note，并把这一行放进返回的 us
     '顺序是契约：summary 报告的是**上一份**包，必须先问；note 记的是刚交出的这份',
   )
   const noted = calls.find((c) => c.fn === 'note')
-  assert.equal(noted.root, PROJECT_ROOT, 'note 拿到的是工作区根')
   assert.equal(noted.sessionId, 'sess-tool-test', 'note 拿到的是会话 id')
-  assert.equal(noted.hasSession, true, 'note 还拿到会话本身（它要去读事件）')
+  assert.equal(noted.root, undefined, 'v0.16：桥不再收工作区根（读路径由订阅回调自己归一化）')
+  assert.equal(noted.hasSession, undefined, 'v0.16：桥不再收会话对象（它不再去拉事件）')
   assert.ok(noted.pack && noted.pack.totals, 'note 记的是刚交出去的那份包（含 totals）')
   assert.equal(noted.pack.totals.total, 3)
 })

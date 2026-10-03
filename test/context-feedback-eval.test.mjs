@@ -17,9 +17,14 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { makeWorkspace } from './fixture.mjs'
-import { metricsFor, parseEvents, replaySession, scopeFor } from '../tools/context-feedback-eval.mjs'
+import {
+  findLatestSessionLog, findSessionLogById, metricsFor, parseEvents, replaySession, scopeFor,
+} from '../tools/context-feedback-eval.mjs'
 
 /** 目标文档：`quantum-anchor` 只在这里出现，所以它必须是 primary。 */
 const TARGET = 'docs/target.md'
@@ -110,7 +115,8 @@ test('评测：交过包才能记成 follow-through —— Control 与 Treatment
   // Control：一份包都没交 ⇒ 那次读只能落在包外，且**不许**记成 follow-through
   assert.equal(control.packs, 0)
   assert.equal(control.metrics.primaryRead, false)
-  assert.equal(control.metrics.firstReadTier, null)
+  // v0.16：读过但没人在那一层给过上下文 ⇒ 'outside'（null 只留给「一次都没读」）
+  assert.equal(control.metrics.firstReadTier, 'outside')
   assert.equal(control.metrics.outside, 2, '两次读都该在包外')
 
   // 两边的读**次数**一样 —— 变的只是「有没有人给过上下文」
@@ -174,13 +180,38 @@ test('评测：坏行不废整批（半截的尾行很常见）', () => {
 test('评测：metricsFor 的键是稳定的（下游脚本靠它）', () => {
   const metrics = metricsFor(null)
   assert.deepEqual(Object.keys(metrics).sort(), [
-    'appeared', 'contextChanges', 'disappeared', 'distinct', 'firstReadRel', 'firstReadTier',
-    'moved', 'outside', 'outsideReads', 'primaryRead', 'primaryRel', 'reads',
-    'supportingCoverage', 'taskChanged',
+    'appeared', 'contextChanges', 'continuedReadsAfterExit', 'disappeared', 'distinct', 'epochs',
+    'firstReadRel', 'firstReadTier', 'moved', 'outside', 'outsideReads', 'primaryRead', 'primaryRel',
+    'reads', 'reentries', 'supportingCoverage', 'taskChanged',
   ])
   assert.equal(metrics.reads, 0)
   assert.equal(metrics.primaryRead, false)
   assert.equal(metrics.firstReadTier, null)
+  assert.equal(metrics.epochs, 0)
+  assert.equal(metrics.continuedReadsAfterExit, 0)
+  assert.equal(metrics.reentries, 0)
+})
+
+test('评测：日志文件名按形状认（v0–v4 三代并存），不写死 v4', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'knit-sessions-'))
+  try {
+    const ws = join(dir, 'workspace')
+    // 老会话只留 v3（本机 98 份这种），新会话是 v4
+    const old3 = join(ws, 'sess-old')
+    const new4 = join(ws, 'sess-new')
+    mkdirSync(old3, { recursive: true })
+    mkdirSync(new4, { recursive: true })
+    writeFileSync(join(old3, 'session.v3.jsonl.zstd'), 'x')
+    writeFileSync(join(new4, 'session.v4.jsonl.zstd'), 'y')
+
+    assert.equal(findSessionLogById('sess-old', dir), join(old3, 'session.v3.jsonl.zstd'))
+    assert.equal(findSessionLogById('sess-new', dir), join(new4, 'session.v4.jsonl.zstd'))
+    assert.equal(findSessionLogById('nope', dir), null)
+    // 「最近一份」按 mtime 选，不按版本号选
+    assert.equal(findLatestSessionLog(dir), join(new4, 'session.v4.jsonl.zstd'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('评测：scopeFor 不认识 usage 时给空拆分，不抛', () => {

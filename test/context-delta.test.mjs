@@ -131,7 +131,8 @@ test('使用情况：快照之外的读如实记成 outside，不解释成「失
   assert.equal(usage.stats.outside, 2)
   assert.deepEqual(usage.stats.outsideReads.sort(), ['y.md', 'z.md'])
   assert.equal(usage.stats.primaryFollowThrough, false)
-  assert.equal(usage.stats.firstReadTier, null)
+  // v0.16：读过但读在包外 ⇒ 'outside'。null 只留给「一次都还没读」
+  assert.equal(usage.stats.firstReadTier, 'outside')
   const outside = usage.reads.find((r) => r.rel === 'z.md')
   assert.equal(outside.tier, null)
   assert.equal(outside.outside, true)
@@ -143,7 +144,9 @@ test('使用情况：Knit 还没给过上下文就自己读了 ⇒ 那一篇算 
   ingestEvents(store, 's1', readEvents([['a.md', 10]], 100), { root: ROOT })
   const usage = usageFor(store, 's1')
   assert.equal(usage.stats.outside, 1)
-  assert.equal(usage.stats.firstReadTier, null)
+  // 一份快照都没给过 ⇒ 那一读只能算包外
+  assert.equal(usage.stats.firstReadTier, 'outside')
+  assert.equal(usage.stats.firstReadEpoch, null)
   assert.equal(usage.stats.primaryFollowThrough, false)
 })
 
@@ -158,9 +161,16 @@ test('使用情况：读的时候用的是**当时**那份快照，不是最新�
 
   const usage = usageFor(store, 's1')
   const row = usage.reads.find((r) => r.rel === 'a.md')
-  // 行上是「当时」的层（primary），不是现在这份（related）
+  // v0.16：`tier` / `rank` / `outside` 全是**读那一刻**冻结的归因，
+  // 因此行上的 `tier` 与 `firstTier` 一致 —— 不许等出报告时再拿最新快照重判。
   assert.equal(row.firstTier, 'primary')
-  assert.equal(row.tier, 'related')
+  assert.equal(row.tier, 'primary')
+  assert.equal(row.outside, false)
+  // 换过上下文 ⇒ 两个 Epoch；那一读只算进**它当时**那个 Epoch 的主看篇
+  assert.equal(usage.stats.churn.epochs, 2)
+  assert.equal(usage.epochs.length, 2)
+  assert.equal(usage.epochs[0].primary.read, true)
+  assert.equal(usage.epochs[1].primary.read, false)
 })
 
 test('幂等：同一批事件喂两遍，读只算一遍', () => {
@@ -290,6 +300,9 @@ test('给 Agent 的摘要：只有事实、没有分数；没可说的就返回�
     supportingTotal: 2,
     readsOutside: 1,
     contextChanges: 0,
+    epochs: 1,
+    continuedReadsAfterExit: 0,
+    reEntries: 0,
   })
   assert.equal(getAuditSummary(null), '')
   assert.equal(auditPayload(null), null)
@@ -300,9 +313,9 @@ test('Usage 的形状是稳定的（给面板与工具用的字段一个不少�
   noteSnapshot(store, 's1', pack({ primary: ['a.md'], supporting: ['b.md'], related: ['c.md'] }), { seq: 1, at: 1 })
   const usage = usageFrom(store.sessions.get('s1'))
   assert.deepEqual(Object.keys(usage.stats).sort(), [
-    'byTier', 'churn', 'distinct', 'firstReadAt', 'firstReadRel', 'firstReadTier',
-    'outside', 'outsideReads', 'primaryFollowThrough', 'primaryRel', 'reads',
-    'supportingCoverage',
+    'byTier', 'churn', 'continuedReadsAfterExit', 'distinct', 'firstReadAt', 'firstReadEpoch',
+    'firstReadRel', 'firstReadTier', 'outside', 'outsideReads', 'primaryFollowThrough',
+    'primaryRel', 'reEntries', 'reads', 'supportingCoverage',
   ])
   assert.equal(usage.stats.supportingCoverage, 0)
   assert.equal(usage.stats.churn.snapshots, 0)

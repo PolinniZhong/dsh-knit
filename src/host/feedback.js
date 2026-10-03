@@ -1,26 +1,30 @@
 /**
- * Knit v0.15 · **Context Feedback / Context Audit**
+ * Knit v0.16 · **Context Feedback / Context Effectiveness**
  *
  * Context Pack 给了「应该先读什么」，这个模块回答**它之后真的被用了吗**。
  * 只有三个事实来源，全部是确定性的：
  *
- *   1. **Context Snapshot** —— Knit 把一份 Context Pack 交出去的那一刻（工具调用 / 面板装配），
- *      记下当时的三层排序。它代表「Knit 当时提供给 Agent 的上下文」。
- *   2. **Context Delta** —— 两次 Snapshot 之间，哪些文档进 / 出 / 换了层。
+ *   1. **Context Snapshot / Epoch** —— Knit 把一份 Context Pack 交出去的那一刻
+ *      （工具调用 / 面板装配），记下当时的三层排序与它的 `epochId`。
+ *   2. **Context Delta** —— 两次 Snapshot 之间，哪些文档进 / 出 / 换了层，以及 `fromEpoch → toEpoch`。
  *   3. **Read evidence** —— 会话事件流里**真实发生过的 `read` 工具调用**
  *      （`tool/call` 配对 `tool/result`，且 `message.isError !== true`）。
- *      搜索命中（`grep` / `glob`）**不算读过** —— 规格 §9。
+ *      搜索命中（`grep` / `glob`）**不算读过**。
  *
- * Usage 就是这三者的**连接**：某次读，落在当时那份 Snapshot 的哪一层？
+ * Usage 就是这三者的**连接**，而且连接发生在**读的那一刻**：
+ * 每条 read 落库时就按 `snapshotAt(read.seq)` 结算出 `tierAtRead` / `rankAtRead` /
+ * `insideAtRead` / `epochId` 并**冻结**。之后上下文再怎么变，历史归因都不许重算 ——
+ * 「当前视图」与「历史视图」是两件事。
  *
  * ⚠️ 本模块**不碰 Retrieval**（BM25 / IDF / 关键词抽取 / 长度归一化 / freshness 一行不改），
- * 也**不订阅 DSH event bus、不建 Event Store、不落盘、不联网、不调模型**。
- * 它是纯函数 + 一个按会话分片的内存小状态（规格 §10）：事件由调用方从
- * `session.snapshotEvents()` 拉出来喂进来，`seq` 当幂等游标，所以 5 秒轮询重复喂同一批事件
- * 不会重复计数。
+ * 也**不落盘、不联网、不调模型、不写 memory、不自动干预上下文**。
+ * 读证据的唯一来源是宿主派发的 `session/event`（v0.16 起）：**不再**调用
+ * `session.snapshotEvents()` —— 那个 API 已被 DSH 标记 deprecated
+ * （「new production calls are prohibited」），而且它在 fork 会话上会把父会话继承来的
+ * 前缀事件也算进来。代价是：订阅之前发生的事件不回溯，只记订阅之后真实发生的读。
  *
  * 这里**没有**：trajectory、span、runtime trace、reasoning、成功率、置信度、归一化评分、
- * memory 写入。Usage 不是分数。
+ * quality score、memory 写入。Usage 不是分数，是计数与事实。
  *
  * @module feedback
  */
@@ -30,10 +34,15 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 export const MAX_SESSIONS = 24
 /** 每个会话最多记多少篇**读过**的文档。 */
 export const MAX_READS_PER_SESSION = 200
-/** 每个会话最多保留几份 Snapshot（判断「读的时候是哪一层」要用最近两份）。 */
-export const MAX_SNAPSHOTS_PER_SESSION = 2
-/** 每个会话最多保留多少条 Delta。 */
-export const MAX_DELTAS_PER_SESSION = 20
+/** 每个会话最多保留几份 Snapshot / Epoch。
+ *
+ * v0.16 由 2 提到 20：归因本身**在 Read 时结算**，保留数量不影响它的正确性；
+ * 它只决定 `continuedReadAfterExit` / `reEntry` 这两个事实能回溯多远
+ * （要能看见「离开过、又回来」就必须留着中间那几份）。
+ */
+export const MAX_SNAPSHOTS_PER_SESSION = 20
+/** 每个会话最多保留多少条 Delta 明细（计数不受它影响）。 */
+export const MAX_DELTAS_PER_SESSION = 50
 /** 最多同时挂起多少个「已调用、还没结果」的 read。 */
 export const MAX_PENDING_CALLS = 64
 
@@ -134,7 +143,7 @@ function signatureOf(items, task) {
  *
  * @param {object|null} prev - 上一份 Snapshot
  * @param {object|null} next - 这一份 Snapshot
- * @returns {{appeared: object[], disappeared: object[], moved: object[], taskChanged: boolean, stable: boolean}} 差异
+ * @returns {{appeared: object[], disappeared: object[], moved: object[], taskChanged: boolean, fromEpoch: number|null, toEpoch: number|null, stable: boolean}} 差异
  */
 export function diffContext(prev, next) {
   const before = indexOf(prev)
@@ -158,6 +167,9 @@ export function diffContext(prev, next) {
     disappeared,
     moved,
     taskChanged,
+    // 哪两个 Epoch 之间的变化（没有上一份时 fromEpoch 为 null）
+    fromEpoch: prev && Number.isInteger(prev.epochId) ? prev.epochId : null,
+    toEpoch: next && Number.isInteger(next.epochId) ? next.epochId : null,
     stable: appeared.length === 0 && disappeared.length === 0 && moved.length === 0 && !taskChanged,
   }
 }
@@ -188,7 +200,7 @@ function indexOf(snapshot) {
  *
  * 幂等靠 `fromSeq` 游标：只处理 `seq > fromSeq` 的事件，所以同一批事件喂两遍不会重复计数。
  *
- * @param {object[]} events - `session.snapshotEvents()` 的产物
+ * @param {object[]} events - 会话事件（v0.16 起由 `session/event` 订阅逐条喂进来）
  * @param {{root?: string, fromSeq?: number, pending?: Map<string, object>}} [options] - 选项
  * @returns {{reads: object[], cursor: number, pending: Map<string, object>}} 证据、新游标、挂起表
  */
@@ -264,7 +276,6 @@ function parseArguments(raw) {
     return {}
   }
 }
-
 /* ── 4. 按会话分片的内存状态 ───────────────────────────────────────── */
 
 /**
@@ -276,7 +287,7 @@ export function createStore() {
 }
 
 /**
- * 标记这个会话「被审计了」—— 之后它的面板请求才会被记账。
+ * 标记这个会话「被审计了」—— 之后它的读事件与面板请求才会被记账。
  *
  * 默认**不记账**：没人看「使用情况」、Agent 也没要 audit 的会话，
  * 不该在内存里攒快照。这一点是刻意的（内存有上限、行为可预期）。
@@ -302,7 +313,8 @@ export function activateAudit(store, sessionId) {
 }
 
 /**
- * 这个会话是否在记账。
+ * 这个会话是否在记账。**订阅回调的第一行就用它早退** ——
+ * 没记账的会话一次 Map 查找就返回，不做任何别的工作。
  * @param {object} store - store
  * @param {string} sessionId - 会话 id
  * @returns {boolean} 是否记账
@@ -321,15 +333,16 @@ function stateOf(store, sessionId) {
   let state = store.sessions.get(sessionId)
   if (!state) {
     state = {
-      seq: -1,          // 已消费到的事件 seq（幂等游标）
+      seq: -1,          // 已消费到的事件 seq（幂等游标；也是「当前水位」）
       pending: new Map(), // 已调用、还没结果的 read
-      snapshots: [],    // 最近两份 Context Pack
+      snapshots: [],    // 最近 MAX_SNAPSHOTS_PER_SESSION 份 Context Pack（每份 = 一个 Epoch）
+      epochs: [],       // 与 snapshots 一一对应的 Epoch 级计数
       deltas: [],       // 最近若干条变化
-      reads: new Map(), // rel → 计数
+      reads: new Map(), // rel → 冻结的读归因
       readOrder: [],    // rel 的插入顺序（淘汰用）
-      // ⚠️ `changes` 是**累计**的上下文替换次数，与 `deltas` 数组的长度无关 ——
-      // 数组会被上限砍掉，但「这个会话里上下文变过几次」不能被砍（那正是 churn 这个指标）。
-      churn: { changes: 0, appeared: 0, disappeared: 0, moved: 0, taskChanged: 0 },
+      // ⚠️ 这里**不再**有 `changes` 计数：上下文换过几次 = 最后一个 Epoch 的编号 - 1，
+      // 而 Epoch 编号是单调的（被淘汰的 Epoch 也计过数），所以不需要额外记一个累计值。
+      churn: { appeared: 0, disappeared: 0, moved: 0, taskChanged: 0 },
     }
     store.sessions.set(sessionId, state)
   }
@@ -346,9 +359,12 @@ function stateOf(store, sessionId) {
 /* ── 5. 入口：喂事件 / 记快照 / 取使用情况 ─────────────────────────── */
 
 /**
- * 把一批会话事件喂进去，抽出 read 并记账。
+ * 把**一批**会话事件喂进去，抽出 read 并按「读发生的那一刻」结算归因。
  *
- * **任何异常都咽掉并返回 `{ok:false}`** —— 记账失败绝不能让面板或工具失败（规格 §33）。
+ * v0.16 起调用方通常一次只喂一条（`session/event` 订阅）。仍然是幂等的：
+ * 只处理 `seq > state.seq` 的事件，重复喂同一批不会重复计数。
+ *
+ * **任何异常都咽掉并返回 `{ok:false}`** —— 记账失败绝不能让面板或工具失败。
  *
  * @param {object} store - store
  * @param {string} sessionId - 会话 id
@@ -380,6 +396,9 @@ export function ingestEvents(store, sessionId, events, options = {}) {
  * 与上一份**同签名**时不记新快照（只把时间 / seq 往前推）—— 否则 5 秒轮询会把
  * 同一份上下文记成几十份，Delta churn 立刻变成噪音。
  *
+ * `meta.seq` 省略时用会话当前的**事件水位**（`state.seq`）—— 也就是「交包这一刻，
+ * 已经发生到第几个事件」。这正是历史归因要的边界：seq ≤ 它的读算在这份包里。
+ *
  * @param {object} store - store
  * @param {string} sessionId - 会话 id
  * @param {object} pack - Context Pack
@@ -390,24 +409,34 @@ export function noteSnapshot(store, sessionId, pack, meta = {}) {
   try {
     if (!store || !sessionId || !pack) return null
     const state = stateOf(store, sessionId)
-    const next = snapshotOf(pack, meta)
+    const next = snapshotOf(pack, {
+      seq: Number.isInteger(meta.seq) ? meta.seq : state.seq,
+      at: meta.at,
+    })
     const prev = state.snapshots[state.snapshots.length - 1] || null
 
     if (prev && prev.sig === next.sig) {
       if (next.at > prev.at) prev.at = next.at
       if (next.seq > prev.seq) prev.seq = next.seq
+      const epoch = epochIn(state, prev.epochId)
+      if (epoch && prev.seq > epoch.snapshotSeq) epoch.snapshotSeq = prev.seq
       return null
     }
 
+    // Epoch 编号从这里发出：新建一份上下文 = 一个新 Epoch。同签名不算新 Epoch。
+    next.epochId = prev && Number.isInteger(prev.epochId) ? prev.epochId + 1 : 1
     state.snapshots.push(next)
-    while (state.snapshots.length > MAX_SNAPSHOTS_PER_SESSION) state.snapshots.shift()
+    state.epochs.push(createEpoch(next))
+    while (state.snapshots.length > MAX_SNAPSHOTS_PER_SESSION) {
+      state.snapshots.shift()
+      state.epochs.shift()
+    }
 
     let delta = null
     if (prev) {
       delta = { at: next.at, seq: next.seq, ...diffContext(prev, next) }
       state.deltas.push(delta)
       while (state.deltas.length > MAX_DELTAS_PER_SESSION) state.deltas.shift()
-      state.churn.changes += 1
       state.churn.appeared += delta.appeared.length
       state.churn.disappeared += delta.disappeared.length
       state.churn.moved += delta.moved.length
@@ -420,66 +449,203 @@ export function noteSnapshot(store, sessionId, pack, meta = {}) {
 }
 
 /**
- * 记一次真实读。**不属于任何快照的读 = outside context**（这不是错，是信息）。
+ * 给一个新 Epoch 建计数骨架（总量取自这份快照，已读量靠后续 read 累加）。
+ * @param {object} snapshot - 刚记下的快照（已带 epochId）
+ * @returns {object} Epoch 记录
+ */
+function createEpoch(snapshot) {
+  const counts = {
+    primary: { total: 0, read: 0 },
+    supporting: { total: 0, read: 0 },
+    related: { total: 0, read: 0 },
+  }
+  for (const item of snapshot.items) {
+    const bucket = counts[item.tier]
+    if (bucket) bucket.total += 1
+  }
+  const primary = snapshot.items.find((item) => item.tier === 'primary' && item.rank === 1)
+  return {
+    epochId: snapshot.epochId,
+    snapshotSeq: snapshot.seq,
+    topic: snapshot.topic,
+    task: snapshot.task,
+    primary: { rel: primary ? primary.rel : '', read: false },
+    supporting: counts.supporting,
+    related: counts.related,
+    outsideReads: 0,
+    continuedReadsAfterExit: 0,
+    reEntries: 0,
+    seen: new Set(), // 本 Epoch 里已经计过「读」的 `层:rel`（导出前会剥掉）
+  }
+}
+
+/**
+ * 按 epochId 找 Epoch 记录。找不到返回 null（早于任何快照的读就是这种）。
+ * @param {object} state - 会话状态
+ * @param {number|null} epochId - Epoch 编号
+ * @returns {object|null} Epoch 记录
+ */
+function epochIn(state, epochId) {
+  const list = state && Array.isArray(state.epochs) ? state.epochs : []
+  if (!Number.isInteger(epochId)) return null
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i].epochId === epochId) return list[i]
+  }
+  return null
+}
+
+/**
+ * 记一次真实读。**归因在这一次调用里就结算并冻结**，之后不再重算。
+ * 不属于任何快照的读 = outside context（这不是错，是信息）。
  * @param {object} state - 会话状态
  * @param {object} read - 归一化后的 read 证据
  */
 function recordRead(state, read) {
-  const snapshot = snapshotAt(state.snapshots, read.seq)
-  const hit = snapshot ? snapshot.items.find((item) => item.rel === read.rel) : null
-  const inside = !!hit
-  const tier = hit ? hit.tier : null
-  const rank = hit ? hit.rank : null
+  const at = snapshotAt(state.snapshots, read.seq)
+  const attribution = attributeRead(at, read.rel)
+  const facts = attributeReadFacts(state.snapshots, read.rel, read.seq)
+  const point = {
+    seq: read.seq,
+    at: read.time,
+    snapshotSeq: attribution.snapshotSeq,
+    epochId: attribution.epochId,
+    tier: attribution.tierAtRead,
+    rank: attribution.rankAtRead,
+    inside: attribution.insideAtRead,
+  }
 
   let entry = state.reads.get(read.rel)
   if (!entry) {
     entry = {
       rel: read.rel,
-      count: 1,
-      firstReadAt: read.time,
-      firstReadSeq: read.seq,
-      firstTier: tier,
-      firstRank: rank,
-      lastReadAt: read.time,
-      lastTier: tier,
-      outside: !inside,
-      outsideCount: inside ? 0 : 1,
+      count: 0,
+      firstRead: { ...point },
+      lastRead: { ...point },
+      insideReads: 0,
+      outsideReads: 0,
+      primaryReads: 0,
+      supportingReads: 0,
+      relatedReads: 0,
+      reEntry: false,
+      continuedReadAfterExit: false,
     }
     state.reads.set(read.rel, entry)
     state.readOrder.push(read.rel)
     while (state.readOrder.length > MAX_READS_PER_SESSION) {
       state.reads.delete(state.readOrder.shift())
     }
-    return
   }
 
   entry.count += 1
-  entry.lastReadAt = read.time
-  entry.lastTier = tier
-  if (!inside) {
-    entry.outside = true
-    entry.outsideCount += 1
+  // 「第一次读」按**事件 seq** 认（seq 才是真相，墙钟只用来显示）
+  if (read.seq < entry.firstRead.seq || (read.seq === entry.firstRead.seq && read.time < entry.firstRead.at)) {
+    entry.firstRead = { ...point }
   }
-  if (!Number.isFinite(entry.firstReadAt) || read.time < entry.firstReadAt) {
-    entry.firstReadAt = read.time
-    entry.firstReadSeq = read.seq
-    entry.firstTier = tier
-    entry.firstRank = rank
+  if (read.seq > entry.lastRead.seq || (read.seq === entry.lastRead.seq && read.time >= entry.lastRead.at)) {
+    entry.lastRead = { ...point }
+  }
+  if (attribution.insideAtRead) entry.insideReads += 1
+  else entry.outsideReads += 1
+  if (attribution.tierAtRead === 'primary') entry.primaryReads += 1
+  else if (attribution.tierAtRead === 'supporting') entry.supportingReads += 1
+  else if (attribution.tierAtRead === 'related') entry.relatedReads += 1
+  if (facts.continuedReadAfterExit) entry.continuedReadAfterExit = true
+  if (facts.reEntry) entry.reEntry = true
+
+  const epoch = epochIn(state, attribution.epochId)
+  if (epoch) {
+    if (!attribution.insideAtRead) epoch.outsideReads += 1
+    if (facts.continuedReadAfterExit) epoch.continuedReadsAfterExit += 1
+    if (facts.reEntry) epoch.reEntries += 1
+    if (attribution.insideAtRead && attribution.tierAtRead) {
+      const key = `${attribution.tierAtRead}:${read.rel}`
+      if (!epoch.seen.has(key)) {
+        epoch.seen.add(key)
+        const bucket = epoch[attribution.tierAtRead]
+        if (bucket) bucket.read += 1
+      }
+      if (attribution.tierAtRead === 'primary' && epoch.primary.rel === read.rel) epoch.primary.read = true
+    }
   }
 }
 
 /**
  * 找出**这次读发生的那一刻**在生效的那份快照（seq ≤ 读的 seq 里最新的那份）。
  * 找不到就返回 null —— 那是「Knit 还没给过上下文就自己读了」，如实记成 outside。
+ *
+ * 这是 runtime 与离线回放到共用的**同一个纯函数**：两边「规则一致」靠它，
+ * 而不是靠两边的数字恰好相等（交付时刻不可观测，数字本来就不可能相等）。
+ *
  * @param {object[]} snapshots - 快照栈
  * @param {number} seq - 读的 seq
  * @returns {object|null} 快照
  */
-function snapshotAt(snapshots, seq) {
-  for (let i = snapshots.length - 1; i >= 0; i -= 1) {
-    if (snapshots[i].seq <= seq) return snapshots[i]
+export function snapshotAt(snapshots, seq) {
+  const list = Array.isArray(snapshots) ? snapshots : []
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i].seq <= seq) return list[i]
   }
   return null
+}
+
+/**
+ * 把「这次读」钉到一份快照上 —— 输出的是**读那一刻**的事实，不是当前视图。
+ * @param {object|null} snapshot - 读那一刻生效的快照（`snapshotAt()` 的结果）
+ * @param {string} rel - 归一化后的路径
+ * @returns {{snapshotSeq: number|null, epochId: number|null, tierAtRead: string|null, rankAtRead: number|null, insideAtRead: boolean}} 归因
+ */
+export function attributeRead(snapshot, rel) {
+  if (!snapshot || !Array.isArray(snapshot.items)) {
+    return { snapshotSeq: null, epochId: null, tierAtRead: null, rankAtRead: null, insideAtRead: false }
+  }
+  const hit = snapshot.items.find((item) => item.rel === rel)
+  return {
+    snapshotSeq: Number.isInteger(snapshot.seq) ? snapshot.seq : null,
+    epochId: Number.isInteger(snapshot.epochId) ? snapshot.epochId : null,
+    tierAtRead: hit ? hit.tier : null,
+    rankAtRead: hit ? hit.rank : null,
+    insideAtRead: !!hit,
+  }
+}
+
+/**
+ * 推导两个**事实**字段（规格 §12 / §13），只用保留窗口内的快照：
+ *
+ *   - `continuedReadAfterExit`：这次读**在当时那份快照之外**，但更早的某份快照里有这篇
+ *     ⇒ 「离开上下文之后它仍然被读了」。
+ *   - `reEntry`：这次读**在当时那份快照之内**，更早的某份快照里也有过，但中间至少有一份
+ *     快照里没有它 ⇒ 「离开过，又回来了，而且回来之后被读了」。
+ *
+ * ⚠️ 这两个字段只是**事实**。它们**不许**被解释成「Agent 不认可新上下文」
+ * —— 那是推断，不在这个模块的职责里（规格 §5 Evidence Over Interpretation）。
+ *
+ * 只在保留窗口内推导：宁可漏记，也不猜。
+ *
+ * @param {object[]} snapshots - 快照栈
+ * @param {string} rel - 归一化后的路径
+ * @param {number} readSeq - 这次读的 seq
+ * @returns {{continuedReadAfterExit: boolean, reEntry: boolean}} 两个事实
+ */
+export function attributeReadFacts(snapshots, rel, readSeq) {
+  const list = Array.isArray(snapshots) ? snapshots : []
+  const empty = { continuedReadAfterExit: false, reEntry: false }
+  const at = snapshotAt(list, readSeq)
+  if (!at) return empty
+  const atIndex = list.indexOf(at)
+  if (atIndex < 0) return empty
+
+  const insideNow = at.items.some((item) => item.rel === rel)
+  let sawInside = false
+  let sawGapAfterInside = false
+  for (let i = 0; i < atIndex; i += 1) {
+    const has = list[i].items.some((item) => item.rel === rel)
+    if (has) sawInside = true
+    else if (sawInside) sawGapAfterInside = true
+  }
+  // 更早的窗口里从来没有过它 —— 那这次既不是「继续读」也不是「重新进入」
+  if (!sawInside) return empty
+  if (insideNow) return { continuedReadAfterExit: false, reEntry: sawGapAfterInside }
+  return { continuedReadAfterExit: true, reEntry: false }
 }
 
 /**
@@ -501,8 +667,14 @@ export function usageFor(store, sessionId) {
 /**
  * 纯函数版：从一个会话状态算出使用情况（测试直接用这个）。
  *
+ * 报告分两层，界线是硬的：
+ *
+ *   - **历史层**（`reads[].firstRead/lastRead`、`byTier[].read`、`primaryFollowThrough`、
+ *     `outside`）—— 全部来自读时冻结的归因，**永不按当前上下文重算**。
+ *   - **当前层**（`items`、`byTier[].total`、`primaryRel`、`delta`）—— 反映最近一份上下文。
+ *
  * 报告里只有**计数与事实**：读了几次、落在哪一层、有几篇在快照之外、
- * 上下文变了几次。**没有分数、没有百分比评分、没有「相关性」**。
+ * 上下文变过几次、有几篇离开后仍被读、有几篇重新进入。**没有分数、没有百分比评分。**
  *
  * @param {object} state - 会话状态
  * @returns {object} 使用情况
@@ -510,6 +682,7 @@ export function usageFor(store, sessionId) {
 export function usageFrom(state) {
   const snapshots = (state && state.snapshots) || []
   const snapshot = snapshots[snapshots.length - 1] || null
+  const epochId = snapshot && Number.isInteger(snapshot.epochId) ? snapshot.epochId : null
   const byTier = {
     primary: { total: 0, read: 0 },
     supporting: { total: 0, read: 0 },
@@ -523,52 +696,93 @@ export function usageFrom(state) {
 
   const reads = []
   for (const entry of state.reads.values()) {
-    const hit = snapshot ? snapshot.items.find((item) => item.rel === entry.rel) : null
     reads.push({
       rel: entry.rel,
       count: entry.count,
-      firstReadAt: entry.firstReadAt,
-      firstReadSeq: entry.firstReadSeq,
-      firstTier: entry.firstTier || null,
-      tier: hit ? hit.tier : null,
-      rank: hit ? hit.rank : null,
-      outside: !hit,
-      outsideCount: entry.outsideCount || 0,
+      firstRead: { ...entry.firstRead },
+      lastRead: { ...entry.lastRead },
+      // 兼容别名（旧调用方与测试用的字段名）：都是**首次读**的归因，历史值
+      firstReadAt: entry.firstRead.at,
+      firstReadSeq: entry.firstRead.seq,
+      firstTier: entry.firstRead.tier,
+      lastReadAt: entry.lastRead.at,
+      lastTier: entry.lastRead.tier,
+      insideReads: entry.insideReads,
+      outsideReads: entry.outsideReads,
+      outsideCount: entry.outsideReads,
+      outside: entry.outsideReads > 0,
+      reEntry: !!entry.reEntry,
+      continuedReadAfterExit: !!entry.continuedReadAfterExit,
+      // ⚠️ `tier`/`rank` 是**首次读时**的层与名次，不是「它现在在哪一层」。
+      tier: entry.firstRead.tier,
+      rank: entry.firstRead.rank,
     })
   }
-  reads.sort((a, b) => a.firstReadSeq - b.firstReadSeq)
-  for (const row of reads) if (row.tier && byTier[row.tier]) byTier[row.tier].read += 1
+  reads.sort((a, b) => (a.firstRead.seq - b.firstRead.seq) || (a.firstRead.at - b.firstRead.at))
+  // 「这一 Epoch 的某一层里，有几篇真的被读过」—— 只认归因落在**当前 Epoch** 的读
+  for (const row of reads) {
+    if (row.firstRead.epochId === epochId && row.firstRead.inside && byTier[row.firstRead.tier]) {
+      byTier[row.firstRead.tier].read += 1
+    }
+  }
 
-  const outside = reads.filter((row) => row.outside)
+  const outside = reads.filter((row) => row.outsideReads > 0)
   const first = reads[0] || null
-  const primary = snapshot ? snapshot.items.find((item) => item.tier === 'primary' && item.rank === 1) : null
-  const supportingTotal = byTier.supporting.total
+  const epoch = epochIn(state, epochId)
+  const primaryRel = epoch && epoch.primary ? epoch.primary.rel : ''
+  const continued = reads.filter((row) => row.continuedReadAfterExit)
+  const reentries = reads.filter((row) => row.reEntry)
+  const lastEpochId = Number.isInteger(epochId) ? epochId : 0
+  const epochs = (Array.isArray(state.epochs) ? state.epochs : []).map((e) => ({
+    epochId: e.epochId,
+    snapshotSeq: e.snapshotSeq,
+    topic: e.topic,
+    task: e.task,
+    primary: { rel: e.primary.rel, read: e.primary.read },
+    supporting: { total: e.supporting.total, read: e.supporting.read },
+    related: { total: e.related.total, read: e.related.read },
+    outsideReads: e.outsideReads,
+    continuedReadsAfterExit: e.continuedReadsAfterExit,
+    reEntries: e.reEntries,
+  }))
 
   return {
     at: snapshot ? snapshot.at : 0,
     seq: snapshot ? snapshot.seq : -1,
+    epochId,
     task: snapshot ? snapshot.task : '',
     topic: snapshot ? snapshot.topic : '',
     items: snapshot ? snapshot.items.map((item) => ({ ...item })) : [],
     reads,
+    // §16 Epoch 级使用情况：内部 / 离线回放 / 将来评估用，v0.16 **不上**任何 UI 与工具输出
+    epochs,
     delta: state.deltas[state.deltas.length - 1] || null,
     stats: {
       reads: reads.reduce((sum, row) => sum + row.count, 0),
       distinct: reads.length,
       outside: outside.length,
       outsideReads: outside.map((row) => row.rel),
-      firstReadTier: first ? first.tier : null,
+      // 第一条成功读落在哪一层：primary / supporting / related / outside / null
+      firstReadTier: first ? (first.firstRead.inside ? first.firstRead.tier : 'outside') : null,
       firstReadRel: first ? first.rel : '',
-      firstReadAt: first ? first.firstReadAt : 0,
-      primaryRel: primary ? primary.rel : '',
-      // 「先看的那篇被读了吗」—— 这不是成功率，只是一次真实的命中
-      primaryFollowThrough: !!(primary && reads.some((row) => row.rel === primary.rel)),
+      firstReadAt: first ? first.firstRead.at : 0,
+      firstReadEpoch: first ? first.firstRead.epochId : null,
+      primaryRel,
+      // 「这个 Epoch 先看的那篇被真的读了吗」—— 按 Epoch 归因的布尔，不是成功率
+      primaryFollowThrough: !!(epoch && epoch.primary && epoch.primary.read),
       byTier,
-      supportingCoverage: supportingTotal === 0 ? null : byTier.supporting.read / supportingTotal,
+      supportingCoverage: byTier.supporting.total === 0 ? null : byTier.supporting.read / byTier.supporting.total,
+      // 事实计数（不是「Agent 不认可新上下文」这种解释）
+      continuedReadsAfterExit: continued.length,
+      reEntries: reentries.length,
       churn: {
-        // 累计变过几次（不受 Delta 数组上限影响）
-        snapshots: state.churn.changes,
-        deltas: state.churn.changes,
+        // 观察到的**不同 Epoch 数**（= 最后一份 Epoch 的编号；被淘汰的也算过）
+        epochs: lastEpochId,
+        // 变化次数 = 换过几次上下文（第一份不算变化）
+        changes: lastEpochId > 0 ? lastEpochId - 1 : 0,
+        // ⚠️ `snapshots` 是客户端已经在用的键名（`usage.changes` 文案），保留它 = 变化次数
+        snapshots: lastEpochId > 0 ? lastEpochId - 1 : 0,
+        deltas: lastEpochId > 0 ? lastEpochId - 1 : 0,
         // 手上还留着几条 Delta 明细
         retained: state.deltas.length,
         appeared: state.churn.appeared,
@@ -594,7 +808,10 @@ export function auditPayload(usage) {
     supportingRead: s.byTier.supporting.read,
     supportingTotal: s.byTier.supporting.total,
     readsOutside: s.outside,
-    contextChanges: s.churn.deltas,
+    contextChanges: s.churn.changes,
+    epochs: s.churn.epochs,
+    continuedReadsAfterExit: s.continuedReadsAfterExit,
+    reEntries: s.reEntries,
   }
 }
 
