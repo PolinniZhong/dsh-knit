@@ -306,7 +306,7 @@ feature request.
 | The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
-| One-click switch between **Docs / Images & video / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline | ✅ |
+| One-click switch between **Docs / Media / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline (the tab label became "Media" on 2026-10-06, was "Images & video") | ✅ |
 | Images & video: square thumbnail grid — **at least 3 columns, more only as the pane gets wider**; cells start at 64px and the baseline is **8 per screen**; past 8 nothing is hidden, the whole grid scales down proportionally; videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
 | Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
 | The **All** view splits into **two stacked sections**: docs (max 4, with "View all →" when truncated) and images & video (**never truncated**, count only) | ✅ |
@@ -327,23 +327,23 @@ feature request.
 
 ### The other two views
 
-![Screenshot of the Images & video tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
+![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
 
-*Images & video: square thumbnails, with the **column count following the panel width continuously** —
+*Media: square thumbnails, with the **column count following the panel width continuously** —
 six columns at this width, cells about 112px. These are the workspace's real image and SVG files; this
 particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
 (the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
 a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
 
-![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and the images-and-video grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
-*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 36"),
-and the images-and-video grid below it.*
+*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 39"),
+and the media grid below it.*
 
-⚠️ Both sections share the **same 40-item window** the host returns — if images and video rank past
-40th by relevance, the All view shows **none of them at all** (the Images & video tab is unaffected,
-because it requests media on its own). A known defect, with reproduction and the fix recorded in
-[`docs/README.md`](docs/README.md).*
+⚠️ Both sections share the **same 40-item window** the host returns — when media rank past 40th by
+relevance, the All view keeps only the few inside that window (this screen keeps just one; the Media
+tab is unaffected, because it requests media on its own). A known defect, with reproduction and the
+fix recorded in [`docs/README.md`](docs/README.md).*
 
 ---
 
@@ -356,11 +356,13 @@ v0.16 nails that down: **attribution is settled and frozen at read time** — ho
 changes later, the historical numbers never change their story (in v0.15 a read could be
 re-judged as "outside" by the present, which was a bug).
 
-**Off by default.** There is a "Usage" toggle in the panel head; turning it on adds one muted line
-above the list:
+**Off by default.** There is a "Usage" toggle in the panel head; turning it on adds a lightweight
+**lens** above the list (called the Usage Lens since v0.18 — see "reading the usage" below).
+Its top line still reports facts only:
 
 ```
-Context · Epoch 4 · primary read (docs/xxx.md) · supporting 1/2 · 7 reads · 2 outside the pack · context changed 2×
+Usage                                         Epoch 5   ˄
+174 reads · 28 outside the pack · context changed 3×
 ```
 
 - **Context Epoch**: one **content-changed** context equals one epoch (identical content creates
@@ -401,9 +403,13 @@ To check offline: `node tools/context-feedback-eval.mjs` replays the latest real
 
 ### v0.17: what state is a document in, after it has been read?
 
-Turning "Usage" on adds two more things besides the line above: **a status on each recommended
+Turning "Usage" on adds two more things besides the counts: **a status on each recommended
 document**, and "which one was read last / what was read outside the pack / how the context last
 changed".
+
+> ⚠️ The ASCII below is the **v0.17 shape** of this UI. v0.18 rebuilt it into the Usage Lens above
+> the list (next section) — **the criteria, the four states and the data sources did not change**;
+> this section is about the data and the judgement.
 
 ```
 Context · Epoch 4
@@ -454,6 +460,50 @@ All four states are **facts**, not scores:
   Nothing is animated on first paint, when the kind / sort / query changes, or when the system asks
   for reduced motion. This is not a new feature — it only makes "who arrived, who left, who moved"
   visible. Indexing, ranking, tiers and the `knit_docs` output are unchanged.
+
+### v0.18: reading the usage (Context Usage Lens)
+
+v0.17 had all the information, but **crammed into one line and a few collapsed blocks** — you could
+not read the structure: which tier got read, which document was read last, which of those twenty
+outside documents were read over and over, whether the last change was an arrival or a departure.
+v0.18 rebuilds it as a lightweight **lens above the list** — not a dialog, not a new page, and not a
+dashboard:
+
+```
+Usage                                         Epoch 5   ˄
+174 reads · 28 outside the pack · context changed 3×
+Current context
+  Primary  1 / 1        Supporting  2 / 3      Related  0 / 5
+  ●                     ● ○                   ○ ○ ○ ○ ○
+Recent read       docs/eval.md                  12 min ago  ›
+Reads outside context                                      20  ›
+Context changes                                      Latest  ›
+```
+
+- **Current-context coverage**: each tier gives "a state dot + `read / total in that tier`". Clicking
+  a tier scrolls to that tier and **flashes it briefly** (no arrows, no rules — space says "here").
+  **Facts only**: no progress bar, no percentage — Knit does not judge whether a context is "used up",
+  and when there is no Primary the whole column is hidden rather than drawing a fake `0 / 0`.
+- **Inline state dot**: unread = hollow circle / read = filled circle / updated after read = filled
+  circle with an inner ring / re-read after update = `↻`, shown **alongside** the text (the dot states
+  the state, the text states the count). Clicking it opens that document. No red/green, no badge.
+  The coverage dots and this one share **the same tokens and the same 6px diameter** — one state language.
+- **Recent read** is a clickable fact row (`file · relative time ›`) that opens that document directly
+  and **does not refetch the list**. It is still "the **last successful read**" — never "currently reading".
+- **Reads outside context** shows up to 10 by default plus "N more"; every row is clickable and carries
+  its state, sorted by **most-read first** (`count DESC`) — a fact order, not a relevance score. You
+  **cannot** promote a document into the context from here (V0.18 does no context control).
+- **Context changes** is collapsed by default; expanding groups it into Entered / Left / Moved tier,
+  at most 5 per group, and only the **latest** delta is shown.
+- The lens itself expands / collapses. **Collapsing is not turning usage off** — collapsing means
+  "counting, but I do not want the details"; switching the toggle off produces no usage DOM at all.
+- On a short panel (< 420px) it degrades to summary + coverage + recent read; the change details are
+  still one click away, and **scrolling always belongs to the list** — there is no second scroll
+  container, so a narrow sidebar never gets scroll-inside-scroll.
+
+Not one new fact was added: everything comes from the v0.17 `lifecycle / recentRead / outsideDocs /
+latestDelta` fields plus the current `context` tiers, and coverage is **derived** from them (pure
+functions `coverageOf` / `groupOutsideDocs` / `groupDelta`).
 
 The `knit_docs` tool output **did not grow**: it still only finds context.
 
@@ -514,7 +564,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 517 tests, zero dependencies, no npm install needed
+npm test          # 532 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -538,7 +588,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 517 tests
+└── test/                 # 532 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

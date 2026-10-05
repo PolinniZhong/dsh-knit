@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { loadClientModule, createHarness, byClass, textOf, makeLocale } from './harness.mjs'
+import { loadClientModule, createHarness, byClass, byExactClass, textOf, makeLocale } from './harness.mjs'
 
 const harness = createHarness()
 const React = globalThis.__knitReact
@@ -435,6 +435,169 @@ test('守卫：英文环境下无障碍与提示属性里也没有汉字', async
   assert.deepEqual(bad, [], `英文环境的属性里混进了中文：${bad.join(' / ')}`)
 })
 
+/* ── v0.18 Usage Lens：英文渲染里也不许有汉字 ───────────────
+   ⚠️ 上面那两条守卫用的是 `timePayload()` —— **它没有 usage**，所以 Lens 整块
+   一个节点都没渲染。也就是说 v0.18 新增的几十条 Lens 文案（含挂在 `title` /
+   `aria-label` 上的）**不在那两条守卫的覆盖里**：JSX 里如果漏了 `t()`，
+   它们照样全绿。下面这两条把 Lens 真的打开再查一遍。 */
+
+/**
+ * v0.18 Usage Lens 的**英文语料**（全部 ASCII）。
+ *
+ * ⚠️ 与 `timePayload` 同一条规矩：标题 / 主题 / 摘要都是**数据**，
+ *    混进中文会被守卫误报成「文案漏了 t()」。
+ * 覆盖面：三块内容全在 —— Coverage 三层、最近读取、包外 12 篇（→「还有 2 篇」）、
+ * 变化 6 条（→「还有 3 条」，且 `taskChanged` 为真）；生命周期四态齐全。
+ *
+ * @returns {object} 载荷
+ */
+function lensPayload() {
+  const at = Date.now()
+  const item = (rel, title) => ({
+    rel, path: `/p/${rel}`, name: rel.split('/').pop(), title,
+    summary: 's', mtimeMs: at, kind: 'md', source: 'doc',
+    reason: { code: 'titleMatch', terms: ['bm25'], fields: 1 },
+  })
+  const delta = {
+    appeared: [{ rel: 'docs/new-a.md', tier: 'primary', rank: 2 },
+      { rel: 'docs/new-b.md', tier: 'related', rank: 3 }],
+    disappeared: [{ rel: 'docs/gone-a.md', tier: 'related', rank: 4 },
+      { rel: 'docs/gone-b.md', tier: 'related', rank: 5 }],
+    moved: [{ rel: 'docs/moved.md', from: 'supporting', to: 'related' }],
+    taskChanged: true,
+  }
+  return {
+    ok: true, root: '/p', total: 4, mode: 'relevance', topic: 'bm25 ranking', keywords: ['bm25'],
+    docs: [item('docs/algo.md', 'Algo'), item('docs/eval.md', 'Eval'),
+      item('CHANGELOG.md', 'Changelog'), item('README.md', 'Knit')],
+    context: {
+      mode: 'relevance', topic: 'bm25 ranking', task: '',
+      primary: [item('docs/algo.md', 'Algo')],
+      supporting: [item('docs/eval.md', 'Eval'), item('CHANGELOG.md', 'Changelog')],
+      related: [item('README.md', 'Knit'), item('out/doc-0.md', 'Out')],
+    },
+    usage: {
+      at, epochId: 4,
+      stats: {
+        reads: 7, distinct: 3, outside: 12, outsideReads: [],
+        firstReadTier: 'primary', firstReadRel: 'docs/algo.md', firstReadAt: 1,
+        primaryRel: 'docs/algo.md', primaryFollowThrough: true,
+        byTier: {
+          primary: { total: 1, read: 1 },
+          supporting: { total: 2, read: 1 },
+          related: { total: 2, read: 0 },
+        },
+        supportingCoverage: 0.5,
+        churn: { snapshots: 5, deltas: 4, retained: 4, appeared: 2, disappeared: 2, moved: 1, taskChanged: 1 },
+      },
+      delta, latestDelta: delta,
+      recentRead: { rel: 'docs/eval.md', at, seq: 42, epochId: 4, tier: 'supporting', rank: 2, inside: true },
+      outsideDocs: Array.from({ length: 12 }, (_, i) => ({
+        rel: `out/doc-${i}.md`, count: 12 - i, lastReadAt: i, seq: i,
+      })),
+      lifecycle: {
+        'docs/algo.md': { status: 'read', count: 3, lastReadAt: 1 },
+        'docs/eval.md': { status: 'reread_after_update', count: 2, lastReadAt: 2 },
+        'CHANGELOG.md': { status: 'updated_after_read', count: 1, lastReadAt: 3 },
+        'README.md': { status: 'unread', count: 0, lastReadAt: 0 },
+        // ⚠️ 包外那 12 篇在真实载荷里**每一篇都有 read 记录**（左右两栏同源）。
+        //    只给第一篇的话，守卫语料会自相矛盾：左边写 `×11`、右边写 `Unread`。
+        ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [
+          `out/doc-${i}.md`, { status: 'read', count: 12 - i, lastReadAt: i },
+        ])),
+      },
+    },
+  }
+}
+
+/**
+ * 把 Usage Lens **打开**（数据到位后再点，与真实用法一致），返回渲染出的节点。
+ * @param {string} locale - 活动语言
+ * @param {object} payload - 宿主载荷
+ * @returns {Promise<{nodes: object[], render: Function}>} 节点与重渲染
+ */
+async function mountLens(locale, payload) {
+  installFetch(() => payload)
+  const { exports } = boot(locale)
+  const { KnitBody } = exports.__test
+  harness.reset()
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  render()
+  await harness.flush()
+  render()
+  await harness.flush()
+  const toggle = byExactClass(render(), 'knit-btn').find((n) => textOf(n) === 'Usage')
+  assert.ok(toggle, '英文头部必须有 Usage 按钮')
+  toggle.props.onClick()
+  await harness.flush()
+  render()
+  await harness.flush()
+  return { nodes: render(), render }
+}
+
+/**
+ * 收集一棵树里所有 `title` / `aria-label` 之类的**文案属性**。
+ * @param {object[]} nodes - 扁平节点
+ * @returns {string[]} 属性值
+ */
+function attrTexts(nodes) {
+  const attrs = ['aria-label', 'title', 'placeholder', 'alt']
+  const out = []
+  for (const n of nodes) {
+    for (const a of attrs) {
+      const v = n.props[a]
+      if (typeof v === 'string' && v) out.push(`${a}="${v}"`)
+    }
+  }
+  return out
+}
+
+test('守卫：英文环境下打开的 Usage Lens 里也没有汉字（文字 + title / aria-label）', async () => {
+  const { nodes: closed, render } = await mountLens('en', lensPayload())
+
+  // 折叠态先查一遍：`+3 more`（`usage.deltaMore`）只在折叠时出现（展开＝明细全列，不再有尾巴）
+  const closedText = ownTexts(closed).join(' | ')
+  assert.ok(closedText.includes('+3 more'), `折叠态少了「+3 more」：${closedText}`)
+  assert.deepEqual(cjkIn(ownTexts(closed)), [], '英文折叠态 Lens 的文字里混进了中文')
+  assert.deepEqual(cjkIn(attrTexts(closed)), [], '英文折叠态 Lens 的属性里混进了中文')
+
+  // 两块集合默认折叠 —— 先把它们点开，否则那几条文案根本没进渲染树
+  for (const btn of byExactClass(closed, 'knit-more-btn')) btn.props.onClick()
+  const nodes = render()
+  const text = ownTexts(nodes).join(' | ')
+
+  // ⚠️ 先证明 Lens **真的渲染了**：找不到锚点就意味着下面是「空转绿灯」
+  for (const anchor of ['Usage', 'Epoch 4', 'Current context', 'Recent read',
+    'Reads outside context', 'Context changes', 'Entered', 'Left', 'Moved tier',
+    'Task context updated', '2 more']) {
+    assert.ok(text.includes(anchor), `英文 Lens 少了「${anchor}」：${text}`)
+  }
+
+  assert.deepEqual(cjkIn(ownTexts(nodes)), [], '英文 Usage Lens 的文字里混进了中文')
+  const bad = cjkIn(attrTexts(nodes))
+  assert.deepEqual(bad, [], `英文 Usage Lens 的属性里混进了中文：${bad.join(' / ')}`)
+})
+
+test('守卫：英文环境下**空**的 Usage Lens 里也没有汉字', async () => {
+  const payload = lensPayload()
+  const u = payload.usage
+  u.stats.reads = 0
+  u.stats.outside = 0
+  u.stats.churn.snapshots = 0
+  u.delta = null
+  u.latestDelta = null
+  u.recentRead = null
+  u.outsideDocs = []
+  u.lifecycle = {}
+
+  const { nodes } = await mountLens('en', payload)
+  const text = ownTexts(nodes).join(' | ')
+  assert.ok(text.includes('Nothing yet'), `空态少了「Nothing yet」：${text}`)
+  assert.ok(text.includes('0 reads'), `空态也要报事实（0 reads）：${text}`)
+  assert.deepEqual(cjkIn(ownTexts(nodes)), [], '英文空 Lens 的文字里混进了中文')
+  assert.deepEqual(cjkIn(attrTexts(nodes)), [], '英文空 Lens 的属性里混进了中文')
+})
+
 test('守卫：相对时间的六个分支都随语言（原来是硬编码中文）', async () => {
   const en = await renderPanel('en', () => timePayload())
   const enTimes = byClass(en.nodes, 'knit-time').map(textOf)
@@ -526,23 +689,43 @@ test('i18n: 宿主的每个 Context Pack 理由码都有中英译文', async () 
 
 /* ── v0.17 文档生命周期：数据层英文，界面按语言映射 ─────────────────── */
 
-test('词典：v0.17 的十六条生命周期 / 变化文案中英都对得上', () => {
+test('词典：v0.18 的 Usage Lens / 生命周期文案中英都对得上', () => {
   const { registered } = boot('zh')
   const { zh, en } = registered.knit
 
   // 状态值本身在数据层是英文（unread / read / ...），中文只活在词典里（SDD §15.4）
   const expected = {
-    'usage.recentRead': ['最近读取：{rel} · {time}', 'Recently read: {rel} · {time}'],
-    'usage.outsideDocs': ['上下文外读取 · {n} 篇', 'Read outside the pack · {n}'],
-    'usage.deltaTitle': ['上下文刚刚变化', 'Context just changed'],
     'usage.deltaEnter': ['进入', 'Entered'],
     'usage.deltaLeave': ['离开', 'Left'],
     'usage.deltaMove': ['换层', 'Moved tier'],
     'usage.deltaTask': ['任务上下文已更新', 'Task context updated'],
     'usage.deltaMore': ['还有 {n} 条', '+{n} more'],
+    // v0.18 Usage Lens：标题 / 摘要行 / 三块内容
+    'lens.title': ['使用情况', 'Usage'],
+    'lens.expand': ['展开使用情况', 'Expand usage'],
+    'lens.collapse': ['收起使用情况', 'Collapse usage'],
+    'lens.epoch': ['Epoch {n}', 'Epoch {n}'],
+    'lens.reads': ['{n} 次读取', '{n} reads'],
+    'lens.outside': ['{n} 篇包外', '{n} outside the pack'],
+    'lens.changes': ['上下文变化 {n} 次', 'context changed {n}×'],
+    'lens.currentContext': ['当前上下文', 'Current context'],
+    'lens.recentRead': ['最近读取', 'Recent read'],
+    'lens.recentNone': ['暂无记录', 'Nothing yet'],
+    'lens.outsideDocs': ['上下文外读取', 'Reads outside context'],
+    'lens.more': ['还有 {n} 篇', '{n} more'],
+    'lens.openDoc': ['打开 {rel}', 'Open {rel}'],
+    'lens.delta': ['上下文变化', 'Context changes'],
+    'lens.locate': ['定位到{tier}上下文', 'Locate {tier} context'],
+    // v0.18 UI 迭代新增：读屏专用的一句（视觉上不显示）+ 变化行右侧的「最近一次」
+    'lens.coverageAria': ['{tier}上下文：{read} / {total} 篇已读', '{tier} context: {read} / {total} read'],
+    'lens.deltaLatest': ['最近一次', 'Latest'],
+    // 类型页签 +「全部」分区标题（2026-10-06 用户定：原「图片与视频」→「媒体」；英文随
+    // count.media 走成 Media）。钉住它是因为这一个键同时管页签与分区标题，改一处就两处变。
+    'kind.media': ['媒体', 'Media'],
     'lifecycle.unread': ['未读', 'Unread'],
     'lifecycle.read': ['已读', 'Read'],
     'lifecycle.readCount': ['已读 ×{n}', 'Read ×{n}'],
+    'lifecycle.readCountShort': ['×{n}', '×{n}'],
     'lifecycle.updatedAfterRead': ['读后已更新', 'Updated after read'],
     'lifecycle.rereadAfterUpdate': ['修改后已重新读取', 'Re-read after update'],
     'tierName.primary': ['主要', 'Primary'],

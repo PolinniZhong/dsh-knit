@@ -748,7 +748,7 @@ test('媒体：默认文档视图有三个类型按钮，但不出现媒体网�
 
   const btns = byClass(nodes, 'knit-type-btn')
   assert.equal(btns.length, 3)
-  assert.deepEqual(btns.map(textOf), ['文档', '图片与视频', '全部'])
+  assert.deepEqual(btns.map(textOf), ['文档', '媒体', '全部'])
   assert.equal(btns.find((b) => textOf(b) === '文档').props['aria-selected'], true)
   assert.equal(byClass(nodes, 'knit-media-grid').length, 0)
   assert.equal(byClass(nodes, 'knit-doc').length, 2)
@@ -840,7 +840,7 @@ test('媒体：「全部」分上下两区，文档上限 4、媒体一格不隐
   assert.equal(byExactClass(nodes, 'knit-section').length, 2, '文档区 + 媒体区，上下两区')
   assert.deepEqual(
     byExactClass(nodes, 'knit-section-title').map(textOf),
-    ['文档', '图片与视频'],
+    ['文档', '媒体'],
   )
   assert.equal(byToken(nodes, 'knit-doc').length, 4, '文档区最多 4 条')
   // 载荷里 5 图 + 4 视频 = 9 个媒体：一格都不隐藏，纵向也**不封顶**（有多少行铺多少行）
@@ -957,7 +957,7 @@ test('媒体：只有媒体时「全部」的媒体区不截断、也不给「�
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
   assert.equal(byExactClass(nodes, 'knit-section').length, 1, '只有媒体区')
-  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['图片与视频'])
+  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['媒体'])
   assert.equal(byExactClass(nodes, 'knit-section-more').length, 0, '媒体区不截断，没有「查看全部」')
   assert.equal(byToken(nodes, 'knit-media-card').length, 9)
 })
@@ -1270,7 +1270,7 @@ test('样式：文档列表没有网格 —— 多列那套已整体删除，容
   assert.match(css, /\.knit-title\{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1\.4;/)
   // 2026-10-01：`.knit-gapmark`（没号时的中性占位标记）与序号**共用同一条选择器**，
   // 所以「序号的行高必须等于标题行高」这条纪律自动覆盖它。
-  assert.match(css, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
+  assert.match(css, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:11px;line-height:19\.6px;/)
 
   // ⚠️ 行的**静止态没有底色**（2026-09-29 用户看了暗色主题之后要求：
   //    「深色模式下，文档列表没有选中，鼠标没有悬停，不需要有背景。或者是说，跟深色模式的最底下的
@@ -1436,7 +1436,7 @@ test('样式：预览面板底色恒为纯阅读底色，不靠底色分层；�
   assert.ok(!css.includes('transition:background-color'))
 })
 
-test('媒体：点类型按钮切到「图片与视频」会带 kind=media 重拉并记住偏好', async () => {
+test('媒体：点类型按钮切到「媒体」会带 kind=media 重拉并记住偏好', async () => {
   const { calls } = installFetch(kindResponder({ doc: listPayload(), media: mediaPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -1445,7 +1445,7 @@ test('媒体：点类型按钮切到「图片与视频」会带 kind=media 重�
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  byClass(nodes, 'knit-type-btn').find((b) => textOf(b) === '图片与视频').props.onClick()
+  byClass(nodes, 'knit-type-btn').find((b) => textOf(b) === '媒体').props.onClick()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
@@ -1991,8 +1991,8 @@ test('样式：组与组之间只靠 16px 空间（不再画横线），序号�
   // 字号：标题 14px / 行高 1.4 ＝ 19.6px；序号的 line-height 必须与它同步，
   // 这是「序号与标题第一行垂直居中」的唯一手段（改一处必须改两处）
   assert.match(source, /\.knit-title\{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1\.4;/)
-  assert.match(source, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:10\.5px;line-height:19\.6px;/)
-  assert.match(source, /\.knit-sum\{font-size:12px;line-height:19px;/)
+  assert.match(source, /\.knit-num,\.knit-gapmark\{grid-column:1;font-size:11px;line-height:19\.6px;/)
+  assert.match(source, /\.knit-sum\{font-size:12px;line-height:18px;/)
 })
 
 /* ── v0.15「使用情况」 ───────────────────────────────────────────────
@@ -2046,7 +2046,7 @@ test('使用情况：默认关 —— 请求里没有 usage=1，DOM 里也没有
   assert.equal(byExactClass(nodes, 'knit-usage').length, 0, '默认关：不显示那一行')
 })
 
-test('使用情况：打开后请求带 usage=1，那一行只报事实（没有分数 / 百分比）', async () => {
+test('v0.18 使用情况：打开后请求带 usage=1，Lens 只报事实（没有分数 / 百分比）', async () => {
   const { calls } = installFetch(() => usagePayload())
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -2069,16 +2069,21 @@ test('使用情况：打开后请求带 usage=1，那一行只报事实（没有
 
   assert.ok(calls.some((url) => url.includes('usage=1')), '打开后必须带 usage=1')
   const line = byExactClass(nodes, 'knit-usage')[0]
-  assert.ok(line, '打开后必须出现那一行')
+  assert.ok(line, '打开后必须出现 Usage Lens')
   const text = textOf(line)
-  assert.match(text, /当前上下文 · Epoch 4/, '当前上下文的编号要如实说出来')
-  assert.match(text, /已读/, '先看的那篇被读了要如实说出来')
-  assert.match(text, /辅助 1\/2/)
-  assert.match(text, /读了 7 次/)
-  assert.match(text, /包外 2 篇/)
-  assert.match(text, /上下文换过 2 次/)
+  assert.match(text, /使用情况/, 'Lens 标题')
+  assert.match(text, /Epoch 4/, '当前上下文的编号要如实说出来')
+  // 摘要行只留三件事实：读了几次 / 几篇包外 / 换过几次
+  assert.match(text, /7 次读取/)
+  assert.match(text, /2 篇包外/)
+  assert.match(text, /上下文变化 2 次/)
   assert.ok(!text.includes('%'), '不许有百分比')
   assert.ok(!/评分|置信|分数/.test(text), '不许有评分 / 置信度这类词')
+  // Coverage：三层各自的「已读 ÷ 本层总数」；v0.15 载荷没有 lifecycle ⇒ 全是未读
+  assert.deepEqual(byExactClass(nodes, 'knit-cov-num').map(textOf), ['0 / 1', '0 / 2', '0 / 1'])
+  const dots = dotsOf(nodes)
+  assert.equal(dots.length, 4, '每一篇正文都要有一个状态点')
+  assert.ok(dots.every((dot) => !String(dot.props.className).includes('on')), '没有记录就是未读')
 })
 
 test('样式：使用情况那一行是弱化文字 —— 没有卡片 / 进度条 / 品牌色', async () => {
@@ -2088,7 +2093,8 @@ test('样式：使用情况那一行是弱化文字 —— 没有卡片 / 进度
     fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
     'utf8',
   )
-  assert.match(source, /\.knit-usage\{[^}]*font-size:10\.5px/)
+  // v0.18 UI 迭代（md §四十七 的尺度表）：这一块从 10.5px 提到 **12px**。
+  assert.match(source, /\.knit-usage\{[^}]*font-size:12px/)
   assert.ok(!/\.knit-usage\{[^}]*background/.test(source), '不画卡片底色')
   assert.ok(!/\.knit-usage\{[^}]*knit-accent/.test(source), '不用品牌色')
   assert.ok(!/\.knit-usage\{[^}]*width:\s*\d/.test(source), '不是进度条')
@@ -2234,7 +2240,9 @@ function lifecyclePayload(overrides = {}) {
         rank: 2,
         inside: true,
       },
-      outsideDocs: [
+      // 宿主回的是**阅读顺序**（seq = 首次读）；面板要按「读得最多」重排 ——
+      // 另一个用例会刻意把这里的顺序反过来，验证排序真的发生在客户端。
+      outsideDocs: overrides.outsideDocs || [
         { rel: 'docs/old-plan.md', count: 3, lastReadAt: 1, seq: 10 },
         { rel: 'docs/test-case.md', count: 1, lastReadAt: 2, seq: 20 },
       ],
@@ -2250,8 +2258,28 @@ function lifecyclePayload(overrides = {}) {
   })
 }
 
-/** 分层视图里五行文档各自该显示的状态文字（顺序 = 屏幕顺序）。 */
-const LIFE_EXPECTED = ['已读 ×3', '修改后已重新读取', '读后已更新', '未读', '未读']
+/** 分层视图里五行文档各自该显示的状态文字（顺序 = 屏幕顺序）。
+ *  v0.18 起「已读」只说次数：圈点已经把「读过」说完了，文字里再写一遍是重复。 */
+const LIFE_EXPECTED = ['×3', '修改后已重新读取', '读后已更新', '未读', '未读']
+
+/** 同一屏里五行各自该显示的**状态点**（v0.18 UI 迭代起是 CSS 圆点，不是字符）。
+ *  `data-mark` 四态 = read / reread / updated / unread；它与上面的文字**同时**存在：
+ *  只给点读不出「读了几次」，只给文字看不出「哪几篇同档」。 */
+const GLYPH_EXPECTED = ['read', 'reread', 'updated', 'unread', 'unread']
+
+/** 预览面板里正在显示哪一篇（只看文件名那一格）。 */
+function openNameOf(nodes) {
+  const name = byExactClass(nodes, 'knit-preview-name')[0]
+  return name ? textOf(name) : ''
+}
+
+/** Coverage 的状态点。className 可能是 `knit-cov-dot` 也可能是 `knit-cov-dot on`。
+ *  ⚠️ 不能用 `byClass`：它是**子串**匹配，会把容器 `.knit-cov-dots` 一起算进来。 */
+function dotsOf(nodes) {
+  return nodes.filter((node) => node && node.props
+    && String(node.props.className || '').split(' ').includes('knit-cov-dot'))
+}
+
 
 /**
  * 挂上面板并**打开「使用情况」**（数据到位后再点，与真实用法一致）。
@@ -2296,21 +2324,43 @@ test('v0.17 生命周期：使用情况关着 —— 一个状态节点都不出
   assert.ok(!/未读|已读|读后已更新|修改后已重新读取/.test(rowText), '关着时行里只有标题与时间')
 })
 
-test('v0.17 生命周期：四种状态都落在文档行里，且只是一个弱化文字', async () => {
+test('v0.18 生命周期：四种状态都落在文档行里，且只是一枚 glyph + 一段极短文字', async () => {
   const { nodes } = await mountUsage(lifecyclePayload())
 
   const lives = byExactClass(nodes, 'knit-life')
   assert.deepEqual(lives.map(textOf), LIFE_EXPECTED, '四档事实状态按屏幕顺序逐行显示')
-  // 状态是**弱化辅助信息**：没有图标、没有 aria、没有颜色、没有百分比
+  // 状态文字是**弱化辅助信息**：没有图标、没有 aria、没有颜色、没有百分比
   for (const node of lives) {
-    assert.deepEqual(Object.keys(node.props).sort(), ['className'], '状态只是一个 span')
+    assert.deepEqual(Object.keys(node.props).sort(), ['className'], '状态文字只是一个 span')
   }
+  // v0.18：状态**点**与状态**文字**同时存在（规格 §10 / §13）
+  const glyphs = byExactClass(nodes, 'knit-glyph')
+  // v0.18 UI 迭代：点从 `○ ● △ ↻` 字符改成 **CSS 圆点**（6px，与 Coverage 同一套语言），
+  // 于是「哪一档」不再看字符、看 `data-mark`；只有「修改后已重新读取」仍留一个 ↻ 记号。
+  const marks = byExactClass(nodes, 'knit-glyph-mark')
+  assert.deepEqual(marks.map((node) => node.props['data-mark']), GLYPH_EXPECTED,
+    '每一行正好一枚状态点，四档各归其位')
+  assert.deepEqual(marks.map((node) => node.props['aria-hidden']), ['true', 'true', 'true', 'true', 'true'],
+    '状态点本身是装饰 —— 「哪一档」由 aria-label 说出来，不让读屏念两遍')
+  assert.deepEqual(glyphs.map(textOf), ['', '↻', '', '', ''],
+    'CSS 圆之后只有 reread 还带字符')
+  for (const node of glyphs) {
+    assert.equal(node.props.type, 'button', '状态点可点 → 必须是真 button')
+    assert.ok(node.props['aria-label'], '状态点必须有 aria-label')
+    assert.ok(node.props.title, '状态点必须有 tooltip')
+    assert.equal(node.props.style, undefined, '状态点不带内联颜色')
+  }
+  assert.deepEqual(glyphs.map((node) => node.props['aria-label']), [
+    '已读 ×3', '修改后已重新读取', '读后已更新', '未读', '未读',
+  ], 'tooltip / aria-label 把这一档状态解释清楚')
   const allText = textOf(byExactClass(nodes, 'knit-usage')[0])
   assert.ok(!allText.includes('%'), '不许有百分比')
   assert.ok(!/评分|置信|分数|质量|命中率|漏召回/.test(allText), '不许把事实写成评分')
+  // 圈点那一格原本是 Primary 的黑点：统计开着时让给状态点，一行只有一个标记
+  assert.equal(byExactClass(nodes, 'knit-dot').length, 0, 'usage 开着时不再画 Primary 黑点')
 })
 
-test('v0.17 生命周期：状态插在标题与时间之间，行结构不变', async () => {
+test('v0.18 生命周期：状态点在标题之前，行结构不变', async () => {
   const { nodes } = await mountUsage(lifecyclePayload())
 
   const rows = byExactClass(nodes, 'knit-row1')
@@ -2319,11 +2369,13 @@ test('v0.17 生命周期：状态插在标题与时间之间，行结构不变',
     assert.equal(kidsOf(row, 'knit-title').length, 1, '一行只有一个标题')
     assert.equal(kidsOf(row, 'knit-time').length, 1, '一行只有一个时间')
     assert.equal(kidsOf(row, 'knit-life').length, 1, '一行只有一个状态文字')
+    assert.equal(kidsOf(row, 'knit-glyph').length, 1, '一行只有一个状态点')
     const order = row.children.map((n) => String(n.props.className || ''))
     assert.ok(
-      order.indexOf('knit-title') < order.indexOf('knit-life')
+      order.indexOf('knit-glyph') < order.indexOf('knit-title')
+        && order.indexOf('knit-title') < order.indexOf('knit-life')
         && order.indexOf('knit-life') < order.indexOf('knit-time'),
-      `状态必须在标题与时间之间：${order.join(' / ')}`,
+      `状态点 / 标题 / 状态 / 时间的顺序不能乱：${order.join(' / ')}`,
     )
   }
   // 每行的前两个直接子节点仍然是「号 / 占位符 + 正文」（v0.15 起就钉住的形状）
@@ -2337,49 +2389,99 @@ test('v0.17 生命周期：状态插在标题与时间之间，行结构不变',
   }
 })
 
-test('v0.17 最近读取：如实说「最近读取：谁 · 多久前」，不说「正在阅读」', async () => {
-  const { nodes } = await mountUsage(lifecyclePayload())
+test('v0.18 最近读取：一行可点的事实（谁 · 多久前 ›），不说「正在阅读」', async () => {
+  const { nodes, render, calls } = await mountUsage(lifecyclePayload())
 
-  const line = byExactClass(nodes, 'knit-usage')[0]
-  const text = textOf(line)
-  assert.match(text, /最近读取：docs\/eval\.md · 12分钟前/, '最近一次成功 read 的文件要如实说出来')
+  const rows = byExactClass(nodes, 'knit-read-row')
+  assert.equal(rows.length, 1, '最近读取是**可点的一行**')
+  const text = textOf(rows[0])
+  assert.match(text, /docs\/eval\.md/, '最近一次**成功** read 的文件要如实说出来')
+  assert.match(text, /12分钟前/, '多久前也要如实说')
+  assert.equal(rows[0].props.type, 'button', '整行可点 → 真 button')
   assert.ok(!/正在阅读|当前正在|正在读/.test(text), 'Knit 证明不了「此刻正在读」')
-  // 与 v0.16 的既有事实行并存，没有多出统计指标
-  assert.match(text, /当前上下文 · Epoch 4/)
-  assert.match(text, /读了 7 次/)
+  // 与摘要行并存，没有多出统计指标
+  const allText = textOf(byExactClass(nodes, 'knit-usage')[0])
+  assert.match(allText, /Epoch 4/)
+  assert.match(allText, /7 次读取/)
+  // 点它 = 直接打开那一篇：**点的那一下不敲宿主**（走已有的 requestPreview，
+  // 而不是「先拉一次列表再打开」）。之后出现的请求是渲染 effect 自己的事。
+  const before = calls.length
+  rows[0].props.onClick()
+  assert.equal(calls.length, before, '点它不直接请求列表')
+  await harness.flush()
+  const opened = render()
+  assert.equal(openNameOf(opened), 'eval.md', '点最近读取就打开那一篇')
 })
 
-test('v0.17 上下文外读取：默认折叠，展开才逐篇列出', async () => {
+test('v0.18 上下文外读取：默认折叠，展开才逐篇列出（按读得最多的排）', async () => {
   const { nodes, render } = await mountUsage(lifecyclePayload())
 
   const buttons = byExactClass(nodes, 'knit-more-btn')
-  const gapBtn = buttons.find((node) => textOf(node) === '上下文外读取 · 2 篇')
+  const gapBtn = buttons.find((node) => textOf(node).includes('上下文外读取'))
   assert.ok(gapBtn, '包外读取要有一行可展开的统计')
+  // v0.18 UI 迭代（md §三十四）：菜单行是「label ── 数量 ›」三段，
+  // 数量单独成一个 `.knit-more-meta`（右对齐），不再挤在标题字符串里。
+  assert.equal(textOf(kidsOf(gapBtn, 'knit-more-label')[0]), '上下文外读取')
+  assert.equal(textOf(kidsOf(gapBtn, 'knit-more-meta')[0]), '2', '数量是事实，单独一列')
   assert.equal(gapBtn.props['aria-expanded'], 'false', '默认折叠')
   assert.equal(byExactClass(nodes, 'knit-gap-list').length, 0, '折叠时不渲染明细节点')
-  assert.equal(byExactClass(nodes, 'knit-gap-row').length, 0, '折叠时一行明细都不许有')
+  assert.equal(byExactClass(nodes, 'knit-out-row').length, 0, '折叠时一行明细都不许有')
 
   gapBtn.props.onClick()
   const open = render()
   const list = byExactClass(open, 'knit-gap-list')
   assert.equal(list.length, 1, '展开后出现明细区')
-  const rows = kidsOf(list[0], 'knit-gap-row')
+  const rows = byExactClass(open, 'knit-out-row')
   assert.equal(rows.length, 2, '两篇包外文档各一行')
-  assert.deepEqual(
-    rows.map((row) => kidsOf(row, 'knit-gap-rel')[0].props.title),
-    ['docs/old-plan.md', 'docs/test-case.md'],
-  )
-  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-life')[0])), ['已读 ×3', '已读'])
+  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-out-rel')[0])),
+    ['docs/old-plan.md', 'docs/test-case.md'], '读得多的（×3）排前面')
+  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-out-count')[0])), ['×3', '×1'])
+  // v0.18 UI 迭代（md §三十六）：行首补两位序号（位置，不是评分）。
+  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-out-num')[0])), ['01', '02'],
+    '行首序号从左到右两位补齐')
+  // 每一行都带生命周期，而且复用**同一份** v0.17 数据（不是第二套）。
+  // ⚠️ 状态用**词**（已读），不用短次数 —— 左边 `×N` 已经说了一遍，再来一遍就渲染成
+  //    `docs/old-plan.md ×3 ×3`（2026-10-05 用真实会话载荷渲染时抓到）。
+  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-life')[0])), ['已读', '已读'])
+  for (const row of rows) {
+    const shown = textOf(row).match(/×\d+/g) || []
+    assert.equal(new Set(shown).size, shown.length, `次数在同一行里不许说两遍：${textOf(row)}`)
+  }
+  for (const row of rows) assert.equal(row.props.type, 'button', '每一行都是可点对象 → 真 button')
   // 只陈述事实：不评价 Knit 推荐得对不对
-  const openText = textOf(kidsOf(list[0], 'knit-gap-row')[0]) + textOf(byExactClass(open, 'knit-usage')[0])
+  const openText = textOf(rows[0]) + textOf(byExactClass(open, 'knit-usage')[0])
   assert.ok(!/漏掉|推荐错|绕过|不认可|低质量|命中率/.test(openText), '包外读取不是「Knit 漏了」')
 })
 
-test('v0.17 Context Delta：只展示最近一次，符号只有 + / - / ↔', async () => {
+test('v0.18 上下文外读取：排序在客户端（count DESC），不是宿主给的阅读顺序', async () => {
+  // 宿主 `outsideDocsOf` 回的是**首次读**的顺序（seq）；面板要回答「哪几篇被反复读」
+  const payload = lifecyclePayload({
+    outsideDocs: [
+      { rel: 'docs/test-case.md', count: 1, lastReadAt: 2, seq: 20 },
+      { rel: 'docs/old-plan.md', count: 3, lastReadAt: 1, seq: 10 },
+    ],
+  })
+  const { nodes, render } = await mountUsage(payload)
+  byExactClass(nodes, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文外读取')).props.onClick()
+  const open = render()
+  assert.deepEqual(
+    byExactClass(open, 'knit-out-row').map((row) => textOf(kidsOf(row, 'knit-out-rel')[0])),
+    ['docs/old-plan.md', 'docs/test-case.md'],
+    '读得多的排前面 —— 即使宿主把它放在后面',
+  )
+})
+
+test('v0.18 Context Delta：只展示最近一次，符号只有 + / - / ↔', async () => {
   const { nodes, render } = await mountUsage(lifecyclePayload())
 
-  const deltaBtn = byExactClass(nodes, 'knit-more-btn').find((node) => textOf(node) === '上下文刚刚变化')
+  const deltaBtn = byExactClass(nodes, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文变化'))
   assert.ok(deltaBtn, '有变化就要有一行摘要')
+  // v0.18 UI 迭代（md §三十八）：菜单行固定写「上下文变化　最近一次 ›」——
+  // **按钮上不再写条数**（条数由展开后的行数与「还有 N 条」承担，见下面那条账目守卫）。
+  assert.equal(textOf(kidsOf(deltaBtn, 'knit-more-label')[0]), '上下文变化')
+  assert.equal(textOf(kidsOf(deltaBtn, 'knit-more-meta')[0]), '最近一次')
   assert.equal(deltaBtn.props['aria-expanded'], 'false', '默认折叠')
   const digest = byExactClass(nodes, 'knit-delta-row')
   assert.deepEqual(digest.map(textOf), [
@@ -2394,6 +2496,12 @@ test('v0.17 Context Delta：只展示最近一次，符号只有 + / - / ↔', a
   deltaBtn.props.onClick()
   const open = render()
   assert.deepEqual(byExactClass(open, 'knit-delta-head').map(textOf), ['进入', '离开', '换层'])
+  // 展开后折叠摘要必须**让位**给分组：三行摘要 + 「还有 N 条」再叠上明细 = 同一件事讲两遍
+  // （2026-10-05 用真实会话载荷渲染时抓到的重复）。
+  const openRows = byExactClass(open, 'knit-delta-row').map(textOf)
+  assert.deepEqual(openRows, ['+ docs/algo.md', '- README.md', '↔ docs/eval.md · 辅助 → 相关'])
+  assert.equal(new Set(openRows).size, openRows.length, '展开后同一行不许出现两次')
+  assert.ok(!openRows.some((row) => /还有/.test(row)), '展开后不再有折叠尾巴')
   const openText = textOf(byExactClass(open, 'knit-usage')[0])
   assert.ok(!/\d{2}:\d{2}/.test(openText), '不许出现时间线')
 })
@@ -2414,12 +2522,74 @@ test('v0.17 Context Delta：超过三条折叠成「还有 N 条」，任务变�
   assert.deepEqual(byExactClass(folded.nodes, 'knit-delta-row').map(textOf), [
     '+ a.md', '+ b.md', '+ c.md', '还有 1 条',
   ])
+  // 展开 = 折叠摘要让位给分组明细（否则第 4 条既在「还有 1 条」里、又单独列一遍）
+  byExactClass(folded.nodes, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文变化')).props.onClick()
+  const opened = folded.render()
+  assert.deepEqual(byExactClass(opened, 'knit-delta-row').map(textOf),
+    ['+ a.md', '+ b.md', '+ c.md', '+ d.md'], '展开后四条各出现一次，没有折叠尾巴')
 
   const task = await mountUsage(lifecyclePayload({
     delta: { appeared: [{ rel: 'docs/algo.md', tier: 'primary', rank: 1 }], disappeared: [], moved: [], taskChanged: true },
   }))
   const text = byExactClass(task.nodes, 'knit-delta-row').map(textOf)
   assert.deepEqual(text, ['+ docs/algo.md', '任务上下文已更新'], '任务变化也是一句事实，不是时间线')
+  // ⚠️ 展开后这一句**不许消失**：折叠摘要算上了它，只列 1 行就成了「说 2 条、列 1 行」
+  // 的自相矛盾（2026-10-05 用真实载荷渲染时抓到）。
+  const taskBtn = byExactClass(task.nodes, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文变化'))
+  assert.equal(taskBtn.props['aria-expanded'], 'false', '默认折叠')
+  taskBtn.props.onClick()
+  assert.deepEqual(byExactClass(task.render(), 'knit-delta-row').map(textOf),
+    ['+ docs/algo.md', '任务上下文已更新'], '展开后任务变化仍在，还是只出现一次')
+})
+
+test('v0.18 Context Delta：展开后的行 + 组内尾巴必须说清**全部**变化', async () => {
+  // 通用账目关系（不是针对某个夹具的定点断言）：展开后的明细必须把这次变化的**全部**条目
+  // 说清楚 —— 列出的行（不含尾巴）+ 每条尾巴里的数字 = 变化总数。
+  // ⚠️ 这正是一次真实载荷渲染抓到的 bug 的通用式：按钮说 N 条、展开后却少列一行
+  //    （`taskChanged` 那一句只出现在折叠摘要里，展开就没了）。
+  // ⚠️ v0.18 UI 迭代后按钮上**不再写条数**（菜单行固定是「上下文变化　最近一次」），
+  //    所以基准从**载荷自己**算出来，不再读按钮文字。
+  // 组内上限 `MAX_DELTA_GROUP = 5` 让这条账目多了一个分支，所以这里刻意给 8 条换层。
+  const moved = Array.from({ length: 8 }, (_, i) => ({
+    rel: `docs/m${i + 1}.md`,
+    from: { tier: 'related', rank: i + 2 },
+    to: { tier: 'supporting', rank: i + 1 },
+  }))
+  const { nodes, render } = await mountUsage(lifecyclePayload({
+    delta: {
+      appeared: [
+        { rel: 'docs/algo.md', tier: 'primary', rank: 1 },
+        { rel: 'docs/new.md', tier: 'related', rank: 9 },
+      ],
+      disappeared: [],
+      moved,
+      taskChanged: true,
+    },
+  }))
+  const deltaBtn = byExactClass(nodes, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文变化'))
+  assert.ok(!/\d/.test(textOf(deltaBtn)), '菜单行上不许再出现条数（数字）')
+  // 2 篇进入 + 8 条换层 + 1 句任务变化 = 11
+  const total = 2 + moved.length + 1
+
+  deltaBtn.props.onClick()
+  const opened = render()
+  const rows = byExactClass(opened, 'knit-delta-row').map(textOf)
+  const tailOf = (row) => (row.match(/^还有 (\d+) 条$/) || [])[1]
+  const tails = rows.map(tailOf).filter(Boolean).map(Number)
+  const listed = rows.filter((row) => !tailOf(row))
+  assert.deepEqual(byExactClass(opened, 'knit-delta-head').map(textOf), ['进入', '换层'],
+    '这份夹具没有「离开」，所以不画空的「离开」标题')
+  assert.deepEqual(tails, [3], '换层 8 条、组内只列 5 条 ⇒ 尾巴写「还有 3 条」')
+  assert.ok(listed.some((row) => /任务上下文已更新/.test(row)),
+    '任务变化没有分组标题可挂，但必须真的列出来')
+  assert.equal(
+    listed.length + tails.reduce((sum, n) => sum + n, 0),
+    total,
+    `列出的行 + 尾巴里的数字必须等于变化总数（实际列出 ${JSON.stringify(listed)}）`,
+  )
 })
 
 test('v0.17 样式：状态与折叠区只用语义 token —— 没有卡片 / 固定色 / 边框', async () => {
@@ -2465,22 +2635,352 @@ test('v0.17 生命周期：英文环境下状态与折叠文案都是英文', as
 
   assert.deepEqual(
     byExactClass(nodes, 'knit-life').map(textOf),
+    ['×3', 'Re-read after update', 'Updated after read', 'Unread', 'Unread'],
+    '四档状态文字在英文下也是英文',
+  )
+  assert.deepEqual(
+    byExactClass(nodes, 'knit-glyph').map((node) => node.props['aria-label']),
     ['Read ×3', 'Re-read after update', 'Updated after read', 'Unread', 'Unread'],
-    '四档状态在英文下也是英文',
+    '状态点的 tooltip 也要翻译',
   )
-  assert.ok(
-    byExactClass(nodes, 'knit-more-btn').some((node) => textOf(node) === 'Read outside the pack · 2'),
-    '包外明细的按钮文案也要翻译',
-  )
-  const deltaBtn = byExactClass(nodes, 'knit-more-btn').find((node) => textOf(node) === 'Context just changed')
+  // v0.18 UI 迭代：菜单行是「label ── 数量 ›」三段，英文下 label 也必须是英文。
+  const gapBtn = byExactClass(nodes, 'knit-more-btn')
+    .find((node) => textOf(kidsOf(node, 'knit-more-label')[0]).includes('Reads outside context'))
+  assert.ok(gapBtn, '包外明细的按钮文案也要翻译')
+  assert.equal(textOf(kidsOf(gapBtn, 'knit-more-meta')[0]), '2', '数量与文案分开两段')
+  const deltaBtn = byExactClass(nodes, 'knit-more-btn').find((node) => textOf(node).includes('Context changes'))
   assert.ok(deltaBtn, '变化摘要的按钮文案也要翻译')
   deltaBtn.props.onClick()
   const open = render()
   assert.deepEqual(byExactClass(open, 'knit-delta-head').map(textOf), ['Entered', 'Left', 'Moved tier'])
 
   const allText = byExactClass(open, 'knit-usage').map(textOf).join(' ')
-  assert.match(allText, /Recently read: docs\/eval\.md · 12 min ago/)
+  assert.match(allText, /docs\/eval\.md/)
+  assert.match(allText, /12 min ago/)
   assert.ok(!/[\u4e00-\u9fff]/.test(allText), '英文环境里一个汉字都不许有')
+})
+
+/* ── v0.18：Context Usage Lens（2026-10-05 规格 §46–§49 的守卫）─────────
+   这一节的判据来自规格本身：信息架构（§47）、动画（§48）、回归保护（§49）。
+   ⚠️ 全部只读现有事实：不新增采集、不新增持久化、不新增第二个滚动容器。 */
+
+test('v0.18 纯函数：Coverage 派生、包外排序、Delta 分组', () => {
+  const { coverageOf, groupOutsideDocs, groupDelta, lifeStatusOf, LIFE_GLYPH } =
+    loadClientModule().exports.__test
+
+  // Coverage 的分母是**这一层真实有几篇**，不是 Context Pack 的 matched/total
+  const cov = coverageOf(
+    { primary: [{ rel: 'a.md' }], supporting: ['b.md', 'c.md'], related: [] },
+    { 'a.md': { status: 'read', count: 3 } },
+  )
+  assert.deepEqual(cov.primary, { total: 1, read: 1, rels: [{ rel: 'a.md', read: true }] })
+  assert.deepEqual(cov.supporting, {
+    total: 2,
+    read: 0,
+    rels: [{ rel: 'b.md', read: false }, { rel: 'c.md', read: false }],
+  })
+  assert.deepEqual(cov.related, { total: 0, read: 0, rels: [] }, '没有那一层就是 0 / 0，不编')
+  assert.equal(lifeStatusOf(null, 'a.md'), 'unread', '没有记录就是未读')
+  assert.equal(lifeStatusOf({ 'a.md': { status: '天外飞仙' } }, 'a.md'), 'unread', '认不出的状态退回未读')
+  assert.deepEqual(Object.keys(LIFE_GLYPH).sort(),
+    ['read', 'reread_after_update', 'unread', 'updated_after_read'])
+
+  // 包外：读得最多的在前；同计数按最后读的时间（载荷里没有 lastRead.seq）
+  assert.deepEqual(groupOutsideDocs([
+    { rel: 'x.md', count: 1, lastReadAt: 100, seq: 1 },
+    { rel: 'y.md', count: 3, lastReadAt: 50, seq: 2 },
+    { rel: 'z.md', count: 1, lastReadAt: 200, seq: 3 },
+  ]).map((row) => row.rel), ['y.md', 'z.md', 'x.md'])
+  assert.deepEqual(groupOutsideDocs(null), [], '没有数据就是空列表')
+
+  // Delta：只拆「进 / 出 / 换层」，两种载荷（字符串 / 对象）都认
+  const grouped = groupDelta({ appeared: ['a.md'], disappeared: [{ rel: 'b.md' }], moved: [] })
+  assert.deepEqual(grouped.enter, [{ rel: 'a.md' }])
+  assert.deepEqual(grouped.leave, [{ rel: 'b.md' }])
+  assert.deepEqual(grouped.move, [])
+  assert.deepEqual(groupDelta(null), { enter: [], leave: [], move: [] })
+})
+
+test('v0.18 Coverage：三层各自的「已读 ÷ 本层总数」，点它定位到那一层', async () => {
+  const { nodes, render } = await mountUsage(lifecyclePayload())
+
+  const cols = byExactClass(nodes, 'knit-cov-col')
+  assert.deepEqual(cols.map((node) => textOf(kidsOf(node, 'knit-cov-name')[0])), ['主要', '辅助', '相关'])
+  // 文本与视觉**同时**存在：只给点读不出「读了几篇」；没有百分比、没有进度条
+  assert.deepEqual(cols.map((node) => textOf(kidsOf(node, 'knit-cov-num')[0])), ['1 / 1', '2 / 2', '0 / 1'])
+  // v0.18 UI 迭代（md §十五 / §十六）：状态点改成**真 CSS 圆**（6px，与文档行同一套语言），
+  // 于是断言从「`○ ●` 字符」改成「有几个点是 on（＝这一层读过）」。字符版已不存在。
+  const dotStates = cols.map((node) => kidsOf(node, 'knit-cov-dots')[0].children
+    .filter((dot) => dot && dot.props)
+    .map((dot) => String(dot.props.className).includes(' on')))
+  assert.deepEqual(dotStates, [[true], [true, true], [false]],
+    '实心 = 这一篇读过、空心 = 没读过')
+  assert.deepEqual(dotStates.map((flags) => flags.length), [1, 2, 1], '每层圆点数 = 本层篇数')
+  assert.deepEqual(dotStates.map((flags) => flags.filter(Boolean).length), [1, 2, 0], '……其中实心几个')
+  assert.deepEqual(cols.map((node) => node.props['aria-label']),
+    ['主要上下文：1 / 1 篇已读', '辅助上下文：2 / 2 篇已读', '相关上下文：0 / 1 篇已读'],
+    '读屏听到完整一句（md §六十三），但屏幕上不显示这句话')
+  assert.ok(!textOf(byExactClass(nodes, 'knit-usage')[0]).includes('篇已读'),
+    '无障碍文案不许出现在视觉里')
+  for (const node of cols) assert.equal(node.props.type, 'button', '可点就必须是真 button')
+
+  // 点「辅助」→ 只点亮「辅助」那一层（替身里没有 DOM，定位落在 data-knit-tier 上）
+  cols[1].props.onClick()
+  const flashed = byClass(render(), 'knit-tier')
+    .filter((node) => String(node.props.className).includes('flash'))
+  assert.equal(flashed.length, 1, '点一层只点亮那一层')
+  assert.equal(flashed[0].props['data-knit-tier'], 'supporting', '点的哪一层就亮哪一层')
+
+  // 高亮只是一下提示，自己会收掉（不靠 hover、不靠点别处）
+  harness.tick()
+  assert.equal(
+    byClass(render(), 'knit-tier').filter((n) => String(n.props.className).includes('flash')).length,
+    0,
+  )
+})
+
+test('v0.18 Coverage：一份包可以没有 Primary —— 不画「0 / 0」的假层', async () => {
+  const base = lifecyclePayload()
+  const { nodes } = await mountUsage({ ...base, context: { ...base.context, primary: [] } })
+  assert.deepEqual(
+    byExactClass(nodes, 'knit-cov-col').map((node) => textOf(kidsOf(node, 'knit-cov-name')[0])),
+    ['辅助', '相关'],
+    'Primary 缺席就整列不显示，而不是画一个 0 / 0 的假层',
+  )
+})
+
+test('v0.18 Lens 展开 / 收起：收起只收起细节，统计照样开着', async () => {
+  const { nodes, render } = await mountUsage(lifecyclePayload())
+
+  const head = byExactClass(nodes, 'knit-lens-head')
+  assert.equal(head.length, 1, 'Lens 有一行可点的标题')
+  assert.equal(head[0].props.type, 'button', '标题行是真 button')
+  assert.equal(head[0].props['aria-expanded'], 'true', '默认展开')
+  assert.equal(byExactClass(nodes, 'knit-lens-body').length, 1)
+
+  head[0].props.onClick()
+  const closed = render()
+  assert.equal(byExactClass(closed, 'knit-lens-head')[0].props['aria-expanded'], 'false')
+  assert.equal(byExactClass(closed, 'knit-lens-body').length, 0, '收起后不渲染细节')
+  const text = textOf(byExactClass(closed, 'knit-usage')[0])
+  assert.match(text, /使用情况/, '标题还在')
+  assert.match(text, /Epoch 4/, 'Epoch 还在')
+  assert.match(text, /7 次读取/, '摘要行还在 —— 收起的是细节，不是统计')
+  assert.equal(byExactClass(closed, 'knit-cov-col').length, 0, '细节收起来了')
+})
+
+test('v0.18 空使用情况：不画「0%」大卡，只报事实', async () => {
+  const payload = lifecyclePayload()
+  const empty = {
+    ...payload,
+    usage: {
+      at: 1,
+      epochId: 1,
+      stats: {
+        reads: 0,
+        distinct: 0,
+        outside: 0,
+        outsideReads: [],
+        firstReadTier: 'outside',
+        firstReadRel: null,
+        firstReadAt: null,
+        primaryRel: null,
+        primaryFollowThrough: false,
+        byTier: { primary: { total: 1, read: 0 }, supporting: { total: 2, read: 0 }, related: { total: 1, read: 0 } },
+        supportingCoverage: 0,
+        churn: { snapshots: 0, deltas: 0, retained: 0, appeared: 0, disappeared: 0, moved: 0, taskChanged: 0 },
+      },
+      delta: null,
+      latestDelta: null,
+      recentRead: null,
+      outsideDocs: [],
+      lifecycle: {},
+    },
+  }
+  const { nodes } = await mountUsage(empty)
+  const text = textOf(byExactClass(nodes, 'knit-usage')[0])
+  assert.match(text, /0 次读取/, '零就写零')
+  assert.ok(!text.includes('%'), '不许有百分比')
+  assert.match(text, /暂无记录/, '没有读取记录 = 一句「暂无记录」，不是一块空状态卡')
+  assert.deepEqual(byExactClass(nodes, 'knit-cov-num').map(textOf), ['0 / 1', '0 / 2', '0 / 1'])
+  assert.equal(byExactClass(nodes, 'knit-more-btn').length, 0, '没有包外、没有变化：一个折叠区都不出现')
+})
+
+test('v0.18 小高度面板：矮下来不铺细节，滚动仍然只交给列表', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  // 规格 §31 / §46-E：面板矮时降级成 Summary + Coverage + 最近读取，变化摘要不铺开，
+  // Outside / Delta 收成标题（点得开）。
+  // ⚠️ 测试替身里拿不到 DOM ref，量不到高度 —— 这一条只能守**代码形状**，
+  // 真机手感由 §46-E（面板拉到很矮）人眼确认。
+  const { COMPACT_PANEL_PX } = loadClientModule().exports.__test
+  assert.equal(COMPACT_PANEL_PX, 420, '降级阈值是 420px')
+  const compactAt = source.indexOf('const compact = panelH > 0 && panelH < COMPACT_PANEL_PX')
+  const linesAt = source.indexOf('const previewLines = compact ? [] :')
+  assert.ok(compactAt > 0, '矮面板必须有明确的降级判据')
+  assert.ok(linesAt > compactAt, 'compact 必须先算出来再用（TDZ + 先判后用）')
+  // 量不到高度（0）时按「不矮」处理：首帧与替身里都照常展开，不是默认收起
+  assert.match(source, /const COMPACT_PANEL_PX = 420/)
+})
+
+test('v0.18 点状态点 / 包外行：打开那一篇，不重新请求列表', async () => {
+  const { nodes, render, calls } = await mountUsage(lifecyclePayload())
+
+  // 状态点：点它 = 打开 / 选中这一篇（点的那一下不敲宿主）
+  const before = calls.length
+  byExactClass(nodes, 'knit-glyph')[0].props.onClick()
+  assert.equal(calls.length, before, '点状态点不直接请求列表')
+  await harness.flush()
+  const opened = render()
+  assert.equal(openNameOf(opened), 'algo.md', '点哪一篇的状态点就打开哪一篇')
+  // **已经打开则保持原预览**：不重开、不重拉
+  byExactClass(opened, 'knit-glyph')[0].props.onClick()
+  await harness.flush()
+  const again = render()
+  assert.equal(openNameOf(again), 'algo.md')
+  assert.equal(byExactClass(again, 'knit-preview').length, 1, '预览没有被关掉也没有重开')
+
+  // 包外行：展开只是显示（不敲宿主），点那一行同样只是换预览
+  byExactClass(again, 'knit-more-btn')
+    .find((node) => textOf(node).includes('上下文外读取')).props.onClick()
+  const expanded = render()
+  const beforeRow = calls.length
+  byExactClass(expanded, 'knit-out-row')[0].props.onClick()
+  assert.equal(calls.length, beforeRow, '点包外行不直接请求列表')
+  await harness.flush()
+  const outside = render()
+  assert.equal(openNameOf(outside), 'old-plan.md', '点包外行就打开那一篇')
+})
+
+test('v0.18 动效：数据没变，轮询不许让 Lens 重播任何动画', async () => {
+  const { nodes, render } = await mountUsage(lifecyclePayload())
+  const dots = (list) => dotsOf(list).map((node) => String(node.props.className))
+  const before = dots(nodes)
+  // 只是轮询 / 计时器走了一轮，数据一个字没变
+  harness.tick()
+  await harness.flush()
+  harness.tick()
+  await harness.flush()
+  assert.deepEqual(dots(render()), before, '同样的数据 → 同样的 class → 补间不会被重播')
+})
+
+test('v0.18 样式：Lens 只用语义 token、自己不滚动、减弱动效时不动', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  // v0.18 UI 迭代（md §十五 / §二十九）：状态点**只是一枚中性圆点** ——
+  // 真圆、空心（未读 border，已读 background）、只有中性 token。
+  // ⚠️ Coverage 的圆点与文档行的 glyph 圆点必须是**同一套状态语言**：同一个直径、
+  //    同一对 token。下面这条守卫就是防两处各画各的（人眼很难发现 1px 的差异）。
+  //    直径不写死在守卫里，而是**比对两处**，再钉住当前定的那个值。
+  const covDotSize = source.match(/\.knit-cov-dot\{[^}]*width:(\d+)px;height:(\d+)px;border-radius:50%/)
+  const glyphMarkSize = source.match(/\.knit-glyph-mark\{[^}]*width:(\d+)px;height:(\d+)px;border-radius:50%/)
+  assert.ok(covDotSize, 'Coverage 的状态点必须是真圆（有宽高 + 50% 圆角）')
+  assert.ok(glyphMarkSize, '文档行的状态点必须是真圆（有宽高 + 50% 圆角）')
+  assert.deepEqual([glyphMarkSize[1], glyphMarkSize[2]], [covDotSize[1], covDotSize[2]],
+    '两处状态点必须是同一个直径（两处各画各的时候，1px 的差异人眼很难发现）')
+  assert.equal(covDotSize[1], '6', '圆点直径是 6px（2026-10-06 用户定：9px 改成 6px）')
+  assert.match(source, /\.knit-cov-dot\{[^}]*border:1px solid var\(--dsw-alias-label-caption/)
+  assert.match(source, /\.knit-cov-dot\.on\{[^}]*background:var\(--dsw-alias-label-caption/)
+  assert.match(source, /\.knit-glyph-mark\{[^}]*border:1px solid var\(--dsw-alias-label-caption/)
+  assert.match(source, /\[data-mark="read"\]\{[^}]*background:var\(--dsw-alias-label-caption/,
+    '「已读」在文档行里也是实心')
+  assert.ok(!/\.knit-cov-dot\{[^}]*opacity/.test(source), '不再靠透明度表达状态')
+  assert.ok(!/\.knit-cov-dot\{[^}]*transform/.test(source), '不再靠缩放表达状态')
+  assert.ok(!/#(?:0f9d58|34a853|ea4335|db4437|f9ab00|fbbc04|4285f4|1a73e8)/i.test(source),
+    '四态不许用绿 / 红 / 黄 / 蓝强调（读没读过不是好 / 坏）')
+  assert.ok(!/\.knit-cov[^{]*\{[^}]*color:\s*#[0-9a-fA-F]{3,6}/.test(source), '不许写死颜色')
+  assert.ok(!/\.knit-out-row[^{]*\{[^}]*color:\s*#[0-9a-fA-F]{3,6}/.test(source), '不许写死颜色')
+  assert.match(source, /\.knit-glyph\{[^}]*color:var\(--dsw-alias-label-caption/, '状态点也是中性灰')
+  assert.ok(!/\.knit-glyph\{[^}]*background:(?!none)/.test(source), '状态点不画底色 / 不加徽章')
+  // **不新增第二个滚动容器**（窄侧栏里滚轮套滚轮很难用）
+  assert.ok(!/\.knit-usage[^{]*\{[^}]*overflow-y:\s*(auto|scroll)/.test(source), 'Lens 自己不滚动')
+  assert.ok(!/\.knit-lens[^{]*\{[^}]*overflow-y:\s*(auto|scroll)/.test(source), '细节区也不自己滚动')
+  // 展开 / 收起走条件渲染，不用会自己重播的 animation
+  assert.ok(!/\.knit-lens-body\{[^}]*animation/.test(source))
+  // 「减弱动态效果」：状态点与高亮都不动（终态照常出现）
+  assert.match(source, /prefers-reduced-motion: reduce\)\{[\s\S]*?\.knit-cov-dot\{transition:none/)
+  assert.match(source, /prefers-reduced-motion: reduce\)\{[\s\S]*?\.knit-tier\.flash\{transition:none/)
+})
+
+test('v0.18 定位手感：高亮时长与 CSS 同步；对比控件描边用官方分割线那一档', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  // ① 点 Coverage 层名之后的高亮：JS 常量与 CSS transition **必须是同一个数**。
+  //    两者不同步时不会报任何错，只会看见「高亮已经取消、背景还在慢慢褪」的错帧。
+  const flash = source.match(/const FLASH_MS = (\d+)/)
+  assert.ok(flash, 'FLASH_MS 必须还在（高亮时长是它的唯一出处）')
+  assert.equal(flash[1], '1200', '高亮 1200ms（2026-10-06 用户定：原 650ms 改成 1200ms）')
+  const tierTransition = source.match(/\.knit-tier\{transition:background ([\d.]+)s/)
+  assert.ok(tierTransition, '高亮背景必须有 transition（否则是硬闪一下）')
+  assert.equal(Math.round(Number(tierTransition[1]) * 1000), Number(flash[1]),
+    'CSS transition 的秒数必须等于 FLASH_MS —— 改一个忘另一个只在真机上看得见')
+  // ② 「相关 / 最新」与搜索框的描边：色用 --dsw-alias-border-l3、粗细用 0.5px，
+  //    即 DSH 主区「对话」页签下面那条横线的同一档（官方 .wSkVaW_header 的
+  //    border-bottom: .5px solid rgba(0,0,0,.12)，浅色下就是 border-l3）。
+  //    退回 l4 会重一档（像两个输入框把内容框住）；粗细写回 1px 则高分屏上比官方粗一倍
+  //    —— 色对上了粗细没对上，只看得见「比旁边那条横重」，看不出是哪里不对。
+  //    两处都是 2026-10-06 用户看真机后提的。
+  assert.match(source, /\.knit-seg\{[^}]*border:0\.5px solid var\(--dsw-alias-border-l3/,
+    '「相关 / 最新」的外框用 border-l3、0.5px')
+  assert.match(source,
+    /\.knit-seg-btn \+ \.knit-seg-btn\{border-left:0\.5px solid var\(--dsw-alias-border-l3/,
+    '「相关 / 最新」之间的分隔线也是同一档同粗（色或粗细差一点就会看得出来）')
+  assert.match(source, /\.knit-filter\{[^}]*border:0\.5px solid var\(--dsw-alias-border-l3/,
+    '搜索框描边用 border-l3、0.5px')
+  assert.ok(!/\.knit-(?:seg|filter)\{[^}]*border[^;]*--dsw-alias-border-l4/.test(source),
+    '这两个控件不许再退回 l4')
+  assert.ok(!/\.knit-seg(-btn \+ \.knit-seg-btn)?\{[^}]*border[^;]*:1px solid var\(--dsw-alias-border-l3/
+    .test(source), '这三个描边要么一起 0.5px，要么一起改 —— 不许只把其中一处写回 1px')
+})
+
+test('v0.18 键盘与 aria：Lens 里每个可点元素都是真 button，且各自都有焦点环', async () => {
+  // 规格 §59 第 13 步（keyboard & aria）。三件事各自会静默坏掉：
+  // ① 写成 `div` + `onClick` ⇒ 键盘 Tab 到不了（鼠标能用、键盘不能用，人眼审最容易漏）；
+  // ② 没有 `type:'button'` ⇒ 拿到隐式 submit 语义；
+  // ③ 没有 `:focus-visible` ⇒ 能 Tab 到但看不见焦点在哪（这一版新增的六处都得有）。
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  const clickable = ['knit-lens-head', 'knit-cov-col', 'knit-read-row', 'knit-out-row', 'knit-more-btn', 'knit-glyph']
+  for (const cls of clickable) {
+    const at = source.indexOf(`className: '${cls}'`)
+    assert.ok(at > 0, `${cls} 没渲染出来（改过类名？）`)
+    // 紧邻它前面的那一次 h(...) 必须是 button —— 不是 div、不是 span
+    const before = source.slice(Math.max(0, at - 160), at)
+    const call = before.slice(before.lastIndexOf("h('"))
+    assert.ok(call.startsWith("h('button'"), `${cls} 不是真 button（键盘到不了）：${JSON.stringify(call.slice(0, 24))}`)
+    assert.match(source.slice(at, at + 90), /type: 'button'/, `${cls} 缺少 type:'button'`)
+    assert.match(
+      source,
+      new RegExp(`\\.${cls}:focus-visible\\{[^}]*outline:`),
+      `${cls} 能 Tab 到却没有焦点环（看不见焦点在哪）`,
+    )
+  }
+  // 三个折叠开关必须把展开态报出来（读屏靠 aria-expanded，不靠 › / ↑ 这两个字形）
+  for (const flag of ['lensOpen', 'gapOpen', 'deltaOpen']) {
+    assert.match(
+      source,
+      new RegExp(`'aria-expanded': ${flag} \\? 'true' : 'false'`),
+      `${flag} 的折叠开关没有报 aria-expanded`,
+    )
+  }
+  // 行内 glyph 有 title 就也要有 aria-label（只有 title 时读屏不一定念得出来）
+  assert.match(source, /className: 'knit-glyph'[\s\S]{0,220}?'aria-label': glyph\.title/)
 })
 
 /* ── v0.17：列表的进出动效（2026-10-03 用户拍板的那套手感）──────────────

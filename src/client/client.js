@@ -47,7 +47,13 @@ window.__ModuleLoader__.load({
 
       'kind.all': '全部',
       'kind.doc': '文档',
-      'kind.media': '图片与视频',
+      // ⚠️ 2026-10-06 用户定：类型页签与「全部」分区标题都用**「媒体」**，不用「图片与视频」
+      //    （原话：「我想修改成 媒体 或者 多媒体，你觉得呢？」→ 随后确认「媒体」）。
+      //    理由：① 这一档的计数本来就是「{n} 个媒体」（count.media），页签叫「图片与视频」
+      //    是唯一的例外；② 「多媒体」在中文 IT 语境里带 AV / 课件味，还暗示音频，而这一档
+      //    只扫图片与视频（宿主按扩展名放行，没有音频）；③ 「媒体」省 3 个字，窄侧栏少一次
+      //    省略号。**含义由空态说明**（list.emptyMedia 仍写「还没有图片或视频」）。
+      'kind.media': '媒体',
       'kind.title': '切换要列出的产物类型',
 
       'filter.placeholder': '过滤文档',
@@ -56,24 +62,42 @@ window.__ModuleLoader__.load({
       'usage.toggle': '使用情况',
       'usage.toggleTitle': '打开后开始统计这个会话：先看的那篇有没有被读、有多少次读落在包外、上下文换过几回。只记事实，不给分数。',
       'usage.none': '还没有记录',
-      'usage.epoch': '当前上下文 · Epoch {n}',
-      'usage.primaryRead': '先看的「{rel}」已读',
-      'usage.primaryUnread': '先看的「{rel}」还没读',
-      'usage.supporting': '辅助 {read}/{total}',
-      'usage.reads': '读了 {n} 次',
-      'usage.outside': '包外 {n} 篇',
-      'usage.changes': '上下文换过 {n} 次',
       'usage.note': '只统计本会话 · 数据在内核内存里，重启 DSH 就没了',
+
+      // ── v0.18 Context Usage Lens ────────────────────────────────
+      // 这一层只回答一件事：「Knit 交出去的那份 Context，被怎样消费了」。
+      // ⚠️ 它**不是** Dashboard：没有 KPI 大数字、没有百分比、没有评分、没有图表、
+      //    没有进度条、没有「使用率 / 健康度 / 认可度」。字号一律弱于文档标题 ——
+      //    层级只靠空间与灰阶（AGENTS.md §6.3 / §7.1）。
+      // ⚠️ 每一条都是**事实陈述**，不是评价：不许写成「Agent 没看这篇 / 用错了 /
+      //    Knit 漏了 / 推荐得不准」。「最近读取」也不是「正在阅读」—— 证明不了。
+      'lens.title': '使用情况',
+      'lens.expand': '展开使用情况',
+      'lens.collapse': '收起使用情况',
+      'lens.epoch': 'Epoch {n}',
+      'lens.reads': '{n} 次读取',
+      'lens.outside': '{n} 篇包外',
+      'lens.changes': '上下文变化 {n} 次',
+      'lens.currentContext': '当前上下文',
+      'lens.recentRead': '最近读取',
+      'lens.recentNone': '暂无记录',
+      'lens.outsideDocs': '上下文外读取',
+      'lens.more': '还有 {n} 篇',
+      'lens.openDoc': '打开 {rel}',
+      'lens.delta': '上下文变化',
+      'lens.locate': '定位到{tier}上下文',
+      // 读屏专用（md §六十三）：**屏幕上不出现这句话**，视觉给的是「层名 + n / m + 圆点」。
+      'lens.coverageAria': '{tier}上下文：{read} / {total} 篇已读',
+      // 上下文变化那一行的右侧说明（md §三十八「上下文变化　最近一次 ›」）：
+      // 变化永远只说**最近一次**，所以这里不写条数（条数由展开后的行数承担）。
+      'lens.deltaLatest': '最近一次',
 
       // ── v0.17 文档生命周期（Document Lifecycle）──────────────────
       // ⚠️ 四态全是**事实**，不是评价：「读后已更新」只说「文件在最后一次成功读取之后
       //    变过」，绝不许写成「Agent 还不知道最新版本」「Agent 用了旧版本」这类推断。
-      // ⚠️ 「最近读取」不是「正在阅读」—— Knit 证明不了 Agent 此刻是否还在读它。
-      // ⚠️ 「上下文外读取」只陈述「这篇不在当前包内、但被成功读过」，
-      //    不许写成「Knit 漏了 / 推荐错了 / 命中率低」。
-      'usage.recentRead': '最近读取：{rel} · {time}',
-      'usage.outsideDocs': '上下文外读取 · {n} 篇',
-      'usage.deltaTitle': '上下文刚刚变化',
+      // ⚠️ 「上下文外读取」只陈述「这篇不在当前包内、但被成功读过」。
+      // ⚠️ `readCountShort` 是给行尾用的：行首的 glyph 已经说了「读过了」，
+      //    行尾只需要补一个「几次」—— 再说一遍「已读」是重复信息。
       'usage.deltaEnter': '进入',
       'usage.deltaLeave': '离开',
       'usage.deltaMove': '换层',
@@ -82,6 +106,7 @@ window.__ModuleLoader__.load({
       'lifecycle.unread': '未读',
       'lifecycle.read': '已读',
       'lifecycle.readCount': '已读 ×{n}',
+      'lifecycle.readCountShort': '×{n}',
       'lifecycle.updatedAfterRead': '读后已更新',
       'lifecycle.rereadAfterUpdate': '修改后已重新读取',
       'tierName.primary': '主要',
@@ -216,7 +241,10 @@ window.__ModuleLoader__.load({
 
       'kind.all': 'All',
       'kind.doc': 'Docs',
-      'kind.media': 'Images & video',
+      // 2026-10-06: user picked 「媒体」 for the tab + the "All" section title, so English
+      // follows the same word as count.media ("{n} media"): the tab says Media, and the
+      // explicit "images and videos" wording stays in the empty state / README prose.
+      'kind.media': 'Media',
       'kind.title': 'Switch which artifacts are listed',
 
       'filter.placeholder': 'Filter docs',
@@ -225,24 +253,37 @@ window.__ModuleLoader__.load({
       'usage.toggle': 'Usage',
       'usage.toggleTitle': 'Measure this session: whether the primary doc was read, how many reads fell outside the pack, how often the context changed. Facts only — no score.',
       'usage.none': 'Nothing recorded yet',
-      'usage.epoch': 'Context · Epoch {n}',
-      'usage.primaryRead': 'primary read ({rel})',
-      'usage.primaryUnread': 'primary not read yet ({rel})',
-      'usage.supporting': 'supporting {read}/{total}',
-      'usage.reads': '{n} reads',
-      'usage.outside': '{n} outside the pack',
-      'usage.changes': 'context changed {n}×',
       'usage.note': 'This session only · kept in kernel memory, gone after a DSH restart',
+
+      // ── v0.18 Context Usage Lens ───────────────────────────────
+      // Answers exactly one question: how was the context Knit handed over actually
+      // consumed. ⚠️ Not a dashboard: no KPI figures, no percentages, no scores, no
+      // charts, no progress bars, no "usage rate / health / confidence". Every line is
+      // a fact, never a judgement — and "recent read" is not "currently reading".
+      'lens.title': 'Usage',
+      'lens.expand': 'Expand usage',
+      'lens.collapse': 'Collapse usage',
+      'lens.epoch': 'Epoch {n}',
+      'lens.reads': '{n} reads',
+      'lens.outside': '{n} outside the pack',
+      'lens.changes': 'context changed {n}×',
+      'lens.currentContext': 'Current context',
+      'lens.recentRead': 'Recent read',
+      'lens.recentNone': 'Nothing yet',
+      'lens.outsideDocs': 'Reads outside context',
+      'lens.more': '{n} more',
+      'lens.openDoc': 'Open {rel}',
+      'lens.delta': 'Context changes',
+      'lens.locate': 'Locate {tier} context',
+      'lens.coverageAria': '{tier} context: {read} / {total} read',
+      'lens.deltaLatest': 'Latest',
 
       // ── v0.17 document lifecycle ───────────────────────────────
       // ⚠️ All four states are facts, never judgements: "Updated after read" only says the
       //    file changed after the last successful read. Never "the agent has not seen the
       //    latest version" or "the agent used a stale copy" — that would be inference.
-      // ⚠️ "Recently read" is not "currently reading": Knit cannot prove the agent is
-      //    still reading it. An out-of-pack file is shown as-is, with no explanation.
-      'usage.recentRead': 'Recently read: {rel} · {time}',
-      'usage.outsideDocs': 'Read outside the pack · {n}',
-      'usage.deltaTitle': 'Context just changed',
+      // ⚠️ `readCountShort` is for the row tail: the leading glyph already says it was
+      //    read, so the tail only adds the count — repeating "read" would be redundant.
       'usage.deltaEnter': 'Entered',
       'usage.deltaLeave': 'Left',
       'usage.deltaMove': 'Moved tier',
@@ -251,6 +292,7 @@ window.__ModuleLoader__.load({
       'lifecycle.unread': 'Unread',
       'lifecycle.read': 'Read',
       'lifecycle.readCount': 'Read ×{n}',
+      'lifecycle.readCountShort': '×{n}',
       'lifecycle.updatedAfterRead': 'Updated after read',
       'lifecycle.rereadAfterUpdate': 'Re-read after update',
       'tierName.primary': 'Primary',
@@ -621,53 +663,201 @@ body[data-ds-dark-theme] .knit-root{
 .knit-head .knit-root-path:disabled{cursor:default;text-decoration:none}
 .knit-count{font-size:11px;color:var(--dsw-alias-label-caption,#80868b);flex:none}
 .knit-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;
-  height:24px;padding:0 9px;border-radius:6px;cursor:pointer;
+  height:28px;padding:0 10px;border-radius:8px;cursor:pointer;
   background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6);
-  border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));font-size:11px}
+  border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.08));font-size:12px;
+  transition:background .16s ease,color .16s ease}
 .knit-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
   color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22))}
+/* 排序切换与搜索框：v0.18 UI 迭代（md §四~§六）把这两个控件**按输入控件的尺度重做** ——
+   圆角 10px / 字号 13px。原来那套 22px 迷你胶囊读起来像「标签」而不是控件，
+   与 14px 的页签、15px 的 Usage 标题差了两档，是「审美欠缺」最直观的一处。
+   ⚠️ 高度：md 写 36px，2026-10-06 用户看了真机后定成 **28px**（「太高了，不需要这么高」），
+      与左边的「使用情况 / 刷新」同高。
+   ⚠️ 描边色：用 **--dsw-alias-border-l3**，与 DSH 主区「对话」页签下面那条横线（官方
+      .wSkVaW_header 的 border-bottom: .5px solid rgba(0,0,0,.12) = 浅色下的 border-l3）
+      同一个 token —— 2026-10-06 用户要求「描边色值改成跟那条横一样」。不用更深的 l4：
+      l4（浅色 rgba(0,0,0,.161)）比官方分割线重一档，摆在页签下面像两个输入框框住了内容。
+    ⚠️ 描边粗细：**0.5px**（2026-10-06 用户第二轮要求「描边色值修改成 0.5px」）—— 官方那条
+       横本身就是 .5px，色值对上而粗细仍写 1px，高分屏上比它粗一倍。三处同粗：.knit-seg
+       外框、.knit-seg 内部竖线、.knit-filter。CSS 里统一写 0.5px（与官方 .wSkVaW_header 的 .5px 同值）。
+   ⚠️ 选中态只改**底色 + 字重 600**（不是 700），hover 只改底色 —— 不许 scale / translate /
+      box-shadow（md §五）。暗色下靠 --knit-active-bg 这个 token，不写死颜色。 */
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
-.knit-seg{display:inline-flex;flex:none;border-radius:7px;overflow:hidden;
-  border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1))}
-.knit-seg-btn{height:22px;padding:0 10px;cursor:pointer;font-size:11px;border:none;
-  background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-seg{display:inline-flex;flex:none;border-radius:10px;overflow:hidden;
+  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+.knit-seg-btn{height:28px;padding:0 15px;cursor:pointer;font-size:13px;font-weight:400;
+  border:none;background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6);
+  transition:background .16s ease,color .16s ease}
+.knit-seg-btn + .knit-seg-btn{border-left:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 .knit-seg-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
 .knit-seg-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
-.knit-filter{flex:1;min-width:0;height:24px;padding:0 9px;border-radius:7px;font-size:11px;
+.knit-filter{flex:1;min-width:0;height:28px;padding:0 12px;border-radius:10px;font-size:13px;
   background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
-  border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.1));outline:none}
+  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));outline:none;
+  transition:border-color .16s ease}
 .knit-filter:focus{border-color:var(--knit-accent)}
 .knit-filter::placeholder{color:var(--dsw-alias-label-caption,#80868b)}
-/* v0.15「使用情况」：**一行事实**，不画卡片、不画进度条、不用品牌色。
-   它占的就是原来「相关性排序」那一行的位置 —— 2026-09-30 用户裁决那一行
-   整个删掉（排序方式由「相关 / 最新」那个切换按钮自己表达，再说一遍是重复），
-   所以它现在是头部下面唯一的一行弱化文字，不是一块新面板。
+/* v0.15「使用情况」→ v0.18「Context Usage Lens」：**列表上方的一块轻量观察层**。
+   不是弹窗、不是新页面、不是 Dashboard、不画卡片、不画进度条、不用品牌色。
+   它占的是原来「相关性排序」那一行的位置 —— 2026-09-30 用户裁决那一行整个删掉
+   （排序方式由「相关 / 最新」那个切换按钮自己表达，再说一遍是重复），
+   于是它是类型页签下面、列表上面唯一的一块弱化信息，不是一块新面板。
    ⚠️ 全宽横线一律不画：2026-09-29 用户要求**减少全宽分割线** ——
-   「页面上横线一多，读起来就像文件管理表格」。层级由空间与字号建立。 */
-.knit-usage{flex:none;padding:0 12px 9px;font-size:10.5px;line-height:1.45;
-  color:var(--dsw-alias-label-caption,#80868b);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+   「页面上横线一多，读起来就像文件管理表格」。层级由空间与字号建立。
+   ⚠️ 它**自己不滚动**：滚动统一交给 .knit-list —— 窄侧栏里滚轮套滚轮很难用。
+   ⚠️ 这一条不许加 background / width / 品牌色（有守卫盯着，见 client.test.mjs）。 */
+.knit-usage{flex:none;padding:12px 12px 10px;font-size:12px;line-height:1.5;
+  color:var(--dsw-alias-label-caption,#80868b)}
+/* Lens 标题行：整行可点，展开 / 收起。**「使用情况」开关管统计开不开，
+   这一行管「统计开着但看不看细节」—— 两件事**（2026-10-05 规格 §25）。
+   v0.18 UI 迭代（2026-10-06，依 '02_方案与 Demo/dsh-knit V0.18 UI 重构开发提示词.md'
+   §七 / §四十七 的尺度表）：标题 15px/600（它是这一块的**标题**，不是元信息）、
+   Epoch 12px 弱化靠右、**不做成 Badge**（不画底、不画边）。 */
+.knit-lens-head{display:flex;align-items:baseline;gap:8px;width:100%;appearance:none;
+  border:0;background:none;margin:0;padding:0;font:inherit;cursor:pointer;text-align:left;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-lens-head:hover{color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-lens-head:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-lens-title{flex:none;font-size:15px;font-weight:600;line-height:20px;
+  color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-lens-epoch{flex:none;margin-left:auto;font-size:12px;font-weight:400;line-height:20px;
+  color:var(--dsw-alias-label-caption,#80868b)}
+/* 摘要行：三件事实，一行。放不下就省略号 —— 绝不换行把列表顶下去。
+   12px/18px、与标题 4~6px（md §九 / §十）。 */
+.knit-lens-sum{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  margin-top:5px;font-size:12px;line-height:18px}
+.knit-lens-sec{margin-top:13px}
+.knit-lens-name{margin-bottom:6px;font-size:12px;font-weight:500;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+/* 「当前上下文」这一句是**分节标题**（比层名与行标签高一档，md §十三：13px/500）；
+   距摘要行 12~14px 由 .knit-lens-sec 的 margin-top 给。 */
+.knit-lens-cap{margin-bottom:6px;font-size:13px;font-weight:500;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+/* 当前上下文 Coverage：三层各「层名 + 已读 ÷ 总数 + 状态点」。
+   v0.18 UI 迭代（md §十二~§十九）：三层用 '1fr 1.2fr 1.8fr' 的**网格**（Related 通常
+   最多），层名与 'n / m' 落在**同一行**（数值右对齐），状态点是**真的 9px 圆点** ——
+   不再是 '○ ●' 字符：字符圆点在不同字体 / 字号下大小不一，正是「不像设计稿」的那一处。
+   ⚠️ 不是三张 Card：默认不画底、不画边，只有 hover 时一层很淡的底（md §十三 / §五十一）。
+   ⚠️ 分母是这一层当前真实几篇：Primary 不存在时整列不显示（不画 0 / 0 的假层）。 */
+.knit-cov{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.8fr);
+  column-gap:14px;align-items:start;margin:0 -8px}
+.knit-cov-col{display:grid;grid-template-columns:1fr auto;column-gap:8px;row-gap:7px;
+  align-items:center;appearance:none;border:0;margin:0;padding:6px 8px;
+  background:transparent;font:inherit;cursor:pointer;text-align:left;border-radius:10px;
+  color:var(--dsw-alias-label-caption,#80868b);transition:background .16s ease}
+.knit-cov-col:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-cov-col:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-cov-name{grid-column:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px;font-weight:500;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+/* 状态点：**真 CSS 圆** —— 未读＝空心环（1px 中性边）、已读＝中性填充；'○→●' 只做
+   background / border-color 两笔 220ms 过渡，不弹跳、不闪烁。
+   ⚠️ 轮询不动数据就不动 className，于是补间不会被重播。
+   ⚠️ 只用中性 token：没有绿 / 红 / 黄 / 蓝 —— 读没读过不是「好 / 坏」（PRD §7.3）。
+   ⚠️ 与文档行里的 .knit-glyph-mark **同一对 token、同一个直径**：md §二十九 要求
+   生命周期那枚空心圆与这里的空心圆「视觉完全一致」。 */
+.knit-cov-dots{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:6px;row-gap:5px;
+  min-height:6px;align-items:center}
+/* ⚠️ 圆点直径 6px（2026-10-06 用户定：「9px 真圆请改成 6px」）。
+   Coverage 与文档行的 glyph 必须**同一个直径、同一对 token**（守卫会比对两处）。 */
+.knit-cov-dot{flex:none;display:block;width:6px;height:6px;border-radius:50%;
+  border:1px solid var(--dsw-alias-label-caption,#80868b);background:transparent;
+  transition:background .22s ease,border-color .22s ease}
+.knit-cov-dot.on{background:var(--dsw-alias-label-caption,#80868b);
+  border-color:var(--dsw-alias-label-caption,#80868b)}
+.knit-cov-num{grid-column:2;text-align:right;font-size:11px;font-weight:400;
+  font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-caption,#80868b)}
+/* 最近读取：**可点的一行**（文件名 · 相对时间 ›）。整行可点、hover 只改底色。
+   v0.18 UI 迭代（md §二十一 / §二十二）：高 38px、左右 10px、圆角 8px、
+   文件 12px、时间 11px、箭头 16px。
+   ⚠️ 语义仍是「最近一次成功 read」：文案不许写成「当前正在阅读」。 */
+.knit-read-row{display:flex;align-items:center;gap:10px;width:100%;appearance:none;
+  border:0;background:none;margin:0;padding:0 10px;height:38px;border-radius:8px;font:inherit;
+  text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary,#e8eaed);
+  transition:background .16s ease}
+.knit-read-row:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-read-row:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-read-rel{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px}
+.knit-read-time{flex:none;font-size:11px;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-read-go{flex:none;font-size:16px;line-height:1;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-lens-empty{opacity:.75}
+/* 包外读取：每一行都是**可点对象**（点开预览），但不许加入 Context ——
+   V0.18 不做 Context Control，这里是「看一眼」，不是「改上下文」。
+   v0.18 UI 迭代（md §三十四~§三十七）：展开后逐行
+   '01  docs/…  ×3  已读'（序号 + 路径 + 次数 + 状态），11px、行内不画线。 */
+.knit-out-row{display:flex;align-items:center;gap:9px;width:100%;appearance:none;
+  border:0;background:none;margin:0;padding:5px 9px 5px 17px;border-radius:8px;font:inherit;
+  text-align:left;cursor:pointer;color:var(--dsw-alias-label-caption,#80868b);
+  transition:background .16s ease}
+.knit-out-row:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-out-row:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-out-num{flex:none;width:18px;text-align:right;font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-caption,#80868b);opacity:.75}
+.knit-out-rel{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:11px}
+.knit-out-count{flex:none;font-size:11px;font-variant-numeric:tabular-nums}
+/* 行内生命周期 glyph（v0.17 起）：**极小、中性、不抢标题**。点它 = 打开 / 选中这篇。
+   v0.18 UI 迭代（md §二十七~§二十九）：四态改成与 Coverage **同一套**圆点语言 ——
+   未读＝空心环、已读＝实心、读后已更新＝空心环 + 中心点、修改后已重新读取＝ ↻ 字符。
+   两者用同一对 token、同一个 9px 直径，所以「同一套状态语言」不靠自觉。
+   ⚠️ 类名不能叫 knit-life-*：byClass 是子串匹配，会和 .knit-life 撞。 */
+.knit-glyph{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  appearance:none;border:0;background:none;margin:0;padding:0;width:14px;height:18px;
+  cursor:pointer;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-glyph:hover{color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-glyph:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-glyph-mark{flex:none;display:block;width:6px;height:6px;border-radius:50%;
+  border:1px solid var(--dsw-alias-label-caption,#80868b);background:transparent;
+  transition:background .22s ease,border-color .22s ease}
+.knit-glyph-mark[data-mark="read"]{background:var(--dsw-alias-label-caption,#80868b)}
+.knit-glyph-mark[data-mark="updated"]{position:relative}
+.knit-glyph-mark[data-mark="updated"]::after{content:'';position:absolute;inset:1.5px;
+  border-radius:50%;background:var(--dsw-alias-label-caption,#80868b)}
+.knit-glyph-mark[data-mark="reread"]{width:9px;height:9px;border:0;background:transparent;
+  font-size:9px;line-height:9px;text-align:center}
+/* Coverage 点某一层 → 那一层**短暂高亮**（空间定位，不画横线、不加箭头）。
+   1200ms 轻微背景（md §十七原写 500~700ms，2026-10-06 用户看真机后定成 1200ms），
+   不许闪红、不许位移。CSS transition 的时长必须与 FLASH_MS 一致，否则会出现「已经取消高亮
+   但背景还在慢慢褪」的错帧。 */
+.knit-tier{transition:background 1.2s ease}
+.knit-tier.flash{background:var(--knit-hover-bg,rgba(255,255,255,.03));border-radius:10px}
 
 /* v0.17 文档生命周期（Document Lifecycle）—— 三条新信息，都只是**事实**。
    ⚠️ 状态是文字，不是徽章：不加底色、不加边框、不用红绿 —— 红绿会把「事实」读成
-   「好 / 坏」（PRD §7.3）。字号 10.5px，比 14px 的标题弱一档，永远不抢标题。
+   「好 / 坏」（PRD §7.3）。永远不抢标题（标题 14px）。
+   v0.18 UI 迭代：10.5px → **11px** —— md §四十七 的尺度表里最小一档就是 11px。
    ⚠️ 折叠块沿用 .knit-usage 的弱化灰阶：它们是同一行事实的展开，不是新卡片。
    ⚠️ 这一段**不含反引号**，整段可以直接放在 CSS 模板串里。 */
-.knit-life{flex:none;font-size:10.5px;line-height:1.4;white-space:nowrap;
+.knit-life{flex:none;font-size:11px;line-height:1.4;white-space:nowrap;
   color:var(--dsw-alias-label-caption,#80868b)}
-.knit-usage-more{margin-top:3px}
-.knit-more-btn{appearance:none;border:0;background:none;margin:0;padding:0;
-  font:inherit;line-height:inherit;color:var(--dsw-alias-label-secondary,#9aa0a6);cursor:pointer}
-.knit-more-btn:hover{color:var(--knit-accent)}
+.knit-usage-more{margin-top:10px}
+/* 菜单式展开行（包外读取 / 上下文变化）：整行可点、高 38px、圆角 8px、hover 只改底色；
+   左边是标题，右边是「数量 / 最近一次 + ›」，展开后箭头换成 ⌃（md §三十四 / §三十八）。 */
+.knit-more-btn{display:flex;align-items:center;gap:10px;width:100%;
+  appearance:none;border:0;background:none;margin:0;padding:0 10px;height:38px;
+  border-radius:8px;font:inherit;font-size:12px;line-height:1;cursor:pointer;text-align:left;
+  color:var(--dsw-alias-label-secondary,#9aa0a6);transition:background .16s ease}
+.knit-more-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-more-btn:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
-.knit-gap-row,.knit-delta-row{display:flex;gap:6px;align-items:baseline;margin-top:2px;
+.knit-more-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.knit-more-meta{flex:none;font-size:11px;font-variant-numeric:tabular-nums;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-gap-row,.knit-delta-row{display:flex;gap:9px;align-items:baseline;
+  padding:3px 9px 3px 17px;font-size:11px;
   color:var(--dsw-alias-label-caption,#80868b)}
 .knit-gap-rel,.knit-delta-rel{flex:1 1 auto;min-width:0;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.knit-delta-head{margin-top:3px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-delta-head{margin-top:8px;padding:0 9px 0 17px;font-size:11px;font-weight:500;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
 
 
 /* ── v0.14 右栏（Context Pack 面板）已整体删除（2026-09-29）────────
@@ -703,7 +893,7 @@ body[data-ds-dark-theme] .knit-root{
 .knit-tierhint{font-weight:400}
 /* 「为什么在这里」：比摘要更弱的一行，只在 Context Pack 的条目上出现。
    11px 而不是 10px，因为它承担的是**信息**（可核验的理由），不是装饰标注。 */
-.knit-why{padding-top:2px;font-size:11px;line-height:1.5;color:var(--dsw-alias-text-tertiary)}
+.knit-why{padding-top:2px;font-size:11px;line-height:17px;color:var(--dsw-alias-text-tertiary)}
 /* 滚动条**不要自己画**：DSH 主题里已有全局样式
    （::-webkit-scrollbar 宽 8px ＋ --dsh-scrollbar-thumb，见 dsh-client-ui-theme）。
    曾经在这里写死 6px 宽 ＋ rgba(255,255,255,.14) 的滑块 —— 白色 14% 在白底上完全隐形，
@@ -760,6 +950,9 @@ body[data-ds-dark-theme] .knit-root{
 .knit-doc.leaving{pointer-events:none;user-select:none;overflow:hidden}
 @media (prefers-reduced-motion: reduce){
   .knit-doc{transition:none}
+  .knit-cov-dots,.knit-cov-dot{transition:none}
+  .knit-tier,.knit-tier.flash{transition:none}
+  .knit-cov-col,.knit-read-row,.knit-out-row,.knit-more-btn,.knit-glyph-mark{transition:none}
 }
 /* 行一＝**标题行**：Primary 点 + 标题 + 相对时间（**时间靠右**）。
    2026-09-29 这一天里这一行改了三次：先是「序号 + 标题 + 时间」，然后
@@ -780,7 +973,7 @@ body[data-ds-dark-theme] .knit-root{
    它＝.knit-title 的 14px × 1.4。格的 align-items:start 让这一列从卡片顶边
    开始排，所以只要这个行盒与标题行盒等高，两个字号不同的文本就自然居中。
    **改 .knit-title 的字号或行高时，这里必须同步改**，否则序号会与标题错开。 */
-.knit-num,.knit-gapmark{grid-column:1;font-size:10.5px;line-height:19.6px;font-variant-numeric:tabular-nums;
+.knit-num,.knit-gapmark{grid-column:1;font-size:11px;line-height:19.6px;font-variant-numeric:tabular-nums;
   color:var(--dsw-alias-label-caption,#80868b)}
 /* 中性占位标记（2026-10-01 用户反馈）：「其他相关文档」那一节没有序号，空着的那一格
    被读成「漏了一个号」（原话：「没有序号以后左边就空了，视觉上比较割裂，就觉得是个 bug 一样」）。
@@ -798,7 +991,7 @@ body[data-ds-dark-theme] .knit-root{
    ⚠️ 这条推翻了同一天早先的写法（那时候时间跟在点后面左对齐，理由是
    「元信息行读起来像一句话」）—— 时间现在和标题同一行，左对齐会把标题夹在中间。
    靠 .knit-title 的 flex:1 1 auto 把时间挤到行尾；这里只要 flex:none 不被压扁。 */
-.knit-time{flex:none;font-size:10.5px;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-time{flex:none;font-size:11px;color:var(--dsw-alias-label-caption,#80868b)}
 /* 标题现在和 Primary 点、时间**同行**（见 .knit-row1 的说明；margin-bottom 移到了那一行）。
    仍是单行省略 —— 列表是扫读用的，想看全标题就预览或打开；折行会让每条卡高度不一，
    「移动到下一项」的位移就没法预期。
@@ -806,7 +999,7 @@ body[data-ds-dark-theme] .knit-root{
    去掉 min-width:0，标题会把整行撑宽（省略号失效）；去掉 flex-grow，时间会紧贴标题而不是靠右。 */
 .knit-title{flex:1 1 auto;min-width:0;font-weight:600;font-size:14px;line-height:1.4;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.knit-sum{font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary,#9aa0a6);
+.knit-sum{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#9aa0a6);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .knit-sum.empty{font-style:italic;color:var(--dsw-alias-label-caption,#80868b)}
 /* ── 列表行里为什么没有路径（2026-09-29） ────────────────────
@@ -934,9 +1127,9 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    2px 下划线表达，页签条本身不画线（也不是「下划线悬空」：它画在自己的文字下面）。
    ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。 */
 .knit-types{display:flex;gap:14px;padding:0 12px;flex:none}
-.knit-type-btn{flex:none;height:28px;padding:0;cursor:pointer;
+.knit-type-btn{flex:none;height:30px;padding:0;cursor:pointer;
   border:none;border-bottom:2px solid transparent;background:transparent;
-  color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:11.5px;
+  color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:14px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   transition:color .15s,border-color .15s}
 .knit-type-btn:hover{color:var(--dsw-alias-label-primary,#e8eaed)}
@@ -1420,6 +1613,106 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       return `knit-opt-${safe}-${(hash >>> 0).toString(36)}`
     }
 
+    /* ── v0.18 Context Usage Lens 的纯函数 ────────────────────────────
+       这一层只把**已经有的事实**重新组织一遍：不新增采集、不新增存储、不新增事件、
+       不新增第二个生命周期口径。「能派生就不要存储」—— Coverage 是拿当前 Context
+       Pack 的三层 rels 加上 `usage.lifecycle` **现算**出来的，没有任何一份自己的 state。
+       ⚠️ 全部是纯函数（不吃 React、不读 DOM），所以测试可以直接对拍。
+       ⚠️ 这一段**不含反引号**，整段可以直接放进 CSS/代码模板串里。 */
+
+    /** 生命周期四态的 glyph。**不是颜色、不是徽章** —— 它只是一枚字符。
+     *  ⚠️ 四态一律中性：不许「绿=已读 / 红=未读 / 黄=更新」——
+     *  生命周期是**事实**，不是风险等级（PRD §7.3）。 */
+    const LIFE_GLYPH = {
+      unread: '○',
+      read: '●',
+      updated_after_read: '△',
+      reread_after_update: '↻',
+    }
+
+    /** 某篇的读取状态：**没有记录就是未读**（这是事实，不是猜测）。
+     *  认不出的状态一律退回 `unread` —— 宿主加了新状态时，界面显示「未读」而不是空白。 */
+    function lifeStatusOf(lifecycle, rel) {
+      const row = lifecycle && typeof lifecycle === 'object' ? lifecycle[rel] : null
+      const status = row && typeof row.status === 'string' ? row.status : 'unread'
+      return LIFE_GLYPH[status] ? status : 'unread'
+    }
+
+    /** Coverage：三层各自的 `{ total, read, rels }`。
+     *  `tierRels` = `{ primary: [...rel], supporting: [...], related: [...] }`；
+     *  `rels` 里每一项带 `read` 布尔（状态点要用它）。
+     *  ⚠️ 分母是**这一层当前真实有几篇**，不是 Context Pack 的 `matched/total`；
+     *  所以 Primary 不存在时是 `{ total: 0, read: 0, rels: [] }`，面板显示 `0 / 0`
+     *  —— Knit 不能假设每一份上下文都有 Primary。 */
+    function coverageOf(tierRels, lifecycle) {
+      const out = {}
+      for (const key of ['primary', 'supporting', 'related']) {
+        const list = tierRels && Array.isArray(tierRels[key]) ? tierRels[key] : []
+        const rels = []
+        let read = 0
+        for (const item of list) {
+          const rel = typeof item === 'string' ? item : (item && item.rel)
+          if (!rel) continue
+          const isRead = lifeStatusOf(lifecycle, rel) !== 'unread'
+          if (isRead) read += 1
+          rels.push({ rel, read: isRead })
+        }
+        out[key] = { total: rels.length, read, rels }
+      }
+      return out
+    }
+
+    /** 包外读取的**事实排序**：读得最多的在前，同次数按**最后读**的先后。
+     *  ⚠️ 宿主回的是**首次读的顺序**（`seq` = firstRead.seq，阅读顺序）；面板要回答的是
+     *  「哪几篇被反复读」—— 两件事，所以在客户端重排，不动宿主。
+     *  ⚠️ 载荷里没有 `lastRead.seq`（只有首次读的 `seq` 与 `lastReadAt`），
+     *  于是同计数时按 `lastReadAt` 降序 —— 它对应的就是规格里的「最后读的那一次更靠前」。 */
+    function groupOutsideDocs(outsideDocs) {
+      const list = Array.isArray(outsideDocs) ? outsideDocs.slice() : []
+      return list.sort((a, b) => {
+        const ca = Number(a && a.count) || 0
+        const cb = Number(b && b.count) || 0
+        if (cb !== ca) return cb - ca
+        const ta = Number(a && a.lastReadAt) || 0
+        const tb = Number(b && b.lastReadAt) || 0
+        if (tb !== ta) return tb - ta
+        const sa = Number(a && a.seq) || 0
+        const sb = Number(b && b.seq) || 0
+        if (sb !== sa) return sb - sa
+        return String((a && a.rel) || '').localeCompare(String((b && b.rel) || ''))
+      })
+    }
+
+    /** 最近一次 Context Delta 按「进 / 出 / 换层」拆开（只拆，不排序、不丢弃）。
+     *  ⚠️ v0.15 那种把 `appeared` 写成**字符串数组**的旧载荷也认 ——
+     *  客户端不能因为宿主版本不同就崩。 */
+    function groupDelta(delta) {
+      const out = { enter: [], leave: [], move: [] }
+      if (!delta) return out
+      const push = (target, item) => {
+        const rel = typeof item === 'string' ? item : (item && item.rel)
+        if (!rel) return
+        target.push(typeof item === 'string' ? { rel } : item)
+      }
+      for (const item of Array.isArray(delta.appeared) ? delta.appeared : []) push(out.enter, item)
+      for (const item of Array.isArray(delta.disappeared) ? delta.disappeared : []) push(out.leave, item)
+      for (const item of Array.isArray(delta.moved) ? delta.moved : []) push(out.move, item)
+      return out
+    }
+
+    /** 面板矮到这个高度以下就进「小高度」档：只留 Summary / Coverage / Recent Read，
+     *  Outside / Delta 收成标题（点开照常能用）。⚠️ 不是「藏起来」，是「别先占高度」。 */
+    const COMPACT_PANEL_PX = 420
+    /** 包外读取默认最多铺几行，其余折成「还有 N 篇」。 */
+    const MAX_OUTSIDE_SHOWN = 10
+    /** 上下文变化：收起时最多 3 条，展开后每个分类最多 5 条（v0.17 规则，保持不变）。 */
+    const MAX_DELTA_SHOWN = 3
+    const MAX_DELTA_GROUP = 5
+    /** 点 Coverage 之后那一层高亮多久（毫秒）。只是「我把你送到这儿了」的一下提示。
+     *  v0.18 UI 迭代（md §十七）：原写 500~700ms、取 650；2026-10-06 用户看真机后定成 **1200**，
+     *  「停留久一点才看得清是哪一层」。CSS 里 `.knit-tier{transition:background 1.2s}` 必须同步。 */
+    const FLASH_MS = 1200
+
     /* ── 列表进出动效（v0.17）─────────────────────────────────────────
        用户原话（2026-10-03）：「文档列表，新读取跟挤掉旧的未读的，这里的交互可能要优化，
        因为现在是一闪一闪的，就非常的快……如果说从当前的，如辅助上下文中新增，它应该是
@@ -1632,7 +1925,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     }
 
     function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, life,
-      onSelect, onOpenTab, optionId, entering, leaving }) {
+      glyph, onGlyph, onSelect, onOpenTab, optionId, entering, leaving }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       const rowRef = React.useRef(null)
 
@@ -1711,7 +2004,34 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         h('div', { className: 'knit-row1' },
           // v0.14（Design §13）：Primary 唯一允许的标记 —— 5px 黑点。
           // 不是星标、不是徽章、不是 AI 图标：「重要来自位置和结构，不来自图标」。
-          primary ? h('span', { className: 'knit-dot', 'aria-hidden': 'true' }) : null,
+          // v0.18：**统计开着时这一格让给生命周期 glyph**（○ ● △ ↻）——
+          // 2026-10-05 规格 §13 给的 ASCII 每一行只有一个标记，而层名已经由分组标题
+          // （「主要上下文」）说了，glyph 才是这一版新加的那条事实。usage 关掉时
+          // 这一行与 v0.17 逐字一致（`knit-dot` 照旧）。
+          primary && !glyph ? h('span', { className: 'knit-dot', 'aria-hidden': 'true' }) : null,
+          // 生命周期 glyph：极小、中性、点它＝打开 / 选中这篇（**已经打开则保持原预览**）。
+          // ⚠️ 它是真 `button`：键盘 Tab 得到、读屏读得出，不是 div + onClick。
+          glyph ? h('button', {
+            className: 'knit-glyph',
+            type: 'button',
+            title: glyph.title,
+            'aria-label': glyph.title,
+            onClick: (event) => {
+              if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+              onGlyph(doc)
+            },
+          },
+          // v0.18 UI 迭代（md §二十七~§二十九）：四态画成与 Coverage **同一套** 9px 圆点 ——
+          // 未读＝空心环、已读＝实心、读后已更新＝空心环 + 中心点、修改后已重新读取＝ ↻ 字符。
+          // 两处用同一对 token、同一个直径，所以「同一套状态语言」不靠自觉。
+          // ⚠️ 状态词仍然只在 title / aria-label 里；行尾那一段文字由 `.knit-life` 说。
+          h('span', {
+            className: 'knit-glyph-mark',
+            'data-mark': glyph.status === 'read' ? 'read'
+              : glyph.status === 'updated_after_read' ? 'updated'
+                : glyph.status === 'reread_after_update' ? 'reread' : 'unread',
+            'aria-hidden': 'true',
+          }, glyph.status === 'reread_after_update' ? glyph.char : null)) : null,
           h('div', { className: 'knit-title' },
             fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
             doc.title || doc.name),
@@ -2168,8 +2488,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * @returns {Array} 节点数组
        */
       const contextBody = (view) => view.sections.map((section) => h('div', {
-        className: 'knit-tier',
+        // 点 Coverage 定位过来时，这一层短暂亮一下（`flashTier`，900ms 后自己收掉）。
+        // 不画箭头、不画横线 —— 用**空间**说「就是这里」。
+        className: `knit-tier${flashTier === section.key ? ' flash' : ''}`,
         key: section.key,
+        // Coverage 的定位锚点：点某一层 → `[data-knit-tier=...]` 滚进视口。
+        'data-knit-tier': section.key,
         role: 'presentation',
       },
       // ⚠️ 这几个类名**互不为子串**：`byClass` 是子串匹配，若叫
@@ -2547,22 +2871,58 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        *    不是「你漏了它」的提醒，更不许写成「Agent 忽略了它」（PRD §8）。
        * ⚠️ 状态值本身是英文（数据层只有一个口径），中文只存在于词典（§15.4 / §24）。
        *
+      /**
+       * v0.17 → v0.18：生命周期现在是**一枚 glyph + 一段极短的文字**。
+       * `○ 未读` / `● 已读 ×n` / `△ 读后已更新` / `↻ 修改后已重新读取`。
+       *
+       * ⚠️ tooltip 与 `aria-label` 挂在 **glyph** 上：`.knit-life` 只许有一个 `className`
+       *    prop（client.test.mjs 有守卫盯着）—— 状态是文字，不是可交互控件。
+       * ⚠️ 没有记录就是「未读」：这是**事实**，不是猜测。
+       *
        * @param {string} rel - 相对路径
-       * @returns {string|null} 状态文案
+       * @returns {{status:string,char:string,text:string,title:string}|null}
        */
-      const lifecycleLabel = (rel) => {
+      const lifeInfo = (rel) => {
         if (!usageOn) return null
         const usageNow = state.usage
         if (!usageNow || !usageNow.stats) return null
         const row = usageNow.lifecycle && usageNow.lifecycle[rel]
-        const status = row ? row.status : 'unread'
-        if (status === 'unread') return t('lifecycle.unread')
-        if (status === 'read') {
-          return row && row.count >= 2 ? t('lifecycle.readCount', { n: row.count }) : t('lifecycle.read')
+        const status = row && row.status ? row.status : 'unread'
+        const char = LIFE_GLYPH[status] || LIFE_GLYPH.unread
+        const count = row && Number.isFinite(row.count) ? row.count : 0
+        if (status === 'updated_after_read') {
+          return { status, char, text: t('lifecycle.updatedAfterRead'),
+            title: t('lifecycle.updatedAfterRead') }
         }
-        if (status === 'updated_after_read') return t('lifecycle.updatedAfterRead')
-        if (status === 'reread_after_update') return t('lifecycle.rereadAfterUpdate')
-        return null
+        if (status === 'reread_after_update') {
+          return { status, char, text: t('lifecycle.rereadAfterUpdate'),
+            title: t('lifecycle.rereadAfterUpdate') }
+        }
+        if (status === 'read') {
+          // 读了几次只说次数：`×3`。**不排序、不评分、不建议**。
+          return { status, char, text: t('lifecycle.readCountShort', { n: count }),
+            title: t('lifecycle.readCount', { n: count }) }
+        }
+        return { status: 'unread', char: LIFE_GLYPH.unread,
+          text: t('lifecycle.unread'), title: t('lifecycle.unread') }
+      }
+
+      /** 只有文字的那一半（行尾 `.knit-life`）；没有证据时 null，一个节点都不加。 */
+      const lifecycleLabel = (rel) => {
+        const info = lifeInfo(rel)
+        return info ? info.text : null
+      }
+
+      /**
+       * 状态词（**不带次数**）—— 给「次数已经在同一行单独显示」的地方用。
+       * 包外行左边已经有一个 `×N`（它同时是这一档的排序键），再让 lifecycle 说一遍 `×N`
+       * 就会渲染成 `client.js ×71 ×71`（2026-10-05 用真实载荷渲染时抓到）。
+       * `read` 换成短词「已读」；其余三态本来就是词，照旧。
+       */
+      const lifeWord = (rel) => {
+        const info = lifeInfo(rel)
+        if (!info) return null
+        return info.status === 'read' ? t('lifecycle.read') : info.text
       }
 
       /* ── 列表进出动效：这一帧谁新来了、谁走了 ─────────────────────────
@@ -2581,6 +2941,63 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         tweenUntil: 0,
       })
       const [, setMotionSeq] = React.useState(0)
+
+      /* ── v0.18 Usage Lens：三个新状态 + 两个新 effect ────────────────
+         ⚠️ 这些 hook 必须留在**本组件最后一个 hook 之后**：假 React（test/harness.mjs）
+         按调用顺序分配槽位，`harness.seed()` 又按顺序预置 —— 插在中间会让所有老用例错位。 */
+
+      /** Lens 的展开 / 收起。它与「使用情况」开关是**两个状态**（规格 §25）：
+       *  开关管「统计开不开」，这一位只管「统计开着，但暂时不想看细节」。默认展开。 */
+      const [lensOpen, setLensOpen] = React.useState(true)
+      /** 正在短暂高亮的那一层（点 Coverage 定位用）；空串＝没有高亮。 */
+      const [flashTier, setFlashTier] = React.useState('')
+      /** 面板高度（px）。0 = 量不到（测试替身 / 首帧）——那时按「不矮」处理，不降级。 */
+      const [panelH, setPanelH] = React.useState(0)
+
+      /** 点 Coverage 的某一层 → 滚到那一层 + 短暂高亮。
+       *  ⚠️ 滚的是 `.knit-list`（唯一滚动容器）：Lens 自己不滚动，也不新增容器。
+       *  ⚠️ 高亮走 state 而不是直接改 classList —— 这样测试替身里也能断言到结果。 */
+      const locateTier = (key) => {
+        setFlashTier(key)
+        const host = listRef.current
+        if (host && typeof host.querySelector === 'function') {
+          const el = host.querySelector(`[data-knit-tier="${key}"]`)
+          if (el && typeof el.scrollIntoView === 'function') {
+            // v0.18 UI 迭代（md §十七）：把那一层滚到**视口中部**，并且只在允许动效时
+            // 用平滑滚动（`motionAllowed()` 已经把「减弱动态效果」挡在外面 ⇒ 那时是瞬移，
+            // 与 md §十八 的 `scroll-behavior:auto` 同义）。
+            el.scrollIntoView({ behavior: motionAllowed() ? 'smooth' : 'auto', block: 'center' })
+          }
+        }
+      }
+
+      /** 打开某一篇 —— 它**可能不在当前列表里**（包外文档就不在 `state.docs` 里）。
+       *  走模块级 `requestPreview`：与工具输出、其他座位共用同一条打开路径。
+       *  ⚠️ **不重新请求列表**：只换预览（规格 §16）。已经打开同一篇就保持原预览。 */
+      const openDocByRel = (rel) => {
+        if (!rel) return
+        if (preview && preview.rel === rel) return
+        requestPreview({ rel, title: rel })
+      }
+
+      // 高亮只亮一下，然后自己收掉（不靠 hover、不靠「点了别处」）。
+      React.useEffect(() => {
+        if (!flashTier) return undefined
+        const timer = setTimeout(() => setFlashTier(''), FLASH_MS)
+        return () => clearTimeout(timer)
+      }, [flashTier])
+
+      // 面板矮的时候 Lens 要降级（Summary + Coverage + 最近读取；Outside / Delta 收成标题）。
+      React.useEffect(() => {
+        if (typeof ResizeObserver !== 'function' || !rootRef.current) return undefined
+        const observer = new ResizeObserver((entries) => {
+          const box = entries && entries[0] && entries[0].contentRect
+          const height = box ? box.height : 0
+          if (height) setPanelH((current) => (Math.abs(current - height) < 1 ? current : height))
+        })
+        observer.observe(rootRef.current)
+        return () => observer.disconnect()
+      }, [])
       const motionOn = motionAllowed()
       // 视图签名：换类型 / 换排序 / 搜索词变了都算「换屏」——整屏一起飞会很吵。
       const motionView = `${kind}|${state.mode}|${query.trim()}`
@@ -2699,8 +3116,16 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // `mark`＝没号时同列的占位标记，只在「这一屏里有号」时为真。
         // 进出动效只在真机上跑（`motionOn`）：测试替身没有 DOM，`motionAllowed()` 挡掉，
         // 于是渲染树里既没有 `entering` 也没有 `leaving`，与没有这段动效时逐字一致。
+        // v0.18：生命周期现在是**一枚 glyph + 一段极短的文字**。glyph 可点：
+        // 点它＝打开 / 选中这一篇（**已经打开则保持原预览**，不重开也不重拉）。
+        const info = withLife ? lifeInfo(doc.rel) : null
         return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary,
-          life: withLife ? lifecycleLabel(doc.rel) : null,
+          life: info ? info.text : null,
+          glyph: info,
+          onGlyph: (target) => {
+            if (preview && preview.rel === target.rel) return
+            openPreview(target)
+          },
           entering: motion.entered.has(doc.rel) ? motion.entered.get(doc.rel) : null,
           leaving: Boolean(doc.knitLeaving) })
       }
@@ -2758,61 +3183,144 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // title 里（可见文本本来就不许出现关键词，test/i18n.test.mjs 有守卫）。
       // ⚠️ i18n 里那四个 topic.* 键已同时删除，不要为了「以后可能用」留着。
 
-      /* v0.15「使用情况」：只把**事实**读出来 —— 先看的那篇读没读、辅助读了几篇、
-         一共读了几次、几次落在包外、上下文换过几回。
+      /* v0.18「Context Usage Lens」：列表**上方**的一块轻量观察层。
+         它按**视觉层级**回答四件事（规格 §9 的三层）：
+           Level 1 当前上下文 Coverage（这一份上下文被用到什么程度）
+           Level 2 最近读取（最近一次成功读的是什么）
+           Level 3 上下文外读取 / 上下文变化（辅助事实）
+         三块不能一样重 —— 靠**空间与字号**拉开，不靠横线、不靠颜色、不靠卡片。
          ⚠️ 不许出现分数 / 百分比 / 评分条 / 置信度 / 「AI 判断」这类词：用户要知道的是
-         「这份上下文有没有被用上」，不是「它好不好用」。**没有任何一行是估算出来的。** */
-      const usageText = (() => {
-        if (!usageOn) return ''
-        const u = state.usage
-        if (!u || !u.stats) return t('usage.none')
-        const s = u.stats
-        const parts = []
-        // SDD §20：只多一句「当前上下文 · Epoch N」—— `epochId` 是**累计编号**（换一次 +1），
-        // 不是「第几份包」；一份包都没交过时是 null，整句不显示。
-        if (Number.isInteger(u.epochId)) parts.push(t('usage.epoch', { n: u.epochId }))
-        if (s.primaryRel) {
-          parts.push(s.primaryFollowThrough
-            ? t('usage.primaryRead', { rel: s.primaryRel })
-            : t('usage.primaryUnread', { rel: s.primaryRel }))
-        }
-        const sup = (s.byTier && s.byTier.supporting) || { read: 0, total: 0 }
-        if (sup.total > 0) parts.push(t('usage.supporting', { read: sup.read, total: sup.total }))
-        if (s.reads) parts.push(t('usage.reads', { n: s.reads }))
-        if (s.outside) parts.push(t('usage.outside', { n: s.outside }))
-        if (s.churn && s.churn.snapshots) parts.push(t('usage.changes', { n: s.churn.snapshots }))
+         「这份上下文有没有被用上」，不是「它好不好用」。**没有任何一行是估算出来的。**
+         ⚠️ 关掉使用情况时**一个节点都不加**（`.knit-usage` 整个不渲染，与 v0.17 一致）。*/
+
+      const usageNow = usageOn && state.usage && state.usage.stats ? state.usage : null
+      // 「Epoch N」只在标题行显示一次：`epochId` 是**累计编号**（换一次 +1），
+      // 一份包都没交过时是 null，整个角标不显示（SDD §20）。
+      const epochText = usageNow && Number.isInteger(usageNow.epochId)
+        ? t('lens.epoch', { n: usageNow.epochId })
+        : ''
+      // 摘要行＝三件纯事实，一行读完。**不写 Primary 文件名、不写「辅助 0/3」**——
+      // 那两件事下面的 Coverage 说得更准、更短（规格 §10）。
+      const lensSummary = (() => {
+        if (!usageNow) return t('usage.none')
+        const s = usageNow.stats
+        const parts = [t('lens.reads', { n: s.reads || 0 })]
+        if (s.outside) parts.push(t('lens.outside', { n: s.outside }))
+        const changes = s.churn && s.churn.snapshots ? s.churn.snapshots : 0
+        if (changes) parts.push(t('lens.changes', { n: changes }))
         return parts.join(' · ')
       })()
 
-      /* v0.17：三条新事实 —— 全部只在「使用情况」开着、且宿主真的回传了 `usage` 时出现。
-         ① 最近读取（按事件 seq 认「谁是最近一次」，墙钟只用来算相对时间）
-         ② 上下文外读取的明细（当前包外、但真实成功读过）
-         ③ 最近**一次** Context Delta
-         ⚠️ 关掉使用情况时**一个节点都不加**：DOM 与 v0.16 逐字一致。
+      /* v0.17 的三条事实 —— 全部只在「使用情况」开着、且宿主真的回传了 `usage` 时出现。
          ⚠️ 这里没有时间线、没有全量事件、没有评分 —— 「最近一次」就只有一条。 */
-      const usageFacts = usageOn && state.usage && state.usage.stats ? state.usage : null
 
-      const recentReadNode = usageFacts && usageFacts.recentRead && usageFacts.recentRead.rel
-        ? h('div', { className: 'knit-usage-more' },
-          t('usage.recentRead', {
-            rel: usageFacts.recentRead.rel,
-            time: relTime(usageFacts.recentRead.at, tick),
-          }))
-        : null
+      // ── Level 1：当前上下文 Coverage ────────────────────────────────
+      // ⚠️ 用 `state.context` 的三层**原始** rels（不是 `contextView`：那一份被过滤框
+      // 子集化、而且只在文档档 + 相关序成立），再叠上 `usage.lifecycle` —— 纯派生，
+      // 不新增任何一份自己的状态（「能派生就不要存储」）。
+      const coverage = coverageOf({
+        primary: (state.context && state.context.primary) || [],
+        supporting: (state.context && state.context.supporting) || [],
+        related: (state.context && state.context.related) || [],
+      }, usageNow ? usageNow.lifecycle : null)
+      const coverageNode = contextView ? h('div', { className: 'knit-lens-sec', key: 'cov' },
+        h('div', { className: 'knit-lens-cap' }, t('lens.currentContext')),
+        h('div', { className: 'knit-cov' },
+          ['primary', 'supporting', 'related']
+            // Primary 可以被一份包整体缺席 —— 那就整列不显示，而不是画一个
+            // 「0 / 0」的假层（规格 §11：Knit 不能假设一定有 Primary）。
+            .filter((key) => !(key === 'primary' && coverage.primary.total === 0))
+            .map((key) => h('button', {
+              className: 'knit-cov-col',
+              key,
+              type: 'button',
+              title: t('lens.locate', { tier: t(`tierName.${key}`) }),
+              // 读屏的说法是完整一句「主要上下文：0 / 1 篇已读」（md §六十三）——
+              // 但**视觉上不显示这句话**：屏幕上给的是层名 + `n / m` + 圆点。
+              'aria-label': t('lens.coverageAria', {
+                tier: t(`tierName.${key}`),
+                read: coverage[key].read,
+                total: coverage[key].total,
+              }),
+              onClick: () => locateTier(key),
+            },
+            // 视觉（点）与文本（已读 ÷ 本层总数）**同时**存在：只给点读不出「读了几篇」，
+            // 只给数字又看不出「是哪几篇」。没有进度条、没有百分比。
+            // ⚠️ **顺序**是「层名 → 数字 → 圆点」，不要调换：这三个是 grid 的同一套单元格，
+            //    自动排布按 DOM 顺序找空位 —— 层名占第 1 行第 1 列、数字占第 1 行第 2 列、
+            //    圆点那一条横跨两列，于是必然落到第 2 行（换顺序数字会被挤到圆点下面一行）。
+            h('span', { className: 'knit-cov-name' }, t(`tierName.${key}`)),
+            h('span', { className: 'knit-cov-num' },
+              `${coverage[key].read} / ${coverage[key].total}`),
+            // v0.18 UI 迭代：**真的圆**（9px，见 CSS），不再是 `○ ●` 字符 —— 字符圆点在不同
+            // 字体下大小不一，正是「不像设计稿」的那一处。点本身对读屏是装饰（aria-hidden），
+            // 「几篇已读」由上面那个 aria-label 的完整句子说。
+            h('span', { className: 'knit-cov-dots' },
+              coverage[key].rels.map((item) => h('span', {
+                className: `knit-cov-dot${item.read ? ' on' : ''}`,
+                key: item.rel,
+                'aria-hidden': 'true',
+              }))))))) : null
 
-      const outsideList = usageFacts && Array.isArray(usageFacts.outsideDocs) ? usageFacts.outsideDocs : []
-      const gapNode = outsideList.length > 0
+      // ── Level 2：最近读取（最近一次**成功** read；不是「正在阅读」）──────
+      const recent = usageNow && usageNow.recentRead ? usageNow.recentRead : null
+      const recentNode = h('div', { className: 'knit-lens-sec', key: 'recent' },
+        h('div', { className: 'knit-lens-name' }, t('lens.recentRead')),
+        recent && recent.rel
+          ? h('button', {
+            className: 'knit-read-row',
+            type: 'button',
+            title: t('lens.openDoc', { rel: recent.rel }),
+            // 这一行整行可点（打开预览），所以它需要一个**完整的可访问名**（md §二十二）：
+            // 只有 title 的话读屏在部分平台读不出「这是干什么的」。
+            'aria-label': t('lens.openDoc', { rel: recent.rel }),
+            onClick: () => openDocByRel(recent.rel),
+          },
+          h('span', { className: 'knit-read-rel' }, recent.rel),
+          h('span', { className: 'knit-read-time' }, relTime(recent.at, tick)),
+          // 箭头是装饰（对读屏隐藏）；不要前导空格 —— 间距由 .knit-read-row 的 gap 给。
+          h('span', { className: 'knit-read-go', 'aria-hidden': 'true' }, '›'))
+          : h('div', { className: 'knit-lens-empty' }, t('lens.recentNone')))
+
+      // ── Level 3a：上下文外读取（可浏览集合；排序是**事实排序**）─────────
+      const outsideList = usageNow && Array.isArray(usageNow.outsideDocs) ? usageNow.outsideDocs : []
+      const outsideSorted = groupOutsideDocs(outsideList)
+      const outsideNode = outsideSorted.length > 0
         ? h('div', { className: 'knit-usage-more', key: 'gap' },
           h('button', {
             className: 'knit-more-btn',
             type: 'button',
             'aria-expanded': gapOpen ? 'true' : 'false',
             onClick: () => setGapOpen((value) => !value),
-          }, t('usage.outsideDocs', { n: outsideList.length })),
+          },
+          // 菜单行的三段（md §三十四）：「label ── 数量 ›」。原来把两条信息压在一个字符串里
+          // （`上下文外读取 · 20`），数字既不右对齐、也不能单独参与排版。
+          h('span', { className: 'knit-more-label' }, t('lens.outsideDocs')),
+          h('span', { className: 'knit-more-meta' }, String(outsideSorted.length)),
+          h('span', { className: 'knit-read-go', 'aria-hidden': 'true' }, gapOpen ? '⌃' : '›')),
           gapOpen ? h('div', { className: 'knit-gap-list' },
-            outsideList.slice(0, 10).map((row) => h('div', { className: 'knit-gap-row', key: row.rel },
-              h('span', { className: 'knit-gap-rel', title: row.rel }, row.rel),
-              h('span', { className: 'knit-life' }, lifecycleLabel(row.rel))))) : null)
+            // 每一行都是**可点对象**（点开预览），但**不许**加入 Context ——
+            // V0.18 不做 Context Control（规格 §19）。
+            // 行首序号（md §三十六）：让展开的包外列表可数，并把 rel 与次数隔开。
+            // 序号说的是**位置**（第几篇），不是评分。
+            outsideSorted.slice(0, MAX_OUTSIDE_SHOWN).map((row, i) => h('button', {
+              className: 'knit-out-row',
+              key: row.rel,
+              type: 'button',
+              title: t('lens.openDoc', { rel: row.rel }),
+              onClick: () => openDocByRel(row.rel),
+            },
+            h('span', { className: 'knit-out-num' }, String(i + 1).padStart(2, '0')),
+            h('span', { className: 'knit-out-rel' }, row.rel),
+            h('span', { className: 'knit-out-count' }, `×${row.count}`),
+            // 每一行都带生命周期：**复用 v0.17 那一份数据**，不维护第二套。
+            // ⚠️ 用 `lifeWord`（状态词）而不是 `lifecycleLabel`（短次数）：左边已经有 `×N` 了。
+            h('span', { className: 'knit-life' }, lifeWord(row.rel)))),
+            outsideSorted.length > MAX_OUTSIDE_SHOWN
+              ? h('div', { className: 'knit-gap-row' },
+                h('span', { className: 'knit-gap-rel' },
+                  t('lens.more', { n: outsideSorted.length - MAX_OUTSIDE_SHOWN })))
+              : null) : null)
         : null
 
       // 层级的**短名**：分组标题那套长文案（主要上下文 / 辅助上下文 / 相关上下文）在变化行里太长。
@@ -2822,31 +3330,41 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         if (key === 'related') return t('tierName.related')
         return ''
       }
-      const delta = usageFacts && usageFacts.latestDelta ? usageFacts.latestDelta : null
+      const delta = usageNow && usageNow.latestDelta ? usageNow.latestDelta : null
       const deltaLine = (text, key) => h('div', { className: 'knit-delta-row', key },
         h('span', { className: 'knit-delta-rel' }, text))
-      // 摘要行的符号只用 `+` `-` `↔` 三个通用符号，不用颜色区分「进 / 出」。
-      const deltaDigest = []
-      if (delta) {
-        for (const item of (Array.isArray(delta.appeared) ? delta.appeared : [])) {
-          deltaDigest.push({ key: `plus-${item.rel}`, text: `+ ${item.rel}` })
-        }
-        for (const item of (Array.isArray(delta.disappeared) ? delta.disappeared : [])) {
-          deltaDigest.push({ key: `minus-${item.rel}`, text: `- ${item.rel}` })
-        }
-        for (const item of (Array.isArray(delta.moved) ? delta.moved : [])) {
-          deltaDigest.push({
-            key: `move-${item.rel}`,
-            text: `↔ ${item.rel} · ${tierShort(item.from)} → ${tierShort(item.to)}`,
-          })
-        }
-        if (delta.taskChanged) deltaDigest.push({ key: 'task', text: t('usage.deltaTask') })
+      /** `moved` 的两种载荷都认：v0.17 起宿主给的是 `{tier,rank}`，旧夹具里是裸层名。 */
+      const tierOf = (value) => (value && typeof value === 'object' ? value.tier : value)
+      const deltaText = (kind, item) => {
+        if (kind === 'enter') return `+ ${item.rel}`
+        if (kind === 'leave') return `- ${item.rel}`
+        return `↔ ${item.rel} · ${tierShort(tierOf(item.from))} → ${tierShort(tierOf(item.to))}`
       }
-      const deltaGroups = delta ? [
-        { key: 'enter', label: t('usage.deltaEnter'), rows: deltaDigest.filter((line) => line.key.startsWith('plus-')) },
-        { key: 'leave', label: t('usage.deltaLeave'), rows: deltaDigest.filter((line) => line.key.startsWith('minus-')) },
-        { key: 'move', label: t('usage.deltaMove'), rows: deltaDigest.filter((line) => line.key.startsWith('move-')) },
-      ] : []
+      // 摘要行的符号只用 `+` `-` `↔` 三个通用符号，不用颜色区分「进 / 出」。
+      const grouped = groupDelta(delta)
+      const deltaDigest = []
+      for (const item of grouped.enter) {
+        deltaDigest.push({ key: `plus-${item.rel}`, text: deltaText('enter', item) })
+      }
+      for (const item of grouped.leave) {
+        deltaDigest.push({ key: `minus-${item.rel}`, text: deltaText('leave', item) })
+      }
+      for (const item of grouped.move) {
+        deltaDigest.push({ key: `move-${item.rel}`, text: deltaText('move', item) })
+      }
+      if (delta && delta.taskChanged) deltaDigest.push({ key: 'task', text: t('usage.deltaTask') })
+      const deltaGroups = [
+        { key: 'enter', label: t('usage.deltaEnter'),
+          rows: grouped.enter.map((item) => ({ key: `plus-${item.rel}`, text: deltaText('enter', item) })) },
+        { key: 'leave', label: t('usage.deltaLeave'),
+          rows: grouped.leave.map((item) => ({ key: `minus-${item.rel}`, text: deltaText('leave', item) })) },
+        { key: 'move', label: t('usage.deltaMove'),
+          rows: grouped.move.map((item) => ({ key: `move-${item.rel}`, text: deltaText('move', item) })) },
+      ].filter((group) => group.rows.length > 0)
+      // ⚠️ `compact` 必须在 `previewLines` 之前算出来（TDZ）。
+      const compact = panelH > 0 && panelH < COMPACT_PANEL_PX
+      // 面板矮的时候收起态**不铺摘要行** —— 只留标题，点开照常看得到。
+      const previewLines = compact ? [] : deltaDigest.slice(0, MAX_DELTA_SHOWN)
       const deltaNode = delta
         ? h('div', { className: 'knit-usage-more', key: 'delta' },
           h('button', {
@@ -2854,21 +3372,55 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             type: 'button',
             'aria-expanded': deltaOpen ? 'true' : 'false',
             onClick: () => setDeltaOpen((value) => !value),
-          }, t('usage.deltaTitle')),
-          deltaDigest.slice(0, 3).map((line) => deltaLine(line.text, line.key)),
-          deltaDigest.length > 3
-            ? deltaLine(t('usage.deltaMore', { n: deltaDigest.length - 3 }), 'more')
+          },
+          // 菜单行的三段（md §三十八）：「上下文变化 ── 最近一次 ›」。
+          // ⚠️ 这里**不再写条数**（原来是 `上下文变化 · 11`）：变化永远只说最近一次，
+          //    「有几条」由展开后的行数与「还有 N 条」承担 —— 数字写在按钮上时，
+          //    折叠摘要、分组尾巴、按钮三处会各自算一遍，很容易自相矛盾。
+          h('span', { className: 'knit-more-label' }, t('lens.delta')),
+          h('span', { className: 'knit-more-meta' }, t('lens.deltaLatest')),
+          h('span', { className: 'knit-read-go', 'aria-hidden': 'true' }, deltaOpen ? '⌃' : '›')),
+          // ⚠️ 展开后**不再画折叠摘要**：分组视图是它的超集（三行摘要 + 「还有 N 条」再叠上
+          // 分组明细，同一条事实会在同一块里出现两遍 —— 2026-10-05 用真实载荷渲染时抓到）。
+          deltaOpen ? null : previewLines.map((line) => deltaLine(line.text, line.key)),
+          !deltaOpen && !compact && deltaDigest.length > MAX_DELTA_SHOWN
+            ? deltaLine(t('usage.deltaMore', { n: deltaDigest.length - MAX_DELTA_SHOWN }), 'more')
             : null,
           deltaOpen ? deltaGroups
-            .filter((group) => group.rows.length > 0)
             .map((group) => [
               h('div', { className: 'knit-delta-head', key: `${group.key}-head` }, group.label),
-              ...group.rows.slice(0, 5).map((line) => deltaLine(line.text, `${group.key}-${line.key}`)),
-              group.rows.length > 5
-                ? deltaLine(t('usage.deltaMore', { n: group.rows.length - 5 }), `${group.key}-more`)
+              ...group.rows.slice(0, MAX_DELTA_GROUP)
+                .map((line) => deltaLine(line.text, `${group.key}-${line.key}`)),
+              group.rows.length > MAX_DELTA_GROUP
+                ? deltaLine(t('usage.deltaMore', { n: group.rows.length - MAX_DELTA_GROUP }),
+                  `${group.key}-more`)
                 : null,
-            ]) : null)
+            ]) : null,
+          // ⚠️ 「任务上下文已更新」不是进出换层，没有分组标题可挂 —— 但它算在
+          // `deltaDigest.length` 里（按钮上那个数字就是它）。展开时漏掉这一行，
+          // 就会出现「按钮说 6 条、下面只列出 5 行」的自相矛盾（2026-10-05 用真实载荷渲染时抓到）。
+          // 它在摘要里的位置本来就是最后一条，这里也放最后。
+          deltaOpen && delta && delta.taskChanged
+            ? deltaLine(t('usage.deltaTask'), 'task')
+            : null)
         : null
+
+      // ── Lens 整块：标题行（可点，展开 / 收起）+ 摘要行 + 细节 ──────────
+      // ⚠️ 「收起」不等于「关掉统计」：收起只表示「统计开着，但暂时不想看细节」（规格 §25）。
+      const lensNode = h('div', { className: 'knit-usage', title: t('usage.note') },
+        h('button', {
+          className: 'knit-lens-head',
+          type: 'button',
+          'aria-expanded': lensOpen ? 'true' : 'false',
+          title: lensOpen ? t('lens.collapse') : t('lens.expand'),
+          onClick: () => setLensOpen((value) => !value),
+        },
+        h('span', { className: 'knit-lens-title' }, t('lens.title')),
+        epochText ? h('span', { className: 'knit-lens-epoch' }, epochText) : null,
+        h('span', { className: 'knit-read-go', 'aria-hidden': 'true' }, lensOpen ? ' ˄' : ' ˅')),
+        h('div', { className: 'knit-lens-sum' }, lensSummary),
+        lensOpen ? h('div', { className: 'knit-lens-body' },
+          coverageNode, recentNode, outsideNode, deltaNode) : null)
 
       // 不同类型用不同量词：文档「篇」、媒体「个」、混排「项」。
       const countKey = kind === KIND_MEDIA
@@ -2938,13 +3490,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             title: t('kind.title'),
             onClick: () => pickKind(value),
           }, t(labelKey)))),
-      // v0.15：开了才显示。一行事实，没有卡片、没有分数条。
-      // v0.17：这一行下面最多再加三块 —— 最近读取、上下文外读取（折叠）、最近一次变化（折叠）。
-      usageOn ? h('div', { className: 'knit-usage', title: t('usage.note') },
-        usageText || t('usage.none'),
-        recentReadNode,
-        gapNode,
-        deltaNode) : null,
+      // v0.15：开了才显示。v0.18：这一块是「Context Usage Lens」——
+      // 列表**上方**的观察层，不是弹窗、不是新页面、不是 Dashboard。
+      usageOn ? lensNode : null,
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——

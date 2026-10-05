@@ -72,7 +72,10 @@ export function loadClientModule(options = {}) {
         // 右栏一起删除（2026-09-29）。名字留在这里，模块一加载就 ReferenceError ——
         // 这个替身是**只增不减**的重灾区，删功能时记得同步删名字。
         + 'MIN_RATIO, MAX_RATIO, ALL_DOC_CAP, MEDIA_MAX_ITEMS, MEDIA_TRACK_PX, '
-        + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX }\n'
+        + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX, '
+        // v0.18 Context Usage Lens：纯函数与阈值（渲染层的东西仍走 DOM 断言）。
+        + 'LIFE_GLYPH, lifeStatusOf, coverageOf, groupOutsideDocs, groupDelta, '
+        + 'COMPACT_PANEL_PX, MAX_OUTSIDE_SHOWN, MAX_DELTA_SHOWN, MAX_DELTA_GROUP, FLASH_MS }\n'
         + "    module.exports.inject = ['slots', 'locale']",
     )
 
