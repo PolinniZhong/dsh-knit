@@ -1,0 +1,58 @@
+# 发布走 npm 可信发布（Trusted Publisher / OIDC）：不需要任何 npm token，也不需要 OTP。
+#
+# ⚠️ npm 包设置页 Trusted Publisher 表单里的 “Workflow filename” 必须逐字等于本文件名：publish.yml
+#    （表单要的是 “Filename only”，不要带路径。填错的连接永远匹配不上；而且创建后不能改，只能删掉重建。）
+#    网页表单里 Allowed actions 只勾 “npm publish”；本 workflow 也只做直接发布，不用 npm stage publish。
+name: publish
+
+on:
+  # 手动触发：Actions 页面点 “Run workflow” —— 发布动作仍然由人按下（对齐 AGENTS.md §11.7）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只打包不发布（npm publish --dry-run）"
+        type: boolean
+        default: false
+  # 备选扳机：推 v* tag 即发。要用就把下面三行取消注释（你现在的发版仪式就是打 tag）。
+  # push:
+  #   tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # ← OIDC 必需。少了这一行，npm publish 一定失败
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 让 npm 读到的 gitHead 一定是推上来的那个提交
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 自带 npm 10.x；可信发布要求 npm ≥ 11.5.1
+      - run: npm install -g npm@11
+
+      # 本仓库零依赖、也没有 lockfile ⇒ 不能用 npm ci
+      - run: npm install --no-audit --no-fund
+
+      # 发版前的门：517 项必须全绿
+      - run: npm test
+
+      # 推 tag 触发时，挡一下「tag 与 package.json 版本不一致」
+      - name: 版本与 tag 对齐检查
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG=${GITHUB_REF_NAME#v}
+          echo "package.json=$PKG  tag=$TAG"
+          [ "$PKG" = "$TAG" ] || { echo "::error::tag 与 package.json 版本不一致"; exit 1; }
+
+      # ⚠️ 不要设置 NODE_AUTH_TOKEN / NPM_TOKEN：一旦给了 token，npm 会退回 token 认证，OIDC 就白配了。
+      # provenance（来源证明）由可信发布自动生成，会显示在 npm 包页面上。
+      - name: 发布
+        run: npm publish ${{ inputs.dry_run && '--dry-run' || '' }}
