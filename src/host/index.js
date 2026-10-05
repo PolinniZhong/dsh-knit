@@ -14,7 +14,7 @@
  * 零模型、零网络出口：只读本地文件与会话日志。
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
+import { createReadStream, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
@@ -31,6 +31,7 @@ import { buildContext } from './context.js'
 // 把两者接起来算 Usage。**不订阅 event bus、不落盘、不联网、不调模型、不改 Retrieval。**
 import {
   createStore, activateAudit, isAudited, ingestEvents, noteSnapshot, usageFor, getAuditSummary,
+  markBackfilled, isBackfilled,
 } from './feedback.js'
 
 export const name = 'dsh-knit'
@@ -681,6 +682,9 @@ export async function scan(root, limit, options = {}) {
     // `context.task` 已经把这个值带出去了，顶层再来一份是重复。
     task: mode === 'relevance' ? task : '',
     docs: ordered.slice(0, limit).map(publicDoc),
+    // 全量列表（未按 limit 切片）。**内部输入**：v0.17 的 lifecycle 需要「被读过但
+    // 不一定落在当前页」的文档的当前 mtime。由 `publicScanPayload()` 剥掉。
+    allDocs: ordered,
   }
 }
 
@@ -697,9 +701,10 @@ export async function scan(root, limit, options = {}) {
  */
 export function publicScanPayload(payload) {
   if (!payload || typeof payload !== 'object') return payload
-  const { ranked, task, ...rest } = payload
+  const { ranked, task, allDocs, ...rest } = payload
   void ranked
   void task
+  void allDocs
   return rest
 }
 
@@ -1071,10 +1076,13 @@ function sendMedia(req, res, info) {
  *   2. 把刚交出去的 Context Pack 记成 Context Snapshot（带 `epochId`）；
  *   3. 给面板与 `knit_docs` 提供「**上一份**包之后发生了什么」。
  *
- * ⚠️ v0.16 起**不再**从 `session.snapshotEvents()` 拉事件：那个 API 已被 DSH 标记
- * deprecated（「new production calls are prohibited」），而且它会把这个会话从父会话
- * fork 继承来的前缀事件也算进来。代价是：订阅之前发生过的事件不回溯 —— 宁可少记，
- * 也不去猜一段没法按当时上下文归因的历史。
+ * ⚠️ 读证据走**订阅**（`session/event`），不拿 `session.snapshotEvents()` 当审计来源：
+ * 那个 API 已被 DSH 标记 deprecated（「new production calls are prohibited」）。
+ * 代价是闸门打开**之前**已经发生的读不在订阅范围内，所以**开闸时回填一次**（v0.17 修订，用户拍板）：
+ * 闸门只在你打开开关时才开，而真实用法是读完才看面板 —— 不回填就只能把真实发生过的读
+ * 显示成「未读」，那是假话（规格 §3）。回填的代价被三条边界锁住：一个会话只做一次、
+ * 只在开闸那一 tick、仍然零 I/O 零网络零模型且只在内存里。已知的不精确：回填的读按
+ * 「我们已知最早的那份包」（= 开闸时看到的那份）归因，更早的包无从得知，所以**宁可少说**。
  *
  * 记账只在**被显式打开**的会话里发生（面板的「使用情况」开关，或 `knit_docs` 的
  * `audit: true`）—— 默认一条事件的处理成本就是一次 Map 查找。
@@ -1083,6 +1091,52 @@ function sendMedia(req, res, info) {
 
 /** 进程内唯一的 feedback store（按会话分片，会话数与篇数都有硬上限）。 */
 const feedbackStore = createStore()
+
+/**
+ * 宿主会话注册表（`webCtx.sessions`）的引用，只给**工具**那条路用。
+ *
+ * 面板那条路拿得到 `webCtx`；`knit_docs` 的 `audit: true` 走的是 `auditBridge`，
+ * 它也需要在开闸时回填历史（见 `backfillFeedback`），所以在这里留一份引用。
+ */
+let sessionsRef = null
+
+/**
+ * 按会话 id 取宿主会话对象（拿不到就 undefined —— 回填只是「能补就补」）。
+ * @param {string} sessionId - 会话 id
+ * @returns {object|undefined} 会话
+ */
+function sessionFor(sessionId) {
+  try {
+    if (!sessionId || !sessionsRef || typeof sessionsRef.get !== 'function') return undefined
+    return sessionsRef.get(sessionId)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 取一个**已归一化**的工作区相对路径的版本标记（`mtimeMs`）。
+ *
+ * v0.17 用它回答「这篇文档被读过之后改过吗」。只接受走过 `normalizeRel` 的 `rel`
+ * （无 `..`、无绝对路径逃逸、无 URL scheme），再 `resolve` 到 root 之下 `statSync` ——
+ * 不新增任何用户可控的路径来源。任何异常 / 非有限值都返回 `null`：拿不到证据就不说。
+ *
+ * ⚠️ `feedback.js` 保持零 I/O，所以取样只能由宿主注入（`options.stat`）。
+ *
+ * @param {string} root - 工作区根（绝对路径）
+ * @param {string} rel - 已归一化的工作区相对路径
+ * @returns {number|null} mtimeMs，或 null
+ */
+function mtimeOf(root, rel) {
+  try {
+    if (typeof root !== 'string' || !root) return null
+    if (typeof rel !== 'string' || !rel) return null
+    const st = statSync(resolve(root, rel))
+    return Number.isFinite(st.mtimeMs) ? st.mtimeMs : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * 订阅宿主的会话事件流，把真实的读记进 store。
@@ -1101,17 +1155,81 @@ function onSessionEvent(session, event) {
     const sessionId = session && typeof session.id === 'string' ? session.id : ''
     if (!sessionId || !event) return
     if (!isAudited(feedbackStore, sessionId)) return
-    ingestEvents(feedbackStore, sessionId, [event], { root: rootOfSession(session) })
+    const root = rootOfSession(session)
+    // v0.17：成功读被确认的那一刻取一次版本标记。取样只发生在**新事件**上，
+    // 所以同一事件重复派发既不重复计数，也不重复取样。
+    ingestEvents(feedbackStore, sessionId, [event], {
+      root,
+      stat: (rel) => mtimeOf(root, rel),
+    })
   } catch { /* 记账坏了不许影响宿主 */ }
 }
 
 /**
- * 打开某个会话的记账（面板的「使用情况」开关走它）。
+ * 把会话**已经发生**的事件补进 store（v0.17 修订，用户拍板）。
+ *
+ * 为什么需要：记账闸门只在面板带 `usage=1`（或 `knit_docs` 传 `audit: true`）那一刻才开，
+ * 而真实用法是**读完才想起来看面板**。那些读发生在闸门外，Knit 手上零证据，面板只能把它们
+ * 显示成「未读」—— 那是**假话**（规格 §3：只讲事实，不讲推断）。所以开闸时把会话已有的历史
+ * 一次性补进 store：宁可补记，不可诬告。
+ *
+ * ⚠️ 顺序是这个函数的一部分：**先记下手上这份包，再喂事件**。`recordRead()` 在事件入库那一刻
+ * 就把归因（`tier` / `inside` / `epochId`）结算并**冻结**，之后不再重算。若先喂事件，那些读会在
+ * 「一份快照都还没有」的状态下被冻成包外，而「它当时不在 Context Pack 里」正是我们**不知道**的事。
+ * 先记包则快照 seq 自然是 `-1`（此刻 `state.seq` 也是 `-1`），补记的读归到「我们已知最早的那份包」。
+ *
+ * 代价与边界（都写在这里，免得日后被误解成「全量扫描」）：
+ *   - 只在**开闸那一刻**读一次 `snapshotEvents()`，一个会话只做一次（`isBackfilled`）；
+ *   - 仍然**零 I/O、零网络、零模型**：事件来自宿主内存，版本标记来自一次 `statSync`；
+ *   - 仍然只在内存里（重启即丢），也仍然只在有人看的时候才发生；
+ *   - `ingestEvents` 自己按 `seq` 水位去重，所以回填过的事件稍后再从订阅派发一次
+ *     也不会重复计数（规格 §18 Case 12 的幂等性照旧）。
+ *
  * @param {string} sessionId - 会话 id
+ * @param {object} session - 宿主会话（要有 `snapshotEvents()`）
+ * @param {object|null} [pack] - 此刻手上这份 Context Pack；给了就先记成第一份快照
+ * @returns {number} 补进来的读条数（拿不到 / 已回填过 → 0）
+ */
+function backfillFeedback(sessionId, session, pack = null) {
+  try {
+    if (!sessionId || !session) return 0
+    if (typeof session.snapshotEvents !== 'function') return 0
+    if (isBackfilled(feedbackStore, sessionId)) return 0
+    const events = session.snapshotEvents()
+    if (!Array.isArray(events) || events.length === 0) return 0
+    const root = rootOfSession(session)
+    // 先记包（见上面的顺序说明）：快照 seq 会是 -1，于是补记的读能归到它身上。
+    // ⚠️ 不传 `at`：这份包代表的是「会话开始时的那份上下文」，与 seq = -1 同一口径。
+    // 传此刻的墙钟会让第一次记账的 `usage.at` 从「还没有上一份」(0) 变成一个假的具体时间，
+    // 而这一请求真正的交包时间由下面 `auditBridge.note()` 那次去重更新写进去。
+    if (pack) noteSnapshot(feedbackStore, sessionId, pack)
+    const result = ingestEvents(feedbackStore, sessionId, events, {
+      root,
+      stat: (rel) => mtimeOf(root, rel),
+    })
+    if (!result.ok) return 0
+    markBackfilled(feedbackStore, sessionId)
+    return result.reads
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * 打开某个会话的记账（面板的「使用情况」开关走它），并顺手回填已有历史。
+ *
+ * ⚠️ 回填**必须**发生在开闸之后、同一个 tick 里：开闸前的事件由回填补，
+ * 开闸后的事件走订阅，两者在 `seq` 上严丝合缝，不会漏也不会重。
+ *
+ * @param {string} sessionId - 会话 id
+ * @param {object} [session] - 宿主会话；省略则只开闸不回填
+ * @param {object|null} [pack] - 此刻手上的 Context Pack，交给回填当第一份快照
  * @returns {boolean} 是否成功
  */
-export function activateFeedback(sessionId) {
-  return activateAudit(feedbackStore, sessionId)
+export function activateFeedback(sessionId, session = null, pack = null) {
+  const ok = activateAudit(feedbackStore, sessionId)
+  if (ok) backfillFeedback(sessionId, session, pack)
+  return ok
 }
 
 /**
@@ -1124,23 +1242,46 @@ export function feedbackActive(sessionId) {
 }
 
 /**
- * 线路上的紧凑使用情况：面板只需要**计数**与最近一次变化，不需要 200 条明细。
+ * 线路上的紧凑使用情况：面板只需要**计数**、**四态生命周期**与最近一次变化，
+ * 不需要 200 条明细。
  * @param {object|null} usage - `usageFor()` 的结果
  * @param {number} [limit] - 明细最多带几条
+ * @param {Set<string>|null} [rels] - v0.17：本次真正要渲染的文档（当前页 ∪ 包外明细）；
+ *   省略/为 null 时不裁剪 lifecycle（测试与其它调用方兼容）
  * @returns {object|null} 紧凑视图
  */
-export function publicUsage(usage, limit = 20) {
+export function publicUsage(usage, limit = 20, rels = null) {
   if (!usage || !usage.stats) return null
+  const delta = usage.delta ? {
+    appeared: usage.delta.appeared.slice(0, limit),
+    disappeared: usage.delta.disappeared.slice(0, limit),
+    moved: usage.delta.moved.slice(0, limit),
+    taskChanged: !!usage.delta.taskChanged,
+  } : null
+
+  // v0.17：lifecycle 每个条目只带 UI 要用的三个字段（状态值仍是英文事实，
+  // 中文只在客户端词典里）。按 rels 裁剪是刻意的：只发真正会渲染的那些行。
+  const source = usage.lifecycle && typeof usage.lifecycle === 'object' ? usage.lifecycle : {}
+  const lifecycle = {}
+  for (const rel of Object.keys(source)) {
+    if (rels && !rels.has(rel)) continue
+    const row = source[rel]
+    if (!row) continue
+    lifecycle[rel] = { status: row.status, count: row.count, lastReadAt: row.lastReadAt }
+  }
+
   return {
     at: usage.at,
     epochId: usage.epochId,
     stats: { ...usage.stats, outsideReads: usage.stats.outsideReads.slice(0, limit) },
-    delta: usage.delta ? {
-      appeared: usage.delta.appeared.slice(0, limit),
-      disappeared: usage.delta.disappeared.slice(0, limit),
-      moved: usage.delta.moved.slice(0, limit),
-      taskChanged: !!usage.delta.taskChanged,
-    } : null,
+    delta,
+    // v0.17 新增（`latestDelta` 与 `delta` 同值：前者是 UI 唯一读的那个键）
+    latestDelta: delta,
+    recentRead: usage.recentRead ? { ...usage.recentRead } : null,
+    outsideDocs: (Array.isArray(usage.outsideDocs) ? usage.outsideDocs : [])
+      .slice(0, limit)
+      .map((row) => ({ ...row })),
+    lifecycle,
   }
 }
 
@@ -1153,10 +1294,11 @@ export function publicUsage(usage, limit = 20) {
  * 交包只是记一份快照（`seq` 用 store 自己的事件水位）。
  */
 const auditBridge = {
-  usage(sessionId) {
+  usage(sessionId, mtimes) {
     try {
       if (!sessionId) return null
-      return usageFor(feedbackStore, sessionId)
+      // mtimes：v0.17 的当前版本标记（rel → mtimeMs）。不传就是保守投影（拿不到变化证据）。
+      return usageFor(feedbackStore, sessionId, { mtimes })
     } catch {
       return null
     }
@@ -1174,7 +1316,10 @@ const auditBridge = {
       if (!sessionId || !pack) return null
       // 走到这里说明记账是**显式**的（面板带了 `usage=1`，或 agent 传了 `audit: true`
       // 且 `tool.js` 只在那一刻调 note）—— 所以在这里开闸是安全的。
+      // v0.17 修订：开闸的同时回填会话已有的事件，否则「读完才打开」的那些读
+      // 会被显示成「未读」——那是假话。
       activateAudit(feedbackStore, sessionId)
+      backfillFeedback(sessionId, sessionFor(sessionId), pack)
       // 不传 `seq`：noteSnapshot 用会话当前的**事件水位**，也就是「交这份包时
       // 已经发生到第几个事件」—— seq ≤ 它的读才算在这份包里。
       return noteSnapshot(feedbackStore, sessionId, pack, { at: Date.now() })
@@ -1196,6 +1341,8 @@ export function apply(ctx) {
   ctx.on('session/event', onSessionEvent, { global: true })
 
   ctx.inject(['webServer', 'sessions'], (webCtx) => {
+    // v0.17 修订：工具那条路（`knit_docs audit:true`）也要能回填，所以留一份引用。
+    sessionsRef = webCtx.sessions
     const handler = async (req, res) => {
       if (!isLoopback(req.socket?.remoteAddress)) {
         sendJson(res, 403, { ok: false, code: ERROR_CODES.loopbackOnly })
@@ -1224,12 +1371,32 @@ export function apply(ctx) {
           // ⚠️ 带上 `context` 是**可选**的（老客户端忽略它），而 `docs` 一字未动。
           body.context = await contextPayload(root, payload, sort, kind)
           // v0.15：面板把「使用情况」开关打开后，请求会带 `usage=1` —— 那一刻开始记账。
+          // v0.17 修订：开闸的同时**回填**这个会话已经发生的事件（闸门开晚时，
+          // 前面那些真实发生过的读不该被显示成「未读」——那是假话，见 `backfillFeedback`）。
           // ⚠️ 默认（不带这个参数且本会话从未打开过）**一个字节都不记**。
-          if (sessionId && url.searchParams.get('usage') === '1') activateFeedback(sessionId)
+          if (sessionId && url.searchParams.get('usage') === '1') {
+            // 交上此刻手上的包，回填才能把补记的读归到「我们已知最早的那份包」，而不是包外。
+            activateFeedback(sessionId, sessionOf(webCtx, sessionId), body.context)
+          }
           if (sessionId && feedbackActive(sessionId)) {
             // ⚠️ 顺序是刻意的：先取 usage（它报告的是**上一份**包之后发生了什么），
             // 再把这一份包记成新快照 —— 从下一次请求起，它才是「上一份」。
-            body.usage = publicUsage(auditBridge.usage(sessionId))
+            //
+            // v0.17：当前版本标记用**全量**扫描结果建立，不是被 limit 截断的这一页 ——
+            // 否则一篇被读过、但没落在当前页的文档拿不到当前 mtime，会永远停在「已读」。
+            const full = Array.isArray(payload.allDocs) && payload.allDocs.length > 0
+              ? payload.allDocs
+              : payload.docs
+            const mtimes = new Map(full.map((doc) => [doc.rel, doc.mtimeMs]))
+            const usage = auditBridge.usage(sessionId, mtimes)
+            // lifecycle 只发真正会渲染的那些行：当前页 ∪ 包外明细（后者的「已读 ×N」
+            // 也要显示，只按当前页裁剪会把它们的状态丢掉）。
+            const rels = new Set([
+              ...body.docs.map((doc) => doc.rel),
+              ...((usage && Array.isArray(usage.outsideDocs) ? usage.outsideDocs : [])
+                .map((row) => row.rel)),
+            ])
+            body.usage = publicUsage(usage, 20, rels)
             if (body.context) auditBridge.note(sessionId, body.context)
           }
           sendJson(res, 200, body)

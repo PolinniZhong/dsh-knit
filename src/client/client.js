@@ -65,6 +65,29 @@ window.__ModuleLoader__.load({
       'usage.changes': '上下文换过 {n} 次',
       'usage.note': '只统计本会话 · 数据在内核内存里，重启 DSH 就没了',
 
+      // ── v0.17 文档生命周期（Document Lifecycle）──────────────────
+      // ⚠️ 四态全是**事实**，不是评价：「读后已更新」只说「文件在最后一次成功读取之后
+      //    变过」，绝不许写成「Agent 还不知道最新版本」「Agent 用了旧版本」这类推断。
+      // ⚠️ 「最近读取」不是「正在阅读」—— Knit 证明不了 Agent 此刻是否还在读它。
+      // ⚠️ 「上下文外读取」只陈述「这篇不在当前包内、但被成功读过」，
+      //    不许写成「Knit 漏了 / 推荐错了 / 命中率低」。
+      'usage.recentRead': '最近读取：{rel} · {time}',
+      'usage.outsideDocs': '上下文外读取 · {n} 篇',
+      'usage.deltaTitle': '上下文刚刚变化',
+      'usage.deltaEnter': '进入',
+      'usage.deltaLeave': '离开',
+      'usage.deltaMove': '换层',
+      'usage.deltaTask': '任务上下文已更新',
+      'usage.deltaMore': '还有 {n} 条',
+      'lifecycle.unread': '未读',
+      'lifecycle.read': '已读',
+      'lifecycle.readCount': '已读 ×{n}',
+      'lifecycle.updatedAfterRead': '读后已更新',
+      'lifecycle.rereadAfterUpdate': '修改后已重新读取',
+      'tierName.primary': '主要',
+      'tierName.supporting': '辅助',
+      'tierName.related': '相关',
+
       // ── v0.14 当前任务上下文（Context Pack）──────────────────────
       // ⚠️ 文案纪律：不出现「AI / 智能 / 推荐 / 置信度 / 百分比」。
       // 这一层是确定性规则算出来的，说成 AI 就是在骗用户。也不能放表情符号
@@ -210,6 +233,29 @@ window.__ModuleLoader__.load({
       'usage.outside': '{n} outside the pack',
       'usage.changes': 'context changed {n}×',
       'usage.note': 'This session only · kept in kernel memory, gone after a DSH restart',
+
+      // ── v0.17 document lifecycle ───────────────────────────────
+      // ⚠️ All four states are facts, never judgements: "Updated after read" only says the
+      //    file changed after the last successful read. Never "the agent has not seen the
+      //    latest version" or "the agent used a stale copy" — that would be inference.
+      // ⚠️ "Recently read" is not "currently reading": Knit cannot prove the agent is
+      //    still reading it. An out-of-pack file is shown as-is, with no explanation.
+      'usage.recentRead': 'Recently read: {rel} · {time}',
+      'usage.outsideDocs': 'Read outside the pack · {n}',
+      'usage.deltaTitle': 'Context just changed',
+      'usage.deltaEnter': 'Entered',
+      'usage.deltaLeave': 'Left',
+      'usage.deltaMove': 'Moved tier',
+      'usage.deltaTask': 'Task context updated',
+      'usage.deltaMore': '+{n} more',
+      'lifecycle.unread': 'Unread',
+      'lifecycle.read': 'Read',
+      'lifecycle.readCount': 'Read ×{n}',
+      'lifecycle.updatedAfterRead': 'Updated after read',
+      'lifecycle.rereadAfterUpdate': 'Re-read after update',
+      'tierName.primary': 'Primary',
+      'tierName.supporting': 'Supporting',
+      'tierName.related': 'Related',
 
       // ── v0.14 current-task context (Context Pack) ──────────────
       // ⚠️ Never say "AI", "smart", "recommended", "confidence" or show percentages:
@@ -605,6 +651,24 @@ body[data-ds-dark-theme] .knit-root{
   color:var(--dsw-alias-label-caption,#80868b);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* v0.17 文档生命周期（Document Lifecycle）—— 三条新信息，都只是**事实**。
+   ⚠️ 状态是文字，不是徽章：不加底色、不加边框、不用红绿 —— 红绿会把「事实」读成
+   「好 / 坏」（PRD §7.3）。字号 10.5px，比 14px 的标题弱一档，永远不抢标题。
+   ⚠️ 折叠块沿用 .knit-usage 的弱化灰阶：它们是同一行事实的展开，不是新卡片。
+   ⚠️ 这一段**不含反引号**，整段可以直接放在 CSS 模板串里。 */
+.knit-life{flex:none;font-size:10.5px;line-height:1.4;white-space:nowrap;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-usage-more{margin-top:3px}
+.knit-more-btn{appearance:none;border:0;background:none;margin:0;padding:0;
+  font:inherit;line-height:inherit;color:var(--dsw-alias-label-secondary,#9aa0a6);cursor:pointer}
+.knit-more-btn:hover{color:var(--knit-accent)}
+.knit-more-btn:focus-visible{outline:1px solid var(--knit-accent);outline-offset:1px}
+.knit-gap-row,.knit-delta-row{display:flex;gap:6px;align-items:baseline;margin-top:2px;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-gap-rel,.knit-delta-rel{flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.knit-delta-head{margin-top:3px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+
 
 /* ── v0.14 右栏（Context Pack 面板）已整体删除（2026-09-29）────────
    用户裁定：Context Pack 是**数据层**结构（Primary / Supporting / Related），
@@ -688,6 +752,15 @@ body[data-ds-dark-theme] .knit-root{
    再加描边会与 .active 的整块背景重复，显得突兀。
    （曾经有一条 「.knit-multicol .knit-doc.cursor」 的中性环，是为多列网格补的 ——
    多列没了，那条也删了。） */
+/* ── 列表进出动效的**静态**部分（v0.17，2026-10-03 用户要求）───────────────
+   补间本身在 JS 里用 WAAPI 跑（见 client.js 的 DocRow 与 MOTION_* 那段）—— 高度要按
+   量出来的自然高度补间，CSS 的 @keyframes 做不到（height:auto 不可插值）。这里只管两件事：
+   ① .leaving ＝正在离开的幽灵行：不吃指针事件、内容裁掉；
+   ② 系统开了「减弱动态效果」时，连底色过渡一起去掉（进出本来就不播）。 */
+.knit-doc.leaving{pointer-events:none;user-select:none;overflow:hidden}
+@media (prefers-reduced-motion: reduce){
+  .knit-doc{transition:none}
+}
 /* 行一＝**标题行**：Primary 点 + 标题 + 相对时间（**时间靠右**）。
    2026-09-29 这一天里这一行改了三次：先是「序号 + 标题 + 时间」，然后
    「时间跟那个置顶的序号可以一行」（序号留下、标题移出去），再后来
@@ -1347,16 +1420,273 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       return `knit-opt-${safe}-${(hash >>> 0).toString(36)}`
     }
 
-    function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, onSelect, onOpenTab, optionId }) {
+    /* ── 列表进出动效（v0.17）─────────────────────────────────────────
+       用户原话（2026-10-03）：「文档列表，新读取跟挤掉旧的未读的，这里的交互可能要优化，
+       因为现在是一闪一闪的，就非常的快……如果说从当前的，如辅助上下文中新增，它应该是
+       从低向上的，有种交互动效飞上的感觉，然后消失的时候从上到下，就隐掉了」。
+
+       手感来自 `02_方案与 Demo/knit-list-motion-prototype.html`（用户点头的那一版）：
+       缓动 cubic-bezier(.22,1,.36,1)、进入 translateY(26px)→0 + 渐现 + blur(3px)→0、
+       离开高度收到 0 且**自上而下**擦掉。参数照抄原型，不要再另调。
+
+       ⚠️ 只碰**文档行**（`.knit-doc`）：媒体格子是网格布局，收起高度没有意义。
+       ⚠️ 补间用 WAAPI（`Element.animate`）手写，不用 @keyframes —— 高度要按量出来的
+       自然高度补间，而 CSS 里 `height:auto` 不可插值。
+       ⚠️ 行节点是按 key 复用的（`doc.path || doc.rel`），所以「闪」不是重挂 —— 是增删
+       瞬间落位、一点过渡都没有。因此动效分三件独立的事：**新来的行自己飞进来**、
+       **走了的行留一个幽灵行把高度收掉**（React 一删节点就没机会补间了）、
+       **活下来的行换了位置（换层 / 重排）走 FLIP** —— 量出新位置、先从老位置拉回来
+       再补间归位，逻辑也在 `KnitBody` 那次提交后的 layout effect 里（那里才有列表）。 */
+    const MOTION_ENTER_MS = 320
+    const MOTION_EXIT_MS = 260
+    const MOTION_STAGGER_MS = 45
+    const MOTION_STAGGER_MAX = 6
+    const MOTION_EASE = 'cubic-bezier(.22,1,.36,1)'
+    /** 幽灵行所在的「区」：分层视图用层名，平铺与「全部」各一个 —— 幽灵要插回原位。 */
+    const MOTION_TIER_FLAT = 'flat'
+    const MOTION_TIER_ALL_DOCS = 'all-docs'
+    /** 幸存行位移（换层 / 重排）的 FLIP 时长：比进入略长，它要真的「走」完一段距离。 */
+    const MOTION_MOVE_MS = 340
+    /** 位移小于这个像素数（含亚像素抖动）就当没动过，不排补间。 */
+    const MOTION_MOVE_EPS = 0.5
+
+    /**
+     * 这台机器上要不要播动效。
+     *
+     * 三种情况**不播**：没有 DOM（Node 里的测试替身）、浏览器/系统要求「减弱动态效果」、
+     * 以及不认 WAAPI 的宿主。返回假时一行补间都不排、也不留幽灵行 —— 渲染树与没有这段动效时逐字一致。
+     *
+     * @returns {boolean} 是否播动效
+     */
+    function motionAllowed() {
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') return false
+      if (typeof Element !== 'function' || typeof Element.prototype.animate !== 'function') return false
+      const view = typeof window === 'undefined' ? null : window
+      if (view && typeof view.matchMedia === 'function') {
+        try {
+          if (view.matchMedia('(prefers-reduced-motion: reduce)').matches) return false
+        } catch (err) { /* matchMedia 抛错就当用户没提要求 */ }
+      }
+      return true
+    }
+
+    /**
+     * 算这一帧哪些行是**新来的**、哪些行**走了**（纯函数，测试直接喂它）。
+     *
+     * 「走了」的行带回它上一帧的 `tierKey` / `index` —— 幽灵行要靠这两个值插回原来的位置，
+     * 不能一律塞到列表末尾（那样看起来是「这篇文档跳到了下面然后消失」）。
+     *
+     * ⚠️ 视图整体换掉时（换类型 / 换排序 / 搜索词变了）返回空：那是「换屏」，不是
+     * 「列表里多了一行」，整屏一起飞会很吵（原型里首屏也刻意不播）。
+     * ⚠️ 同一篇**换层**（rel 不变、tierKey 变了）既不算进入也不算离开 —— 这不是「不播」：
+     * 那一行交给 `KnitBody` 里的 FLIP（`motionShift` + 上一帧按 rel 记下的矩形）。跨分区时
+     * React 会重建节点，但位置是按 **rel** 记的，所以它照样能从老位置补间到新位置；
+     * 在这里把它当「进入」反而会让它先闪一下再飞，两段补间会互相打架。
+     *
+     * @param {{view: string, rows: object[]}|null} prev - 上一帧的快照（没提交过就是 null）
+     * @param {string} view - 本帧的视图签名
+     * @param {object[]} rows - 本帧的行表，顺序＝屏幕顺序
+     * @returns {{entered: Array<{rel: string, delay: number}>, left: object[]}} 新来的 / 走了的
+     */
+    function planRowMotion(prev, view, rows) {
+      const next = (Array.isArray(rows) ? rows : []).filter((row) => row && row.rel)
+      if (!prev || prev.view !== view) return { entered: [], left: [] }
+      const before = new Map((prev.rows || []).map((row) => [row.rel, row]))
+      const after = new Set(next.map((row) => row.rel))
+      const entered = []
+      let order = 0
+      for (const row of next) {
+        if (before.has(row.rel)) continue
+        entered.push({ rel: row.rel, delay: Math.min(order, MOTION_STAGGER_MAX) * MOTION_STAGGER_MS })
+        order += 1
+      }
+      return {
+        entered,
+        left: (prev.rows || []).filter((row) => row && row.rel && !after.has(row.rel)),
+      }
+    }
+
+    /**
+     * 幸存行这一帧**相对上一帧挪了多远**（FLIP 的第一步：算反方向的位移）。
+     *
+     * 纯函数：喂两个 `{left, top}` 位置（**布局坐标**，见 `rowLayoutPoint`），返回要「拉回来」的
+     * 位移；没得比或者没动过就返回 `null`。
+     *
+     * ⚠️ 阈值不是洁癖：`offsetTop` 也会给亚像素值，浏览器缩放导致的零点几像素抖动如果也排一段
+     * 补间，那一屏会一直有东西在微微地飘。
+     *
+     * @param {{left: number, top: number}|null} prev - 上一帧的位置（没记过就是 null）
+     * @param {{left: number, top: number}|null} now - 这一帧的位置
+     * @param {number} [threshold] - 小于它就算没动（默认 `MOTION_MOVE_EPS`）
+     * @returns {{dx: number, dy: number}|null} 位移（正数＝上一帧更靠右下，要往左上拉）
+     */
+    function motionShift(prev, now, threshold = MOTION_MOVE_EPS) {
+      if (!prev || !now) return null
+      const dx = prev.left - now.left
+      const dy = prev.top - now.top
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null
+      if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return null
+      return { dx, dy }
+    }
+
+    /**
+     * 一行在**列表自己的坐标系**里的位置 —— FLIP 量位置只能用这个。
+     *
+     * ⚠️ 不能拿 `getBoundingClientRect()` 当「位置」：它是**视口坐标**，于是三件与「谁换了位置」
+     * 毫无关系的机械动作都会让整屏的行凭空产生位移 ——
+     *   ① 容器滚动（含滚动位置被 clamp）；
+     *   ② 容器自己的高度 / 顶边变了（预览面板一开一合、头上那块「使用情况」长高一行）；
+     *   ③ 行上挂着 transform（`.knit-doc:hover{transform:translateX(-2px)}` 是死区 0.5px 的四倍）。
+     * 2026-10-04 交互审用户报的两件事都是它：「我一点它就跳……闪得很快」与「我没有输入任何对话，
+     * 文档列表就开始跳动」。`offsetTop/offsetLeft` 是**布局坐标**：不含滚动、不含 transform，
+     * 容器自己怎么变都不动它。节点拿不到 offset*（测试替身 / 已卸载）时才退回视口矩形，并减掉
+     * 容器那一块，好歹把滚动与容器位移去掉。
+     *
+     * @param {{getBoundingClientRect?: Function, scrollLeft?: number, scrollTop?: number}|null} host - 列表容器
+     * @param {object} el - 行节点
+     * @returns {{left: number, top: number}|null} 布局坐标；量不到就是 null
+     */
+    function rowLayoutPoint(host, el) {
+      if (!el) return null
+      if (Number.isFinite(el.offsetTop) && Number.isFinite(el.offsetLeft)) {
+        return { left: el.offsetLeft, top: el.offsetTop }
+      }
+      if (typeof el.getBoundingClientRect !== 'function') return null
+      const box = el.getBoundingClientRect()
+      if (!box) return null
+      const base = host && typeof host.getBoundingClientRect === 'function'
+        ? host.getBoundingClientRect()
+        : null
+      if (!base) return { left: box.left, top: box.top }
+      return {
+        left: box.left - base.left + (Number.isFinite(host.scrollLeft) ? host.scrollLeft : 0),
+        top: box.top - base.top + (Number.isFinite(host.scrollTop) ? host.scrollTop : 0),
+      }
+    }
+
+    /**
+     * 给这一帧**挪了位置**的幸存行排 FLIP，并返回这一帧的位置表留给下一帧。
+     *
+     * 换层（同一个 rel 从「包外」升进「Primary」）与区内重排都走这里。位置按 **rel** 记 ——
+     * 跨分区时 React 会重建节点，老节点量到的位置照样能用在新节点上。
+     *
+     * ⚠️ 调用点必须是**提交之后**、绘制之前的 layout effect，而且在 `DocRow` 的进 / 出补间
+     * **之后**（React 是子先父后）：那一刻新行已经是 0 高、幽灵行还占着原高度，所以这里
+     * 量到的位移就只剩「真的挪了位置」的行，不会和进 / 出补间算两遍。
+     * ⚠️ `skip` 里的行（正在进 / 出的）一个都不碰：它们有自己的补间；幽灵行连数据都没有。
+     * ⚠️ 只补 `transform`，不碰高度 —— 高度是进 / 出补间的事，两处都改会互相踩。
+     *
+     * @param {{querySelectorAll: Function}|null} host - 列表容器（`.knit-list`）
+     * @param {Map<string, {left: number, top: number}>} before - 上一帧的位置表（按 rel，布局坐标）
+     * @param {Set<string>} [skip] - 这一帧正在进 / 出的 rel
+     * @returns {Map<string, {left: number, top: number}>} 这一帧的位置表（按 rel，布局坐标）
+     */
+    function applyRowFlips(host, before, skip) {
+      const after = new Map()
+      const was = before instanceof Map ? before : new Map()
+      const nodes = host && typeof host.querySelectorAll === 'function'
+        ? host.querySelectorAll('.knit-doc[data-knit-rel]') : []
+      for (const el of nodes) {
+        const rel = el && typeof el.getAttribute === 'function' ? el.getAttribute('data-knit-rel') : null
+        if (!rel || (skip && skip.has(rel))) continue
+        const point = rowLayoutPoint(host, el)
+        if (!point) continue
+        const shift = motionShift(was.get(rel), point)
+        if (shift && typeof el.animate === 'function') {
+          const anim = el.animate([
+            { transform: `translate(${shift.dx}px, ${shift.dy}px)` },
+            { transform: 'translate(0px, 0px)' },
+          ], { duration: MOTION_MOVE_MS, easing: MOTION_EASE })
+          if (anim && anim.finished && typeof anim.finished.catch === 'function') anim.finished.catch(() => {})
+        }
+        after.set(rel, { left: point.left, top: point.top })
+      }
+      return after
+    }
+
+    /**
+     * 把要「离开」的行插回它们**原来的位置**（纯函数）。
+     *
+     * 位置是上一帧记下来的 `index` —— 不插回原位的话，看到的会是「这篇文档跳到了列表
+     * 末尾才消失」。数据里已经有同一篇时跳过：那一行还活着（比如它只是换了层），
+     * 不该在同一区里再多出一个幽灵。
+     *
+     * @param {object[]} docs - 这一区这一帧的数据
+     * @param {object[]} ghosts - 全部要离开的行（`{rel, doc, tierKey, index}`）
+     * @param {string} tierKey - 哪一个区（分层视图＝层名，平铺 / 「全部」各一个常量）
+     * @returns {object[]} 带幽灵行的新数组（这一区没幽灵时原样返回）
+     */
+    function mergeGhostRows(docs, ghosts, tierKey) {
+      const mine = []
+      for (const ghost of Array.isArray(ghosts) ? ghosts : []) {
+        if (ghost && ghost.tierKey === tierKey) mine.push(ghost)
+      }
+      if (mine.length === 0) return docs
+      mine.sort((a, b) => a.index - b.index)
+      const out = docs.slice()
+      for (const ghost of mine) {
+        if (out.some((doc) => doc.rel === ghost.rel)) continue
+        out.splice(Math.min(ghost.index, out.length), 0, { ...ghost.doc, knitLeaving: true })
+      }
+      return out
+    }
+
+    function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, life,
+      onSelect, onOpenTab, optionId, entering, leaving }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
+      const rowRef = React.useRef(null)
+
+      /* 进 / 出两段补间都跑在 **layout effect** 里：放到 paint 之后会先闪一帧完整高度的
+         行，那正是用户抱怨的那一下。没有 DOM 时 `motionAllowed()` 直接挡掉。 */
+      React.useLayoutEffect(() => {
+        if (!motionAllowed()) return
+        const el = rowRef.current
+        if (!el || typeof el.getBoundingClientRect !== 'function') return
+        const box = el.getBoundingClientRect()
+        const height = box && box.height > 0 ? box.height : 0
+        if (height <= 0) return
+        // 量的高度是 border-box，补间也得按 border-box 算，否则第一帧会把行撑高一个内边距。
+        el.style.boxSizing = 'border-box'
+        if (leaving) {
+          // 离开：高度收到 0，同时**自上而下**擦掉（clip-path 的 top 从 0 涨到 100%），
+          // 末尾补一点模糊 —— 与原型里那条 mask 擦除是同一个读法。
+          el.style.overflow = 'hidden'
+          const anim = el.animate([
+            { height: `${height}px`, clipPath: 'inset(0% 0 0 0)', opacity: 1, filter: 'blur(0px)' },
+            { height: `${height * 0.55}px`, clipPath: 'inset(45% 0 0 0)', opacity: 0.7, filter: 'blur(1px)', offset: 0.55 },
+            { height: '0px', clipPath: 'inset(100% 0 0 0)', opacity: 0, filter: 'blur(2px)' },
+          ], { duration: MOTION_EXIT_MS, easing: MOTION_EASE, fill: 'forwards' })
+          if (anim && anim.finished && typeof anim.finished.catch === 'function') anim.finished.catch(() => {})
+          return
+        }
+        if (entering === null || entering === undefined) return
+        // 进入：先把高度收成 0 再补间到自然高度 —— 下面的行是被**挤**下去的，不是跳下去的
+        // （原型里踩过的坑：不先量自然高度，插入瞬间会把下面那行蹬一下）。
+        el.style.overflow = 'hidden'
+        const anim = el.animate([
+          { height: '0px', transform: 'translateY(26px)', opacity: 0, filter: 'blur(3px)' },
+          { height: `${height}px`, transform: 'translateY(0)', opacity: 1, filter: 'blur(0px)' },
+        ], { duration: MOTION_ENTER_MS, delay: entering, easing: MOTION_EASE, fill: 'both' })
+        const done = anim && anim.finished
+        if (done && typeof done.then === 'function') {
+          done.then(() => { el.style.height = ''; el.style.overflow = '' }).catch(() => {})
+        } else {
+          el.style.height = ''
+          el.style.overflow = ''
+        }
+      })
 
       return h('div', {
-        className: `knit-doc${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
+        className: `knit-doc${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}${leaving ? ' leaving' : ''}`,
+        ref: rowRef,
         // listbox 的选项语义：有 role 才能被读成「N 项中的第 i 项」，
         // 有 aria-selected 才能播报「当前选中」。
         role: 'option',
         id: optionId,
         'aria-selected': active ? 'true' : 'false',
+        // 「正在离开」的幽灵行已经不在数据里了（点不动、键盘也到不了），
+        // 只是占着位置把高度收掉 —— 别让它被读成一项。
+        'aria-hidden': leaving ? 'true' : undefined,
         'data-knit-rel': doc.rel,
         title: t('row.tooltip', { path: doc.rel }),
         onClick: () => onSelect(doc),
@@ -1385,6 +1715,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           h('div', { className: 'knit-title' },
             fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
             doc.title || doc.name),
+          // v0.17：生命周期状态（文案已算好；没有证据时是 null，一个节点都不加）。
+          // 插在**标题与时间之间**：`.knit-title` 是 flex:1 1 auto，会把状态与时间一起推到
+          // 行尾，状态在时间左侧、行尾仍然是时间。
+          // ⚠️ 状态是**纯文字**：不加图标、不加底色、不加边框、不用红绿表达好坏 ——
+          //    它陈述事实，不是评分（AGENTS.md §6.2 / PRD §7.3）。字号比标题弱一档，
+          //    永远不抢标题。
+          life ? h('span', { className: 'knit-life' }, life) : null,
           // 时间在标题右边的行尾 —— 靠 .knit-title 的 flex-grow 推过去，不是靠 margin。
           h('div', { className: 'knit-time' }, relTime(doc.mtimeMs, now))),
         doc.summary
@@ -1581,7 +1918,15 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       return h('div', {
         className: 'knit-preview',
-        style: fullscreen ? undefined : { maxHeight: `${Math.round(ratio * 100)}%` },
+        /* ⚠️ 高度**打开期间是固定的**（= 拖出来的那个比例），不是 `maxHeight`（2026-10-04 交互审）。
+           原来是 `maxHeight: 46%` ⇒ 面板高度由**内容**决定，于是：
+             ① 点一篇 → 先出「加载中」（一两行高），正文到了再窜到 46% ⇒ 列表跟着一伸一缩；
+             ② 在预览里点「相关文档」换一篇 ⇒ 正文长短变了 ⇒ 列表又跟着一伸一缩。
+           用户的原话是「我选中一个文档查看全文……我一点它就跳，我一点它就很跳，闪的很快」。
+           固定高度之后这两次几何变化一次都不发生：加载中 / 换篇都不再改动列表的高度，
+           长文照样在 `.knit-preview-body` 里滚（它本来就是 `overflow-y:auto`）。
+           短文档会因此下方留白 —— 这是拿「点一下不跳」换来的，别再改回 maxHeight。 */
+        style: fullscreen ? undefined : { height: `${Math.round(ratio * 100)}%` },
       },
         fullscreen ? null : h('div', { className: 'knit-resize', onPointerDown: onResizeStart, title: t('preview.resizeTitle') }),
         h('div', { className: 'knit-preview-head' },
@@ -1673,6 +2018,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       // v0.15「使用情况」的开闸状态（默认关，见 `USAGE_KEY`）。放在最后 —— 前几个 hook
       // 的顺序被测试按位预置，别插队。
       const [usageOn, setUsageOn] = React.useState(readUsagePref)
+
+      // v0.17：两个折叠块的开合状态（上下文外读取 / 最近一次变化）。
+      // **纯瞬时 UI 状态** —— 不写 pref、不进 `dsh-knit:*` 存储，刷新即回默认（收起）。
+      // 仍然放在最后：前面那些 hook 的位置被测试按位预置，别插队。
+      const [gapOpen, setGapOpen] = React.useState(false)
+      const [deltaOpen, setDeltaOpen] = React.useState(false)
 
       /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
          `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
@@ -1793,12 +2144,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * 时间序、筛选结果、「其他相关文档」都不编号 —— 但**这一屏里有号时**，没号的行会在
        * 同一列拿到 `mark`（渲染 `.knit-gapmark` 占位），算法见下面。
        */
-      const docsGrid = (docs, numbers, primary) => {
+      const docsGrid = (docs, numbers, primary, withLife) => {
         // 一屏里「要么都有号、要么都没有」（2026-10-01）：只要这个视图里存在序号，
         // 没号的那些行（「其他相关文档」）就在同一列渲染占位标记；整屏没号时不渲染。
         const mark = Boolean(numbers && numbers.size > 0)
         return docs.map((doc) =>
-          renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary), mark))
+          renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary), mark, withLife))
       }
 
       const relevance = state.mode === 'relevance'
@@ -1827,7 +2178,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       h('div', { className: 'knit-tierline', role: 'presentation' },
         h('span', { className: 'knit-tiername' }, t(section.titleKey)),
         section.hintKey ? h('span', { className: 'knit-tierhint' }, t(section.hintKey)) : null),
-      docsGrid(section.docs, view.numbers, section.key === 'primary')))
+      // ⚠️ 幽灵行（正在离开的）也走 `docsGrid`，所以它照样是一个 `.knit-doc` ——
+      // 会被 `byClass` 数到，但**不在** `navDocs` 里（键盘与 cursor 都到不了）。
+      docsGrid(withGhosts(section.key, section.docs), view.numbers, section.key === 'primary', true)))
 
       /* ── 曾经在这里的一个函数：`contextPanel` ─────────────────
          它渲染右栏那三样东西（当前任务原文 / 「命中 N 篇」/ 三条证据行）。
@@ -1912,15 +2265,23 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         if (!navDocs.some((doc) => doc.rel === cursor)) setCursor(navDocs[0].rel)
       }, [navDocs, cursor])
 
-      // 键盘焦点跟手滚进视口（测试环境没有 DOM，静默跳过）
+      /* 键盘焦点跟手滚进视口（测试环境没有 DOM，静默跳过）。
+         ⚠️ 2026-10-04（交互审的那个 bug）：这里曾经把 `state.docs` 也放进依赖里，而那是**每 5 秒
+         轮询一次的新数组** —— 于是「刷新到了新数据」被当成了「用户按了方向键」。光标默认落在第一行，
+         用户往下滚过之后那一行必然不在视口里 ⇒ 列表每 5 秒被拽回第一行一次，用户的原话是
+         「我没有输入任何的对话……文档列表就开始跳动」。滚动**只在光标真的换了**（或搜索词变了）时发生，
+         而且只在列表拿着键盘焦点时发生 —— 这条服务的是键盘导航；鼠标点过 / 悬停过的行本来就在视口里，
+         而「数据刷新」一次都不该动列表。 */
       React.useEffect(() => {
         if (!cursor || typeof document === 'undefined') return
         const host = listRef.current
         if (!host || typeof host.querySelector !== 'function') return
+        const active = document.activeElement
+        if (active !== host && !(active && host.contains && host.contains(active))) return
         const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(cursor) : cursor
         const el = host.querySelector(`[data-knit-rel="${escaped}"]`)
         if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
-      }, [cursor, query, state.docs])
+      }, [cursor, query])
 
       // 预览高度：拖完就记住
       React.useEffect(() => { writePref(RATIO_KEY, String(ratio)) }, [ratio])
@@ -2177,8 +2538,150 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
 
 
-      /** 渲染一个条目：媒体一律出方形卡片（媒体视图与「全部」的媒体区共用），其余出文档行。 */
-      const renderEntry = (doc, num, primary, mark) => {
+      /**
+       * v0.17：这一篇当前的**事实状态**，文案已按语言算好（没有证据时是 null）。
+       *
+       * ⚠️ 只有「使用情况」开着、并且宿主真的回传了 `usage` 时才有文案 —— 关掉时
+       *    一个状态节点都不渲染，DOM 与 v0.16 逐字一致。
+       * ⚠️ `lifecycle` 里没有这篇 = 本会话没有一次成功 read ⇒ 未读。这是事实陈述，
+       *    不是「你漏了它」的提醒，更不许写成「Agent 忽略了它」（PRD §8）。
+       * ⚠️ 状态值本身是英文（数据层只有一个口径），中文只存在于词典（§15.4 / §24）。
+       *
+       * @param {string} rel - 相对路径
+       * @returns {string|null} 状态文案
+       */
+      const lifecycleLabel = (rel) => {
+        if (!usageOn) return null
+        const usageNow = state.usage
+        if (!usageNow || !usageNow.stats) return null
+        const row = usageNow.lifecycle && usageNow.lifecycle[rel]
+        const status = row ? row.status : 'unread'
+        if (status === 'unread') return t('lifecycle.unread')
+        if (status === 'read') {
+          return row && row.count >= 2 ? t('lifecycle.readCount', { n: row.count }) : t('lifecycle.read')
+        }
+        if (status === 'updated_after_read') return t('lifecycle.updatedAfterRead')
+        if (status === 'reread_after_update') return t('lifecycle.rereadAfterUpdate')
+        return null
+      }
+
+      /* ── 列表进出动效：这一帧谁新来了、谁走了 ─────────────────────────
+         （参数与手感见模块级 `planRowMotion` / `MOTION_*` 那段注释。）
+
+         ⚠️ 渲染期**只读** `motionRef`，落盘与计时器都在下面的 layout effect 里 ——
+         并发渲染下这一帧可能根本没提交，渲染里写 ref 会把幽灵行记进一个被丢掉的帧。 */
+      const motionRef = React.useRef({
+        committed: null,
+        ghosts: new Map(),
+        timers: new Map(),
+        positions: new Map(),
+        // 位置表是在**哪一屏**量下来的（视图签名）。换屏时必须整表作废：见下面 settled 那条。
+        view: '',
+        // 进 / 出补间还在飞的截止时刻（毫秒时间戳）。那段时间里行高是中间态，量不得。
+        tweenUntil: 0,
+      })
+      const [, setMotionSeq] = React.useState(0)
+      const motionOn = motionAllowed()
+      // 视图签名：换类型 / 换排序 / 搜索词变了都算「换屏」——整屏一起飞会很吵。
+      const motionView = `${kind}|${state.mode}|${query.trim()}`
+      // 只列**真会渲染成 .knit-doc 的行**，顺序＝屏幕顺序（幽灵行要按这个位置插回去）。
+      const motionRows = (() => {
+        if (state.status === 'error' || state.docs.length === 0 || visibleDocs.length === 0) return []
+        if (kind === KIND_MEDIA) return []   // 媒体格子不参与：网格里收起高度没有意义
+        if (kind === KIND_ALL) {
+          if (docItems.length === 0) return []
+          return shownDocs.map((doc, index) => (
+            { rel: doc.rel, tierKey: MOTION_TIER_ALL_DOCS, index, doc }))
+        }
+        if (contextView) {
+          const rows = []
+          for (const section of contextView.sections) {
+            section.docs.forEach((doc, index) => rows.push(
+              { rel: doc.rel, tierKey: section.key, index, doc }))
+          }
+          return rows
+        }
+        return visibleDocs.map((doc, index) => (
+          { rel: doc.rel, tierKey: MOTION_TIER_FLAT, index, doc }))
+      })()
+      const motion = (() => {
+        const live = new Set(motionRows.map((row) => row.rel))
+        const plan = motionOn
+          ? planRowMotion(motionRef.current.committed, motionView, motionRows)
+          : { entered: [], left: [] }
+        const ghosts = new Map()
+        if (motionOn) {
+          // 上一帧留下的幽灵，这一帧还不在数据里 ⇒ 继续收着（同一篇回来了就撤掉）。
+          for (const [rel, ghost] of motionRef.current.ghosts) if (!live.has(rel)) ghosts.set(rel, ghost)
+          for (const row of plan.left) {
+            if (ghosts.has(row.rel)) continue
+            ghosts.set(row.rel, { rel: row.rel, doc: row.doc, tierKey: row.tierKey, index: row.index })
+          }
+        }
+        return { entered: new Map(plan.entered.map((row) => [row.rel, row.delay])), ghosts, live }
+      })()
+      React.useLayoutEffect(() => {
+        const store = motionRef.current
+        store.committed = motionOn && motionRows.length > 0 ? { view: motionView, rows: motionRows } : null
+        store.ghosts = motion.ghosts
+        for (const [rel, timer] of store.timers) {
+          if (motion.ghosts.has(rel)) continue
+          clearTimeout(timer)
+          store.timers.delete(rel)
+        }
+        for (const rel of motion.ghosts.keys()) {
+          if (store.timers.has(rel)) continue
+          // 补间跑完（外加一点交错余量）就把幽灵行摘掉 —— 摘的时候高度已经是 0，
+          // 所以下面的行不会再跳一下。
+          const timer = setTimeout(() => {
+            store.timers.delete(rel)
+            if (!store.ghosts.has(rel)) return
+            const next = new Map(store.ghosts)
+            next.delete(rel)
+            store.ghosts = next
+            setMotionSeq((n) => n + 1)
+          }, MOTION_EXIT_MS + MOTION_STAGGER_MS)
+          store.timers.set(rel, timer)
+        }
+        /* ── 活下来的行换了位置：FLIP（算法在模块级 `applyRowFlips`）────
+           正在进 / 出的行不参与：它们有自己的补间（幽灵行连数据都没有，别去量）。
+
+           ⚠️ 另外两种时候**一个都不量**（2026-10-04 交互审那两个 bug 的正主）：
+           ① **换屏**（视图签名变了）：那是「整屏换了一批内容」，不是「列表里有人挪了位置」。
+              `planRowMotion` 对换屏就是不播，FLIP 却会照两张布局的差把每一行都补一遍 ——
+              换排序 / 第一次拿到数据 / 搜索词一变，整屏一起飞。
+           ② **进 / 出补间还在飞**：那几百毫秒里行高在 0 与自然高之间，量到的全是中间态。
+              拿中间态当基准，等补间落地后下一帧就把这段位移当成「有人挪了位置」再补一遍 ——
+              一屏就这么飘起来（而且会一直飘：每次进 / 出都留下一个错基准）。
+           两种时候都把位置表**清空**（不是照记）：清空等于「没有上一帧可比」，下一帧只会安静
+           落位、不补间；等落地后再量一帧，基准就又是干净的了。 */
+        const tweening = store.tweenUntil > Date.now()
+        if (motion.entered.size > 0 || motion.ghosts.size > 0) {
+          // 取较长的那一套（进入 + 一点交错余量），离开比它短，等它一定够了。
+          store.tweenUntil = Date.now() + MOTION_ENTER_MS + MOTION_STAGGER_MS
+        }
+        const skip = new Set([...motion.entered.keys(), ...motion.ghosts.keys()])
+        const settled = motionOn
+          && motionRows.length > 0
+          && !tweening
+          && motion.entered.size === 0
+          && motion.ghosts.size === 0
+          && store.view === motionView
+        store.positions = settled ? applyRowFlips(listRef.current, store.positions, skip) : new Map()
+        store.view = motionView
+      })
+      React.useEffect(() => () => {
+        for (const timer of motionRef.current.timers.values()) clearTimeout(timer)
+        motionRef.current.timers.clear()
+      }, [])
+      /** 把这一帧要「离开」的行按原位插回去（只在真机上会非空，逻辑在 `mergeGhostRows`）。 */
+      const withGhosts = (tierKey, docs) =>
+        mergeGhostRows(docs, [...motion.ghosts.values()], tierKey)
+
+      /** 渲染一个条目：媒体一律出方形卡片（媒体视图与「全部」的媒体区共用），其余出文档行。
+       *  `withLife` 只有**分层视图**（Context Pack 三层 + 其他相关文档）才给真 —— 时间序、
+       *  筛选结果、「全部」都不显示生命周期：那一屏说的不是「这个包里的文档现在什么状态」。 */
+      const renderEntry = (doc, num, primary, mark, withLife) => {
         const common = {
           key: doc.path || doc.rel,
           doc,
@@ -2194,7 +2697,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // 于是返回空串，那一行不渲染。
         // `num` / `primary` 只有分层视图会传（Design §11 / §13）；平铺列表照旧无序号。
         // `mark`＝没号时同列的占位标记，只在「这一屏里有号」时为真。
-        return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary })
+        // 进出动效只在真机上跑（`motionOn`）：测试替身没有 DOM，`motionAllowed()` 挡掉，
+        // 于是渲染树里既没有 `entering` 也没有 `leaving`，与没有这段动效时逐字一致。
+        return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary,
+          life: withLife ? lifecycleLabel(doc.rel) : null,
+          entering: motion.entered.has(doc.rel) ? motion.entered.get(doc.rel) : null,
+          leaving: Boolean(doc.knitLeaving) })
       }
 
       /** 「全部」的分区标题：类型名 + 「已显示 / 总数」+ 被截断时的「查看全部」。 */
@@ -2216,7 +2724,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const allSections = [
         docItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'docs' },
           sectionHead('kind.doc', shownDocs.length, docItems.length, KIND_DOC),
-          docsGrid(shownDocs)),
+          docsGrid(withGhosts(MOTION_TIER_ALL_DOCS, shownDocs))),
         mediaItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'media' },
           // 媒体不截断，所以只给一个标题，不给「已显示 / 总数」和「查看全部」
           h('div', { className: 'knit-section-head' },
@@ -2242,7 +2750,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                   ? allSections
                   : contextView
                     ? contextBody(contextView)
-                    : docsGrid(visibleDocs)
+                    : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs))
 
       // 排序说明那一行（.knit-topic）**2026-09-30 已整体删除**：排序方式由头部那个
       // 「相关 / 最新」切换按钮自己表达（按钮上就写着当前选的是哪个），再补一句
@@ -2275,6 +2783,92 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         if (s.churn && s.churn.snapshots) parts.push(t('usage.changes', { n: s.churn.snapshots }))
         return parts.join(' · ')
       })()
+
+      /* v0.17：三条新事实 —— 全部只在「使用情况」开着、且宿主真的回传了 `usage` 时出现。
+         ① 最近读取（按事件 seq 认「谁是最近一次」，墙钟只用来算相对时间）
+         ② 上下文外读取的明细（当前包外、但真实成功读过）
+         ③ 最近**一次** Context Delta
+         ⚠️ 关掉使用情况时**一个节点都不加**：DOM 与 v0.16 逐字一致。
+         ⚠️ 这里没有时间线、没有全量事件、没有评分 —— 「最近一次」就只有一条。 */
+      const usageFacts = usageOn && state.usage && state.usage.stats ? state.usage : null
+
+      const recentReadNode = usageFacts && usageFacts.recentRead && usageFacts.recentRead.rel
+        ? h('div', { className: 'knit-usage-more' },
+          t('usage.recentRead', {
+            rel: usageFacts.recentRead.rel,
+            time: relTime(usageFacts.recentRead.at, tick),
+          }))
+        : null
+
+      const outsideList = usageFacts && Array.isArray(usageFacts.outsideDocs) ? usageFacts.outsideDocs : []
+      const gapNode = outsideList.length > 0
+        ? h('div', { className: 'knit-usage-more', key: 'gap' },
+          h('button', {
+            className: 'knit-more-btn',
+            type: 'button',
+            'aria-expanded': gapOpen ? 'true' : 'false',
+            onClick: () => setGapOpen((value) => !value),
+          }, t('usage.outsideDocs', { n: outsideList.length })),
+          gapOpen ? h('div', { className: 'knit-gap-list' },
+            outsideList.slice(0, 10).map((row) => h('div', { className: 'knit-gap-row', key: row.rel },
+              h('span', { className: 'knit-gap-rel', title: row.rel }, row.rel),
+              h('span', { className: 'knit-life' }, lifecycleLabel(row.rel))))) : null)
+        : null
+
+      // 层级的**短名**：分组标题那套长文案（主要上下文 / 辅助上下文 / 相关上下文）在变化行里太长。
+      const tierShort = (key) => {
+        if (key === 'primary') return t('tierName.primary')
+        if (key === 'supporting') return t('tierName.supporting')
+        if (key === 'related') return t('tierName.related')
+        return ''
+      }
+      const delta = usageFacts && usageFacts.latestDelta ? usageFacts.latestDelta : null
+      const deltaLine = (text, key) => h('div', { className: 'knit-delta-row', key },
+        h('span', { className: 'knit-delta-rel' }, text))
+      // 摘要行的符号只用 `+` `-` `↔` 三个通用符号，不用颜色区分「进 / 出」。
+      const deltaDigest = []
+      if (delta) {
+        for (const item of (Array.isArray(delta.appeared) ? delta.appeared : [])) {
+          deltaDigest.push({ key: `plus-${item.rel}`, text: `+ ${item.rel}` })
+        }
+        for (const item of (Array.isArray(delta.disappeared) ? delta.disappeared : [])) {
+          deltaDigest.push({ key: `minus-${item.rel}`, text: `- ${item.rel}` })
+        }
+        for (const item of (Array.isArray(delta.moved) ? delta.moved : [])) {
+          deltaDigest.push({
+            key: `move-${item.rel}`,
+            text: `↔ ${item.rel} · ${tierShort(item.from)} → ${tierShort(item.to)}`,
+          })
+        }
+        if (delta.taskChanged) deltaDigest.push({ key: 'task', text: t('usage.deltaTask') })
+      }
+      const deltaGroups = delta ? [
+        { key: 'enter', label: t('usage.deltaEnter'), rows: deltaDigest.filter((line) => line.key.startsWith('plus-')) },
+        { key: 'leave', label: t('usage.deltaLeave'), rows: deltaDigest.filter((line) => line.key.startsWith('minus-')) },
+        { key: 'move', label: t('usage.deltaMove'), rows: deltaDigest.filter((line) => line.key.startsWith('move-')) },
+      ] : []
+      const deltaNode = delta
+        ? h('div', { className: 'knit-usage-more', key: 'delta' },
+          h('button', {
+            className: 'knit-more-btn',
+            type: 'button',
+            'aria-expanded': deltaOpen ? 'true' : 'false',
+            onClick: () => setDeltaOpen((value) => !value),
+          }, t('usage.deltaTitle')),
+          deltaDigest.slice(0, 3).map((line) => deltaLine(line.text, line.key)),
+          deltaDigest.length > 3
+            ? deltaLine(t('usage.deltaMore', { n: deltaDigest.length - 3 }), 'more')
+            : null,
+          deltaOpen ? deltaGroups
+            .filter((group) => group.rows.length > 0)
+            .map((group) => [
+              h('div', { className: 'knit-delta-head', key: `${group.key}-head` }, group.label),
+              ...group.rows.slice(0, 5).map((line) => deltaLine(line.text, `${group.key}-${line.key}`)),
+              group.rows.length > 5
+                ? deltaLine(t('usage.deltaMore', { n: group.rows.length - 5 }), `${group.key}-more`)
+                : null,
+            ]) : null)
+        : null
 
       // 不同类型用不同量词：文档「篇」、媒体「个」、混排「项」。
       const countKey = kind === KIND_MEDIA
@@ -2345,7 +2939,12 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: () => pickKind(value),
           }, t(labelKey)))),
       // v0.15：开了才显示。一行事实，没有卡片、没有分数条。
-      usageOn ? h('div', { className: 'knit-usage', title: t('usage.note') }, usageText || t('usage.none')) : null,
+      // v0.17：这一行下面最多再加三块 —— 最近读取、上下文外读取（折叠）、最近一次变化（折叠）。
+      usageOn ? h('div', { className: 'knit-usage', title: t('usage.note') },
+        usageText || t('usage.none'),
+        recentReadNode,
+        gapNode,
+        deltaNode) : null,
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——

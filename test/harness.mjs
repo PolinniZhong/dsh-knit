@@ -64,7 +64,10 @@ export function loadClientModule(options = {}) {
         + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, splitRelPath, '
         + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, openLocalPath, '
         + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
-        + 'nextIndexFor, docOptionId, '
+        + 'nextIndexFor, docOptionId, planRowMotion, mergeGhostRows, motionAllowed, motionShift, '
+        + 'rowLayoutPoint, applyRowFlips, '
+        + 'MOTION_ENTER_MS, MOTION_EXIT_MS, MOTION_STAGGER_MS, MOTION_STAGGER_MAX, MOTION_EASE, '
+        + 'MOTION_MOVE_MS, MOTION_MOVE_EPS, '
         // ⚠️ 右栏那套名字（clampPackW / clampFloatPos / nearRightEdge / PACK_*）已随
         // 右栏一起删除（2026-09-29）。名字留在这里，模块一加载就 ReferenceError ——
         // 这个替身是**只增不减**的重灾区，删功能时记得同步删名字。
@@ -115,6 +118,9 @@ export function createHarness() {
     },
     useCallback: (fn) => fn,
     useEffect: (fn) => { pendingEffects.push(fn) },
+    // 真实 React 里 layout effect 跑在 DOM 变更之后、paint 之前。替身没有 DOM，排进同一队
+    // 即可 —— 客户端那两段进出动效在 Node 里被 `motionAllowed()` 挡掉，不会真的碰节点。
+    useLayoutEffect: (fn) => { pendingEffects.push(fn) },
     // 测试里不做记忆化：每次渲染重算即可，行为与真实 useMemo 等价
     useMemo: (fn) => fn(),
     // 真实 useRef 跨渲染稳定（与 useState 共用槽位空间，同 React）

@@ -2175,3 +2175,604 @@ test('可见性：官方座位把契约的 `tab.visible` 一路传到 KnitBody',
   assert.equal(listCalls(calls).length, 1, '拿不到 visible 时要照旧取数')
 })
 
+/* ── v0.17 文档生命周期 ───────────────────────────────────────────────
+   五条纪律一起守：
+   ① 文档行只多**一个弱化文字**（未读 / 已读 ×N / 读后已更新 / 修改后已重新读取）——
+      不抢标题、不加图标、不加颜色、不评分；
+   ② 「最近读取」是**事实**（最近一次成功 read 的文件），不是「正在阅读」；
+   ③ 上下文外读取默认折叠，展开才逐篇列出，且**只陈述**「不在包里但读过」；
+   ④ 只展示**最近一次** Context Delta，符号只有 `+` / `-` / `↔`，绝不生成时间线；
+   ⑤ 以上一切只在「使用情况」打开时出现 —— 关着时 DOM 与 v0.16 逐字一致。 */
+
+/** 取节点直接子节点里 className **整段**匹配的那些。
+ *  扁平节点列表里裸看 `.children` 会把兄弟行的节点也算进来，所以按父节点取。 */
+function kidsOf(node, className) {
+  return (node.children || []).filter((n) => n && n.props && String(n.props.className || '') === className)
+}
+
+/**
+ * 一份带 v0.17 生命周期投影的载荷：四种状态各来一篇，外加包外两篇。
+ * 每篇文档在行里的期望文案见 `LIFE_EXPECTED`。
+ */
+function lifecyclePayload(overrides = {}) {
+  const delta = overrides.delta || {
+    appeared: [{ rel: 'docs/algo.md', tier: 'primary', rank: 1 }],
+    disappeared: [{ rel: 'README.md', tier: 'related', rank: 4 }],
+    moved: [{ rel: 'docs/eval.md', from: 'supporting', to: 'related' }],
+    taskChanged: false,
+  }
+  return contextPayload({
+    usage: {
+      at: 1_700_000_000_000,
+      epochId: 4,
+      stats: {
+        reads: 7,
+        distinct: 3,
+        outside: 2,
+        outsideReads: ['docs/old-plan.md', 'docs/test-case.md'],
+        firstReadTier: 'primary',
+        firstReadRel: 'docs/algo.md',
+        firstReadAt: 1,
+        primaryRel: 'docs/algo.md',
+        primaryFollowThrough: true,
+        byTier: {
+          primary: { total: 1, read: 1 },
+          supporting: { total: 2, read: 1 },
+          related: { total: 1, read: 0 },
+        },
+        supportingCoverage: 0.5,
+        churn: { snapshots: 2, deltas: 2, retained: 2, appeared: 1, disappeared: 1, moved: 1, taskChanged: 0 },
+      },
+      delta,
+      latestDelta: delta,
+      recentRead: {
+        rel: 'docs/eval.md',
+        at: Date.now() - 12 * 60_000,
+        seq: 42,
+        epochId: 4,
+        tier: 'supporting',
+        rank: 2,
+        inside: true,
+      },
+      outsideDocs: [
+        { rel: 'docs/old-plan.md', count: 3, lastReadAt: 1, seq: 10 },
+        { rel: 'docs/test-case.md', count: 1, lastReadAt: 2, seq: 20 },
+      ],
+      lifecycle: {
+        'docs/algo.md': { status: 'read', count: 3, lastReadAt: 1 },
+        'docs/eval.md': { status: 'reread_after_update', count: 2, lastReadAt: 2 },
+        'CHANGELOG.md': { status: 'updated_after_read', count: 1, lastReadAt: 3 },
+        'README.md': { status: 'unread', count: 0, lastReadAt: 0 },
+        'docs/old-plan.md': { status: 'read', count: 3, lastReadAt: 4 },
+        'docs/test-case.md': { status: 'read', count: 1, lastReadAt: 5 },
+      },
+    },
+  })
+}
+
+/** 分层视图里五行文档各自该显示的状态文字（顺序 = 屏幕顺序）。 */
+const LIFE_EXPECTED = ['已读 ×3', '修改后已重新读取', '读后已更新', '未读', '未读']
+
+/**
+ * 挂上面板并**打开「使用情况」**（数据到位后再点，与真实用法一致）。
+ * @param {object} payload - 宿主载荷
+ * @returns {Promise<{nodes:object[], render:Function, calls:string[]}>} 节点与重渲染
+ */
+async function mountUsage(payload) {
+  const { calls } = installFetch(() => payload)
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  const toggle = byExactClass(nodes, 'knit-btn').find((node) => textOf(node) === '使用情况')
+  assert.ok(toggle, '头部必须有「使用情况」按钮')
+  toggle.props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  return { nodes: render(), render, calls }
+}
+
+test('v0.17 生命周期：使用情况关着 —— 一个状态节点都不出现', async () => {
+  const { calls } = installFetch(() => lifecyclePayload())
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  render()
+  await harness.flush()
+  const nodes = render()
+
+  assert.ok(!calls.some((url) => url.includes('usage=1')), '关着就不该开闸')
+  assert.equal(byExactClass(nodes, 'knit-life').length, 0, '关着不许有状态文字')
+  assert.equal(byExactClass(nodes, 'knit-usage-more').length, 0, '关着不许有折叠区')
+  assert.equal(byExactClass(nodes, 'knit-more-btn').length, 0, '关着不许有展开按钮')
+  const rowText = byExactClass(nodes, 'knit-row1').map(textOf).join(' ')
+  assert.ok(!/未读|已读|读后已更新|修改后已重新读取/.test(rowText), '关着时行里只有标题与时间')
+})
+
+test('v0.17 生命周期：四种状态都落在文档行里，且只是一个弱化文字', async () => {
+  const { nodes } = await mountUsage(lifecyclePayload())
+
+  const lives = byExactClass(nodes, 'knit-life')
+  assert.deepEqual(lives.map(textOf), LIFE_EXPECTED, '四档事实状态按屏幕顺序逐行显示')
+  // 状态是**弱化辅助信息**：没有图标、没有 aria、没有颜色、没有百分比
+  for (const node of lives) {
+    assert.deepEqual(Object.keys(node.props).sort(), ['className'], '状态只是一个 span')
+  }
+  const allText = textOf(byExactClass(nodes, 'knit-usage')[0])
+  assert.ok(!allText.includes('%'), '不许有百分比')
+  assert.ok(!/评分|置信|分数|质量|命中率|漏召回/.test(allText), '不许把事实写成评分')
+})
+
+test('v0.17 生命周期：状态插在标题与时间之间，行结构不变', async () => {
+  const { nodes } = await mountUsage(lifecyclePayload())
+
+  const rows = byExactClass(nodes, 'knit-row1')
+  assert.equal(rows.length, 5, '五行文档各一条 row1')
+  for (const row of rows) {
+    assert.equal(kidsOf(row, 'knit-title').length, 1, '一行只有一个标题')
+    assert.equal(kidsOf(row, 'knit-time').length, 1, '一行只有一个时间')
+    assert.equal(kidsOf(row, 'knit-life').length, 1, '一行只有一个状态文字')
+    const order = row.children.map((n) => String(n.props.className || ''))
+    assert.ok(
+      order.indexOf('knit-title') < order.indexOf('knit-life')
+        && order.indexOf('knit-life') < order.indexOf('knit-time'),
+      `状态必须在标题与时间之间：${order.join(' / ')}`,
+    )
+  }
+  // 每行的前两个直接子节点仍然是「号 / 占位符 + 正文」（v0.15 起就钉住的形状）
+  for (const doc of byClass(nodes, 'knit-doc')) {
+    const classes = doc.children.map((n) => String(n.props.className || ''))
+    assert.ok(
+      classes[0] === 'knit-num' || classes[0] === 'knit-gapmark',
+      `行首必须是号或占位符：${classes.join(' / ')}`,
+    )
+    assert.equal(classes[1], 'knit-body', '第二个直接子节点必须是正文')
+  }
+})
+
+test('v0.17 最近读取：如实说「最近读取：谁 · 多久前」，不说「正在阅读」', async () => {
+  const { nodes } = await mountUsage(lifecyclePayload())
+
+  const line = byExactClass(nodes, 'knit-usage')[0]
+  const text = textOf(line)
+  assert.match(text, /最近读取：docs\/eval\.md · 12分钟前/, '最近一次成功 read 的文件要如实说出来')
+  assert.ok(!/正在阅读|当前正在|正在读/.test(text), 'Knit 证明不了「此刻正在读」')
+  // 与 v0.16 的既有事实行并存，没有多出统计指标
+  assert.match(text, /当前上下文 · Epoch 4/)
+  assert.match(text, /读了 7 次/)
+})
+
+test('v0.17 上下文外读取：默认折叠，展开才逐篇列出', async () => {
+  const { nodes, render } = await mountUsage(lifecyclePayload())
+
+  const buttons = byExactClass(nodes, 'knit-more-btn')
+  const gapBtn = buttons.find((node) => textOf(node) === '上下文外读取 · 2 篇')
+  assert.ok(gapBtn, '包外读取要有一行可展开的统计')
+  assert.equal(gapBtn.props['aria-expanded'], 'false', '默认折叠')
+  assert.equal(byExactClass(nodes, 'knit-gap-list').length, 0, '折叠时不渲染明细节点')
+  assert.equal(byExactClass(nodes, 'knit-gap-row').length, 0, '折叠时一行明细都不许有')
+
+  gapBtn.props.onClick()
+  const open = render()
+  const list = byExactClass(open, 'knit-gap-list')
+  assert.equal(list.length, 1, '展开后出现明细区')
+  const rows = kidsOf(list[0], 'knit-gap-row')
+  assert.equal(rows.length, 2, '两篇包外文档各一行')
+  assert.deepEqual(
+    rows.map((row) => kidsOf(row, 'knit-gap-rel')[0].props.title),
+    ['docs/old-plan.md', 'docs/test-case.md'],
+  )
+  assert.deepEqual(rows.map((row) => textOf(kidsOf(row, 'knit-life')[0])), ['已读 ×3', '已读'])
+  // 只陈述事实：不评价 Knit 推荐得对不对
+  const openText = textOf(kidsOf(list[0], 'knit-gap-row')[0]) + textOf(byExactClass(open, 'knit-usage')[0])
+  assert.ok(!/漏掉|推荐错|绕过|不认可|低质量|命中率/.test(openText), '包外读取不是「Knit 漏了」')
+})
+
+test('v0.17 Context Delta：只展示最近一次，符号只有 + / - / ↔', async () => {
+  const { nodes, render } = await mountUsage(lifecyclePayload())
+
+  const deltaBtn = byExactClass(nodes, 'knit-more-btn').find((node) => textOf(node) === '上下文刚刚变化')
+  assert.ok(deltaBtn, '有变化就要有一行摘要')
+  assert.equal(deltaBtn.props['aria-expanded'], 'false', '默认折叠')
+  const digest = byExactClass(nodes, 'knit-delta-row')
+  assert.deepEqual(digest.map(textOf), [
+    '+ docs/algo.md',
+    '- README.md',
+    '↔ docs/eval.md · 辅助 → 相关',
+  ])
+  // 进出换层共用一种行样式：不用颜色区分「好 / 坏」
+  assert.equal(new Set(digest.map((row) => row.props.className)).size, 1)
+  assert.equal(byExactClass(nodes, 'knit-delta-head').length, 0, '折叠时没有分组标题')
+
+  deltaBtn.props.onClick()
+  const open = render()
+  assert.deepEqual(byExactClass(open, 'knit-delta-head').map(textOf), ['进入', '离开', '换层'])
+  const openText = textOf(byExactClass(open, 'knit-usage')[0])
+  assert.ok(!/\d{2}:\d{2}/.test(openText), '不许出现时间线')
+})
+
+test('v0.17 Context Delta：超过三条折叠成「还有 N 条」，任务变化只说一句', async () => {
+  const many = {
+    appeared: [
+      { rel: 'a.md', tier: 'primary', rank: 1 },
+      { rel: 'b.md', tier: 'related', rank: 2 },
+      { rel: 'c.md', tier: 'related', rank: 3 },
+      { rel: 'd.md', tier: 'related', rank: 4 },
+    ],
+    disappeared: [],
+    moved: [],
+    taskChanged: false,
+  }
+  const folded = await mountUsage(lifecyclePayload({ delta: many }))
+  assert.deepEqual(byExactClass(folded.nodes, 'knit-delta-row').map(textOf), [
+    '+ a.md', '+ b.md', '+ c.md', '还有 1 条',
+  ])
+
+  const task = await mountUsage(lifecyclePayload({
+    delta: { appeared: [{ rel: 'docs/algo.md', tier: 'primary', rank: 1 }], disappeared: [], moved: [], taskChanged: true },
+  }))
+  const text = byExactClass(task.nodes, 'knit-delta-row').map(textOf)
+  assert.deepEqual(text, ['+ docs/algo.md', '任务上下文已更新'], '任务变化也是一句事实，不是时间线')
+})
+
+test('v0.17 样式：状态与折叠区只用语义 token —— 没有卡片 / 固定色 / 边框', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  // 状态是弱化说明文字，颜色必须走 caption token（十六进制只能出现在 var() 兜底里）
+  assert.match(source, /\.knit-life\{[^}]*color:var\(--dsw-alias-label-caption/)
+  assert.ok(!/\.knit-life\{[^}]*color:\s*#[0-9a-fA-F]{3,6}/.test(source), '不许写死颜色')
+  assert.ok(!/\.knit-life\{[^}]*background/.test(source), '状态不画底色')
+  // 折叠按钮是纯文字按钮：无边框、无底色
+  assert.match(source, /\.knit-more-btn\{[^}]*border:0/)
+  assert.match(source, /\.knit-more-btn\{[^}]*background:none/)
+  // 明细行共用一套中性样式，不用颜色区分「进 / 出」
+  assert.match(source, /\.knit-gap-row,\.knit-delta-row\{[^}]*color:var\(--dsw-alias-label-caption/)
+  assert.ok(!/\.knit-gap-row,\.knit-delta-row\{[^}]*border/.test(source), '不要全宽分割线')
+})
+
+test('v0.17 生命周期：英文环境下状态与折叠文案都是英文', async () => {
+  installFetch(() => lifecyclePayload())
+  const { exports } = loadClientModule()
+  // 词典是模块级状态：apply 到 en 之后整块面板都说英文（与真机一致）
+  exports.apply(fakeCtx({ sidebarRightTabs: true, locale: 'en' }).ctx)
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  const toggle = byExactClass(nodes, 'knit-btn').find((node) => textOf(node) === 'Usage')
+  assert.ok(toggle, '英文环境下开关文案是 Usage')
+  toggle.props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.deepEqual(
+    byExactClass(nodes, 'knit-life').map(textOf),
+    ['Read ×3', 'Re-read after update', 'Updated after read', 'Unread', 'Unread'],
+    '四档状态在英文下也是英文',
+  )
+  assert.ok(
+    byExactClass(nodes, 'knit-more-btn').some((node) => textOf(node) === 'Read outside the pack · 2'),
+    '包外明细的按钮文案也要翻译',
+  )
+  const deltaBtn = byExactClass(nodes, 'knit-more-btn').find((node) => textOf(node) === 'Context just changed')
+  assert.ok(deltaBtn, '变化摘要的按钮文案也要翻译')
+  deltaBtn.props.onClick()
+  const open = render()
+  assert.deepEqual(byExactClass(open, 'knit-delta-head').map(textOf), ['Entered', 'Left', 'Moved tier'])
+
+  const allText = byExactClass(open, 'knit-usage').map(textOf).join(' ')
+  assert.match(allText, /Recently read: docs\/eval\.md · 12 min ago/)
+  assert.ok(!/[\u4e00-\u9fff]/.test(allText), '英文环境里一个汉字都不许有')
+})
+
+/* ── v0.17：列表的进出动效（2026-10-03 用户拍板的那套手感）──────────────
+   用户原话：「新读取跟挤掉旧的未读的，这里的交互可能要优化，因为现在是一闪一闪的…
+   从当前的、如辅助上下文中新增，它应该是从低向上的…消失的时候从上到下，渐隐掉」。
+   补间在宿主浏览器里走 WAAPI（`Element.animate`），这里守的是**决定播什么**那部分：
+   差集怎么算、交错怎么排、幽灵行插哪儿。 */
+
+/** 造一条「上一帧的位置」记录，形状与 `KnitBody` 里的 `motionRows` 一致。 */
+function motionRow(rel, tierKey, index, title) {
+  return { rel, tierKey, index, doc: { rel, title: title || rel } }
+}
+
+test('v0.17 动效：首屏与「换屏」都不播 —— 只有同一屏里多出来的行才算新来的', () => {
+  const { planRowMotion } = loadClientModule().exports.__test
+  const rows = [{ rel: 'a.md' }, { rel: 'b.md' }]
+  // 第一次渲染没有上一帧可比：整屏一起飞进来会很吵（原型里首屏也刻意不播）
+  assert.deepEqual(planRowMotion(null, 'doc|relevance|', rows), { entered: [], left: [] })
+  // 换类型 / 换排序 / 搜索词变了 ⇒ 视图签名不同 ⇒ 照旧不播：那是「换屏」，不是「来了新的」
+  const prev = { view: 'doc|relevance|', rows: [motionRow('a.md', 'primary', 0)] }
+  assert.deepEqual(planRowMotion(prev, 'all|relevance|', rows), { entered: [], left: [] })
+})
+
+test('v0.17 动效：新来的行按屏幕顺序交错飞入，交错有上限', () => {
+  const T = loadClientModule().exports.__test
+  const prev = { view: 'v', rows: [motionRow('a.md', 'primary', 0)] }
+  assert.deepEqual(
+    T.planRowMotion(prev, 'v', [{ rel: 'a.md' }, { rel: 'b.md' }, { rel: 'c.md' }, { rel: 'd.md' }]).entered,
+    [
+      { rel: 'b.md', delay: 0 },
+      { rel: 'c.md', delay: T.MOTION_STAGGER_MS },
+      { rel: 'd.md', delay: T.MOTION_STAGGER_MS * 2 },
+    ],
+    '交错的序号只数新来的行（第一篇的 delay 就是 0，不能当成「没排」）',
+  )
+  // 一次涌进来十几篇（换话题）时不排长队：越过上限的都落在同一拍上
+  const many = Array.from({ length: 14 }, (_, i) => ({ rel: `m${i}.md` }))
+  const delays = T.planRowMotion(prev, 'v', many).entered.map((row) => row.delay)
+  assert.equal(delays.length, 14)
+  assert.equal(Math.max(...delays), T.MOTION_STAGGER_MS * T.MOTION_STAGGER_MAX)
+  assert.equal(
+    delays.filter((d) => d === T.MOTION_STAGGER_MS * T.MOTION_STAGGER_MAX).length,
+    14 - T.MOTION_STAGGER_MAX,
+    '封顶之后的都落在同一拍',
+  )
+})
+
+test('v0.17 动效：走了的行要带着它原来的位置与内容', () => {
+  const { planRowMotion } = loadClientModule().exports.__test
+  const prev = {
+    view: 'v',
+    rows: [motionRow('a.md', 'primary', 0, 'A'), motionRow('b.md', 'supporting', 0, 'B')],
+  }
+  const plan = planRowMotion(prev, 'v', [{ rel: 'a.md' }])
+  assert.deepEqual(plan.entered, [])
+  assert.deepEqual(plan.left.map((row) => row.rel), ['b.md'])
+  assert.equal(plan.left[0].tierKey, 'supporting', '要知道它原来在哪个区')
+  assert.equal(plan.left[0].index, 0, '要知道它原来在第几行')
+  assert.equal(plan.left[0].doc.title, 'B', '幽灵行要用上一帧那份文档对象，不是只留个路径')
+})
+
+test('v0.17 动效：同一篇只是换了层 —— 既不算飞入，也不算离开', () => {
+  const { planRowMotion } = loadClientModule().exports.__test
+  const prev = { view: 'v', rows: [motionRow('a.md', 'supporting', 1)] }
+  assert.deepEqual(planRowMotion(prev, 'v', [motionRow('a.md', 'primary', 0)]), { entered: [], left: [] })
+})
+
+test('v0.17 动效：幽灵行插回原位；还活着的不造幽灵；别的区一个都不插', () => {
+  const { mergeGhostRows } = loadClientModule().exports.__test
+  const docs = [{ rel: 'a.md' }, { rel: 'b.md' }]
+  const ghost = (rel, index, tierKey) =>
+    ({ rel, index, tierKey: tierKey || 'primary', doc: { rel, title: rel } })
+
+  assert.deepEqual(
+    mergeGhostRows(docs, [ghost('x.md', 1)], 'primary').map((d) => d.rel),
+    ['a.md', 'x.md', 'b.md'],
+    '插回原来的位置 —— 否则看起来像「这篇跳到末尾才消失」',
+  )
+  assert.equal(mergeGhostRows(docs, [ghost('x.md', 1)], 'primary')[1].knitLeaving, true,
+    '幽灵行要打上标记，DocRow 才会演离开')
+  assert.deepEqual(
+    mergeGhostRows([{ rel: 'a.md' }], [ghost('x.md', 0), ghost('y.md', 1)], 'primary').map((d) => d.rel),
+    ['x.md', 'y.md', 'a.md'],
+    '同一拍走掉两篇时各按上一帧的位置插回',
+  )
+  assert.deepEqual(mergeGhostRows(docs, [ghost('x.md', 9)], 'primary').map((d) => d.rel),
+    ['a.md', 'b.md', 'x.md'], 'index 超出这一帧长度时落在末尾')
+  assert.deepEqual(mergeGhostRows(docs, [ghost('a.md', 0)], 'primary').map((d) => d.rel),
+    ['a.md', 'b.md'], '还活着的那篇不造幽灵（它只是换了层）')
+  assert.equal(mergeGhostRows(docs, [ghost('x.md', 0, 'related')], 'primary'), docs,
+    '别的区的幽灵不许插进这一区（没得插就原样返回）')
+  assert.equal(mergeGhostRows(docs, [], 'primary'), docs, '没有幽灵时原样返回')
+  assert.equal(mergeGhostRows(docs, null, 'primary'), docs, '没传幽灵也照样出数据')
+})
+
+test('v0.17 动效：这套补间只在真机上跑 —— 测试进程里恒被挡掉', () => {
+  const T = loadClientModule().exports.__test
+  assert.equal(T.motionAllowed(), false,
+    '替身没有 document ⇒ 一律不播（渲染树里不会多出 entering / leaving）')
+  assert.ok(T.MOTION_EXIT_MS < T.MOTION_ENTER_MS, '离开要比进入利落：收起不能拖')
+  assert.equal(T.MOTION_EASE, 'cubic-bezier(.22,1,.36,1)',
+    '缓动照抄原型，不许在真客户端另调一套')
+})
+
+test('v0.17 动效：CSS 里只有静态那两笔 —— 补间在 JS 里，不留第二套真相', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  const leaving = css.match(/\.knit-doc\.leaving\{([^}]*)\}/)
+  assert.ok(leaving, '必须有 .knit-doc.leaving 这条规则')
+  assert.match(leaving[1], /pointer-events:none/, '幽灵行不吃指针事件（它已经在走了）')
+  assert.match(leaving[1], /overflow:hidden/, '收起高度时要能裁掉内容')
+  assert.ok(!leaving[1].includes('animation'),
+    'CSS 不许自己播关键帧：高度要按量出来的自然高度补间，写死会跳')
+  assert.ok(!/@keyframes/.test(css), 'CSS 里不留 @keyframes —— 只有一套真相')
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\{[\s\S]*?\.knit-doc\{transition:none\}/,
+    '系统要求减弱动态效果 ⇒ 连底色过渡一起去掉')
+})
+
+test('v0.17 动效：换层 / 重排的位移按 FLIP 算 —— 亚像素抖动不当成「动过」', () => {
+  const T = loadClientModule().exports.__test
+  const { motionShift } = T
+
+  assert.equal(motionShift({ left: 10, top: 40 }, { left: 10, top: 40 }), null, '没动就不补间')
+  assert.equal(motionShift({ left: 10, top: 40 }, { left: 10, top: 40.3 }), null,
+    '亚像素抖动（浏览器缩放 / 滚动残留）不该让整屏一直在微微地飘')
+  assert.deepEqual(motionShift({ left: 12, top: 120 }, { left: 12, top: 40 }),
+    { dx: 0, dy: 80 },
+    '正数＝上一帧更靠右下：先把行往下拉回老位置，再补间归位')
+  assert.deepEqual(motionShift({ left: 60, top: 40 }, { left: 12, top: 40 }),
+    { dx: 48, dy: 0 }, '横向也是同一套：分栏里换列同样要飞过去')
+  assert.equal(motionShift(null, { left: 0, top: 0 }), null, '没有上一帧（新行）不归 FLIP 管')
+  assert.equal(motionShift({ left: 0, top: 0 }, null), null, '量不到这一帧就不敢补')
+  assert.equal(motionShift({ left: 0, top: 0 }, { left: 0, top: 3 }, 4), null,
+    '阈值可传：小于它一律算没动')
+  assert.deepEqual(motionShift({ left: 0, top: 0 }, { left: 0, top: 3 }, 2), { dx: 0, dy: -3 },
+    '超过阈值就照实补（负值＝上一帧更靠左上）')
+  assert.equal(motionShift({ left: 0, top: NaN }, { left: 0, top: 0 }), null,
+    '矩形里出现 NaN（节点刚卸载）时宁可不播，也别补出一段乱飞')
+  assert.ok(T.MOTION_MOVE_MS > 0 && T.MOTION_MOVE_EPS > 0 && T.MOTION_MOVE_EPS <= 1,
+    'FLIP 的时长与死区都得是正常量级')
+})
+
+test('v0.17 动效：FLIP 给挪过位置的幸存行排补间 —— 进 / 出的行跳过，只补 transform', () => {
+  const T = loadClientModule().exports.__test
+  const { applyRowFlips } = T
+
+  // 鸭子类型的行节点：只实现 FLIP 真正会碰的那几个成员。
+  const row = (rel, top, left) => ({
+    rel,
+    played: [],
+    getAttribute: () => rel,
+    getBoundingClientRect: () => ({ left: left || 0, top }),
+    animate(frames, opts) {
+      this.played.push({ frames, opts })
+      return { finished: Promise.resolve() }
+    },
+  })
+  const host = (...els) => ({ querySelectorAll: () => els })
+
+  // ① 换层 / 重排：先从老位置拉回来，再补到归位
+  const moved = row('a.md', 40)
+  const prev = new Map([['a.md', { left: 0, top: 120 }]])
+  const after = applyRowFlips(host(moved), prev, new Set())
+  assert.equal(moved.played.length, 1, '挪了位置就该补一段')
+  assert.deepEqual(moved.played[0].frames, [
+    { transform: 'translate(0px, 80px)' },
+    { transform: 'translate(0px, 0px)' },
+  ], '正数＝上一帧更靠下：先把行拉到老位置，再补回新位置')
+  assert.equal(moved.played[0].opts.duration, T.MOTION_MOVE_MS, '时长用同一个常量')
+  assert.equal(moved.played[0].opts.easing, T.MOTION_EASE, '缓动与进 / 出补间同一套')
+  assert.deepEqual([...after], [['a.md', { left: 0, top: 40 }]], '这一帧的矩形要留给下一帧')
+
+  // ② 正在进 / 出的行跳过（它们有自己的补间，叠一层会打架）
+  const entering = row('b.md', 40)
+  const ghost = row('c.md', 40)
+  const skipped = applyRowFlips(host(entering, ghost), new Map([
+    ['b.md', { left: 0, top: 120 }], ['c.md', { left: 0, top: 120 }],
+  ]), new Set(['b.md', 'c.md']))
+  assert.equal(entering.played.length + ghost.played.length, 0, '进 / 出的行一个都不补')
+  assert.equal(skipped.size, 0,
+    '进 / 出的行连位置都不记 —— 那一刻量到的是补间中间态，记下来下一帧会凭空飘一下')
+
+  // ③ 亚像素抖动不算动；④ 新来的行没得比
+  const jitter = row('d.md', 40.3)
+  const brandNew = row('e.md', 90)
+  const quiet = applyRowFlips(host(jitter, brandNew), new Map([['d.md', { left: 0, top: 40 }]]), new Set())
+  assert.equal(jitter.played.length, 0, '零点几像素不补 —— 否则整屏一直在微微地飘')
+  assert.equal(brandNew.played.length, 0, '第一次出现的行归「飞入」管，FLIP 不接手')
+  assert.deepEqual([...quiet.keys()], ['d.md', 'e.md'], '两行的位置都要记')
+
+  // ⑤ 环境不完整时一声不响（测试进程里就是这样）
+  assert.equal(applyRowFlips(null, new Map(), new Set()).size, 0, '没有列表容器就什么都不做')
+  assert.equal(applyRowFlips({}, null, null).size, 0, '容器不会查节点也照样返回空表')
+  const noAnim = { getAttribute: () => 'f.md', getBoundingClientRect: () => ({ left: 0, top: 10 }) }
+  const onlyMeasure = applyRowFlips({ querySelectorAll: () => [noAnim] },
+    new Map([['f.md', { left: 0, top: 90 }]]), new Set())
+  assert.equal(onlyMeasure.size, 1, '节点不认 WAAPI 时只记位置、不补间，不抛错')
+})
+
+test('v0.17 动效：FLIP 量的是布局坐标 —— 滚动 / 悬停 / 容器变高都不算「行挪了位置」', () => {
+  const T = loadClientModule().exports.__test
+  const { applyRowFlips, rowLayoutPoint } = T
+
+  // 一行两套坐标：`offsetTop/offsetLeft` 是**布局坐标**（谁真挪了位置才动），
+  // `getBoundingClientRect` 是**视口坐标**（容器一滚、容器自己一高一变、行上挂个 transform 都会动）。
+  const row = (rel, top, left, viewTop, viewLeft) => ({
+    rel,
+    offsetTop: top,
+    offsetLeft: left,
+    played: [],
+    getAttribute: () => rel,
+    getBoundingClientRect: () => ({ left: viewLeft, top: viewTop }),
+    animate(frames) { this.played.push(frames); return { finished: Promise.resolve() } },
+  })
+  const host = (...els) => ({
+    querySelectorAll: () => els,
+    getBoundingClientRect: () => ({ left: 0, top: 100 }),
+  })
+
+  // ① 容器滚了 80px：视口矩形整体平移，布局坐标一动没动 ⇒ 一行都不许补。
+  //    这就是用户那句「我没有输入任何的对话……文档列表就开始跳动」。
+  const scrolled = row('a.md', 120, 0, 40, 0)
+  const after = applyRowFlips(host(scrolled), new Map([['a.md', { left: 0, top: 120 }]]), new Set())
+  assert.equal(scrolled.played.length, 0, '滚动不是「行换了位置」—— 拿视口矩形量会让整屏凭空补一段')
+  assert.deepEqual([...after], [['a.md', { left: 0, top: 120 }]], '存下来的也必须是布局坐标')
+
+  // ② 鼠标正悬停在那行：`.knit-doc:hover{transform:translateX(-2px)}` 是死区 0.5px 的四倍，
+  //    但那 2px 是 CSS 的事，不许被当成「这行挪了」再补一段（补了会跟悬停过渡打架）
+  const hovered = row('b.md', 200, 0, 200, -2)
+  applyRowFlips(host(hovered), new Map([['b.md', { left: 0, top: 200 }]]), new Set())
+  assert.equal(hovered.played.length, 0, '悬停的 2px 不算位移')
+
+  // ③ 真的换了位置（换层 / 重排）：补的差值取自布局坐标，不是视口矩形
+  const moved = row('c.md', 160, 0, 40, -2)
+  applyRowFlips(host(moved), new Map([['c.md', { left: 0, top: 120 }]]), new Set())
+  assert.equal(moved.played.length, 1, '真挪了就补')
+  assert.deepEqual(moved.played[0][0], { transform: 'translate(0px, -40px)' },
+    '差值取自 offsetTop（120→160）；取视口矩形（120→40）会补出 80px 的乱飞')
+
+  // ④ 节点没有 offset*（测试替身 / 已卸载）时才退回视口矩形，但要减掉容器那块、加回滚动量
+  const noOffset = { getAttribute: () => 'd.md', getBoundingClientRect: () => ({ left: 0, top: 40 }) }
+  const box = {
+    querySelectorAll: () => [noOffset],
+    getBoundingClientRect: () => ({ left: 0, top: 100 }),
+    scrollTop: 80,
+  }
+  assert.deepEqual(rowLayoutPoint(box, noOffset), { left: 0, top: 20 },
+    '视口 40 − 容器 100 + 滚动 80 = 20：还是布局坐标')
+  assert.equal(rowLayoutPoint(box, null), null, '没有节点就是量不到')
+  assert.equal(rowLayoutPoint({}, {}), null, '两套坐标都拿不到时宁可不补')
+})
+
+test('v0.17 动效：FLIP 真的接在提交之后 —— 跳过进 / 出、落盘位置', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const mark = source.indexOf('/* ── 活下来的行换了位置：FLIP')
+  assert.ok(mark > 0, 'KnitBody 的提交后 layout effect 里必须接上 FLIP')
+  const code = source.slice(mark, source.indexOf('const withGhosts', mark))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+
+  assert.match(code, /const skip = new Set\(\[\.\.\.motion\.entered\.keys\(\), \.\.\.motion\.ghosts\.keys\(\)\]\)/,
+    '正在进 / 出的 rel 组成跳过表')
+  assert.match(code, /store\.tweenUntil = Date\.now\(\) \+ MOTION_ENTER_MS \+ MOTION_STAGGER_MS/,
+    '进 / 出补间在飞的那几百毫秒留一个「别量」的窗口（量到的是中间态）')
+  assert.match(code, /const settled = motionOn[\s\S]*?store\.view === motionView/,
+    '换屏（视图签名变了）/ 补间还在飞 / 没有行的时候，一个都不量 —— 换屏照补就是「整屏一起飞」')
+  assert.match(code, /store\.positions = settled \? applyRowFlips\(listRef\.current, store\.positions, skip\) : new Map\(\)/,
+    '量的是真列表容器，位置表跨帧传递；不量时清空 —— 别拿上一帧的旧坐标去比')
+})
+
+test('v0.17 交互审：列表只在光标真的换了（且焦点在列表上）时跟手滚 —— 刷新不许动列表', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  // ⚠️ 起点必须含 `/*` 本身：否则切片从注释**中间**开始，下面那句去注释的正则找不到配对的
+  // `/*`，会把那段解释「为什么不能依赖 state.docs」的注释当成代码，于是这条测试自己误报。
+  const mark = source.indexOf('/* 键盘焦点跟手滚进视口')
+  assert.ok(mark > 0, 'KnitBody 里必须有「光标跟手滚进视口」那条 effect')
+  const end = source.indexOf('// 预览高度：拖完就记住', mark)
+  assert.ok(end > mark, '切片终点应是「预览高度」那条 effect 的注释')
+  const code = source.slice(mark, end).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  assert.match(code, /\}, \[cursor, query\]\)/, '依赖里只许有 cursor / query')
+  assert.ok(!/state\.docs/.test(code),
+    '不许依赖 state.docs：那是每 5 秒一次的新数组，会把列表每 5 秒拽回光标行一次'
+    + '（用户的原话：「我没有输入任何的对话……文档列表就开始跳动」）')
+  assert.match(code, /document\.activeElement/, '只在列表自己拿着键盘焦点时滚 —— 这条服务的是键盘导航')
+  assert.match(code, /scrollIntoView\(\{ block: 'nearest' \}\)/, '滚的是最小距离，不是把行顶到最上面')
+})
+

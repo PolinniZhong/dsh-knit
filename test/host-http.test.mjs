@@ -9,6 +9,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { utimesSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stat } from 'node:fs/promises'
 
@@ -393,10 +395,11 @@ test('HTTP 端到端：默认不记账，usage=1 开闸，读事件由 session/e
     assert.ok(!('usage' in body), '默认不该回传 usage（更不该偷偷记账）')
 
     // ② 打开：这一刻开始记。此刻还一次读事件都没发生 → 计数是 0。
-    //    v0.16 刻意**不回溯**订阅之前的事件：宁可少记，也不去猜一段没法按当时上下文归因的历史。
+    //    这个假会话没有 `snapshotEvents()`（= 没有可回填的历史），所以仍然是 0；
+    //    有历史的会话会在开闸这一刻回填一次 —— 见下面「面板开晚」那条用例。
     body = await (await fetch(`${base}/api/recent?sessionId=s1&sort=relevance&usage=1`)).json()
     assert.ok(body.usage, 'usage=1 应当回传使用情况')
-    assert.equal(body.usage.stats.reads, 0, '订阅之前发生的事件不回溯')
+    assert.equal(body.usage.stats.reads, 0, '没有历史可回填时照旧从 0 开始')
     // ⚠️ `at` 是**上一份包**交出去的时间；第一次记账时还没有上一份，所以是 0。
     // 这不是缺陷，是顺序：usage 先算、快照后记（从下一次请求起才有「上一份」）。
     assert.equal(body.usage.at, 0)
@@ -521,6 +524,130 @@ test('HTTP 端到端：/api/context 也推进快照，但只在已记账的会�
     assert.equal(body.usage.stats.churn.snapshots, 0, '一模一样的一份包不许记成「变化」')
     assert.equal(body.usage.stats.churn.epochs, 1, '没换过上下文就只有一个 Epoch')
     assert.equal(body.usage.delta, null, '没有变化就没有 Delta')
+  } finally {
+    await close()
+  }
+})
+
+/* ── v0.17 文档生命周期（端到端）────────────────────────────────────
+   v0.16 的 15 个 stats 键一个都不许动；生命周期是**新的事实投影**：
+   宿主每次请求重新 scan → 拿到真实 `mtimeMs` → 与「最后一次成功 read 时
+   记下的 mtimeMs」比对。所以这两条用例必须真的改磁盘上的文件时间
+   （`utimesSync`），否则测的只是替身。 */
+
+/** v0.16 就有的 15 个 stats 键 —— v0.17 只在**顶层**加新字段，不许挤进 stats。 */
+const STATS_KEYS = [
+  'byTier', 'churn', 'continuedReadsAfterExit', 'distinct', 'firstReadAt',
+  'firstReadEpoch', 'firstReadRel', 'firstReadTier', 'outside', 'outsideReads',
+  'primaryFollowThrough', 'primaryRel', 'reEntries', 'reads', 'supportingCoverage',
+]
+
+test('HTTP 端到端：usage 顶层多出生命周期 / 最近读取 / 包外明细，stats 形状不变', async () => {
+  const { base, close, emit } = await startKnitServer(
+    sessionWithEvents([userMessage(1, 'hub 这份文档')]), 's6',
+  )
+  try {
+    // ① 交第一份包（开闸）
+    await fetch(`${base}/api/recent?sessionId=s6&sort=relevance&usage=1`)
+    // ② 读一篇包内文档，再读一篇**不在文档包里的**文件（图片：扫描器只收 md）
+    emit(readCall(2, 'docs/hub.md'))
+    emit(toolResult(3, 'c2'))
+    emit(readCall(4, 'docs/screenshot.png'))
+    emit(toolResult(5, 'c4'))
+
+    const body = await (await fetch(`${base}/api/recent?sessionId=s6&sort=relevance`)).json()
+    assert.deepEqual(Object.keys(body.usage.stats).sort(), STATS_KEYS, 'stats 形状是 v0.16 的，一个键都不许加')
+
+    // 每篇文档的状态只留三个字段：状态、次数、最后一次读的时间（线上载荷要瘦）
+    assert.deepEqual(body.usage.lifecycle['docs/hub.md'], {
+      status: 'read', count: 1, lastReadAt: 1003,
+    })
+    assert.equal(body.usage.lifecycle['docs/screenshot.png'].status, 'read')
+
+    // 最近读取 = 最近一次成功 read 的文件（按 seq，不是按墙钟猜）
+    assert.deepEqual(body.usage.recentRead, {
+      rel: 'docs/screenshot.png', at: 1005, seq: 5, epochId: 1, tier: null, rank: null, inside: false,
+    })
+    // 包外明细：不在当前包里、但真的成功读过
+    assert.deepEqual(body.usage.outsideDocs, [
+      { rel: 'docs/screenshot.png', count: 1, lastReadAt: 1005, seq: 5 },
+    ])
+    // 同一份包连交两次不算「上下文变化」→ 没有最近一次 Delta
+    assert.equal(body.usage.latestDelta, null)
+    // 新字段同样只有相对路径
+    assert.ok(!JSON.stringify(body.usage).includes(PROJECT_ROOT), 'usage 里不许出现绝对路径')
+  } finally {
+    await close()
+  }
+})
+
+test('HTTP 端到端：真实改动文件 → 读后已更新；再读一次 → 修改后已重新读取', async () => {
+  const { base, close, emit } = await startKnitServer(
+    sessionWithEvents([userMessage(1, 'hub 这份文档')]), 's7',
+  )
+  try {
+    await fetch(`${base}/api/recent?sessionId=s7&sort=relevance&usage=1`)
+    emit(readCall(2, 'docs/hub.md'))
+    emit(toolResult(3, 'c2'))
+
+    let body = await (await fetch(`${base}/api/recent?sessionId=s7&sort=relevance`)).json()
+    assert.equal(body.usage.lifecycle['docs/hub.md'].status, 'read', '刚读完就是「已读」')
+
+    // 真的把文件时间往后推 —— 宿主这一轮 scan 会拿到新的 mtimeMs
+    const abs = join(PROJECT_ROOT, 'docs/hub.md')
+    const later = Date.now() / 1000 + 30
+    utimesSync(abs, later, later)
+
+    body = await (await fetch(`${base}/api/recent?sessionId=s7&sort=relevance`)).json()
+    assert.equal(
+      body.usage.lifecycle['docs/hub.md'].status, 'updated_after_read',
+      '上次成功 read 之后文件变过 —— 这只是「变过」，不是「Agent 用的是旧版」',
+    )
+    assert.equal(body.usage.lifecycle['docs/hub.md'].count, 1, '变化本身不是一次读')
+
+    // 变化之后又成功读了一次 → 事实升级为「修改后已重新读取」
+    emit(readCall(4, 'docs/hub.md'))
+    emit(toolResult(5, 'c4'))
+    body = await (await fetch(`${base}/api/recent?sessionId=s7&sort=relevance`)).json()
+    assert.equal(body.usage.lifecycle['docs/hub.md'].status, 'reread_after_update')
+    assert.equal(body.usage.lifecycle['docs/hub.md'].count, 2)
+    assert.equal(body.usage.stats.reads, 2, '两次成功 read 都算数')
+  } finally {
+    await close()
+  }
+})
+
+test('v0.17 修订：面板开晚了也能补记 —— 开闸那一刻回填会话已有的事件', async () => {
+  // 真机形状：用户在面板打开**之前**就已经让 agent 读过一篇包内文档。
+  const { base, close } = await startKnitServer(
+    sessionWithEvents([
+      userMessage(1, 'hub 这份文档'),
+      readCall(2, 'docs/hub.md'),
+      toolResult(3, 'c2'),
+    ]),
+    's8',
+  )
+  try {
+    // ① 面板从没打开过：闸门关着，一个字节都不记（usage 根本不出现）
+    let body = await (await fetch(`${base}/api/recent?sessionId=s8&sort=relevance`)).json()
+    assert.ok(!('usage' in body), '默认关：连 usage 键都不该有')
+
+    // ② 用户读完了才打开开关：这一个请求把历史补进来
+    body = await (await fetch(`${base}/api/recent?sessionId=s8&sort=relevance&usage=1`)).json()
+    assert.equal(body.usage.stats.reads, 1, '开闸时回填会话已有的事件')
+    assert.equal(body.usage.lifecycle['docs/hub.md'].status, 'read')
+    assert.equal(body.usage.lifecycle['docs/hub.md'].count, 1)
+    // ⚠️ 补记的读按「我们已知最早的那份包」归因 —— 说它当时在包外，是我们不知道的事
+    assert.equal(body.usage.stats.firstReadTier, 'primary')
+    assert.equal(body.usage.stats.firstReadEpoch, 1)
+    assert.equal(body.usage.stats.outside, 0, '不许把包内文档说成包外')
+    assert.deepEqual(body.usage.outsideDocs, [])
+    assert.equal(body.usage.recentRead.rel, 'docs/hub.md')
+    assert.equal(body.usage.recentRead.inside, true)
+
+    // ③ 同一个会话不再回填第二次：再来一次请求，计数不动
+    body = await (await fetch(`${base}/api/recent?sessionId=s8&sort=relevance&usage=1`)).json()
+    assert.equal(body.usage.stats.reads, 1, '一个会话只回填一次')
   } finally {
     await close()
   }

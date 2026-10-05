@@ -173,7 +173,7 @@ test('clampRatio：夹在 20%–80%，非法值回落默认', () => {
   assert.equal(clampRatio(NaN), 0.46)
 })
 
-test('渲染：预览高度接到 maxHeight 上，且拖拽条存在', async () => {
+test('渲染：预览高度是**固定高度**（不是最高高度），且拖拽条存在', async () => {
   installFetch((url) => (url.includes('/api/doc')
     ? { ok: true, rel: '技术方案.md', title: '技术方案', text: '# T', truncated: false }
     : listPayload()))
@@ -186,7 +186,9 @@ test('渲染：预览高度接到 maxHeight 上，且拖拽条存在', async () 
 
   const panel = panelOf(after)[0]
   assert.ok(panel, '应有预览面板')
-  assert.equal(panel.props.style.maxHeight, '46%', '默认高度应接到 maxHeight')
+  assert.equal(panel.props.style.height, '46%', '打开期间高度固定：加载中 / 换篇都不许再动列表的高度')
+  assert.equal(panel.props.style.maxHeight, undefined,
+    '不许走 maxHeight —— 那样高度由内容决定，正文一到列表就跟着伸缩（2026-10-04 交互审：「我一点它就跳，闪得很快」）')
   assert.equal(byClass(after, 'knit-resize').length, 1, '应有拖拽条')
 })
 

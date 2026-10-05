@@ -7,12 +7,12 @@
 
 ![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
-*Screenshot from a real machine, not a mock-up: a workspace with 51 documents — the list, an inline
+*Screenshot from a real machine, not a mock-up: a workspace with 53 documents — the list, an inline
 preview, and the references bar.*
 *The references bar is new in v0.12: expand it to see which documents reference this one, and click
 one to jump straight there.*
-*The top line follows whatever you're talking about; when there isn't enough conversation yet it
-falls back to newest-first and states its basis.*
+*The header holds only the path, the document count and two toggles; whether the list runs by
+relevance or by newest-first is decided by that pair of tabs on the left.*
 *Since v0.14 the list is always one column: the rank number sits in its own column on the far left
 (vertically centred on the title's first line), then Primary dot + title + relative time (time on the
 right), then the summary. **The path lives in the preview header only** — the directory collapses to a `…/` placeholder (hover the path for the full relative path); rows no longer repeat it.*
@@ -20,9 +20,10 @@ right), then the summary. **The path lives in the preview header only** — the 
 ![Order follows the conversation: send a message and the sidebar re-ranks the document list by it](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
 
 *Order follows the conversation — same workspace, in a freshly opened session: before you have said
-anything, the top line says so ("not enough conversation yet — sorted by time") and the list runs
-newest-first; ask "how is BM25 weighted for the ranking?" and the ranking docs take over, with the
-rank numbers and the primary / supporting / related tiers appearing alongside them.*
+anything, the list runs newest-first; ask "how is BM25 weighted for the ranking?" and the next poll
+swaps the top of the list, with the tier headings and the **continuous rank numbers across all
+three tiers** appearing alongside a one-line "why" under each row (what matched, and how).*
+*In this particular frame no document landed in the primary tier, so the groups start at "supporting".*
 *⚠️ The panel polls **every 5 seconds**, so the re-rank lands **0–5 s** after the message rather than
 instantly, and the GIF runs faster than real time.*
 
@@ -298,6 +299,7 @@ feature request.
 |---|---|
 | **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
 | **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
+| **Document lifecycle** (v0.17): each recommended document is shown as `Unread / Read / Updated after read / Re-read after update`, alongside the most recent read, how many reads fell outside the pack (expandable to which ones), and the latest context change | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
@@ -329,24 +331,23 @@ feature request.
 
 *Images & video: square thumbnails, with the **column count following the panel width continuously** —
 six columns at this width, cells about 112px. These are the workspace's real image and SVG files; this
-particular workspace happens to hold several screenshots and two single-colour SVG icons (the two solid
-black squares are those icons). Videos get their first frame as a poster with a play glyph and a
-duration badge — this workspace simply has no video, so none shows here.*
+particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
+(the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
+a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
 
-![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and no media section](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and the images-and-video grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
-*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 40").*
+*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 36"),
+and the images-and-video grid below it.*
 
-⚠️ **There is no media section in this screenshot, and that is not a layout accident** — for the All
-view the host fetches a **40-item window**. This workspace has 51 documents plus 8 media files, and the
-media rank 50th–58th by relevance, so they fall outside the window; the client's
-`visibleDocs.filter(isMedia)` is then empty and the media section is not rendered at all. **Any
-workspace with 40 or more documents behaves this way** — a known defect, with reproduction and the fix
-recorded in [`docs/README.md`](docs/README.md).*
+⚠️ Both sections share the **same 40-item window** the host returns — if images and video rank past
+40th by relevance, the All view shows **none of them at all** (the Images & video tab is unaffected,
+because it requests media on its own). A known defect, with reproduction and the fix recorded in
+[`docs/README.md`](docs/README.md).*
 
 ---
 
-## Did it actually get used? (v0.16)
+## Did it actually get used? (v0.16 → v0.17)
 
 Knit orders "what to read first right now" — but **whether that order was right could only be felt,
 never checked**. v0.15 added a layer of **verifiable usage feedback**: the files the agent really read,
@@ -380,9 +381,12 @@ Three boundaries:
 - **No duplicate of the DSH trajectory**: the only evidence source is the `tool/call` / `tool/result`
   events the session **already has** (successful `read`s). **No new event bus, no runtime trace,
   no event store.**
-- **From now on only**: the subscription is v0.16's sole read-evidence source (the old
-  `session.snapshotEvents()` is deprecated by DSH), so **reads that happened before you flipped the
-  toggle are not backfilled** — counting starts at that moment.
+- **One backfill when you flip the toggle**: the subscription is the sole read-evidence source (the
+  old `session.snapshotEvents()` is deprecated by DSH, and no new production call was added), so reads
+  that happened before the gate opened were genuinely invisible to Knit. Since v0.17 the moment the
+  toggle flips, the host **backfills once** the events this session already produced — which turns
+  "Unread" into a claim with evidence behind it. ⚠️ Backfilled reads are attributed to the *earliest
+  pack we know about* (earlier packs are unknowable).
 - **Nothing is persisted**: the numbers live in kernel memory only and are gone after a DSH restart —
   do not treat them as long-term statistics.
 
@@ -394,6 +398,64 @@ To check offline: `node tools/context-feedback-eval.mjs` replays the latest real
 **in Knit's index but not in the pack** (a real miss) versus **not in the index at all** (`.js` /
 `.json`, which Knit never indexes). Without that split the outside ratio stays high and reads like
 "the Context Pack is useless", when in fact **the wrong thing was measured**.
+
+### v0.17: what state is a document in, after it has been read?
+
+Turning "Usage" on adds two more things besides the line above: **a status on each recommended
+document**, and "which one was read last / what was read outside the pack / how the context last
+changed".
+
+```
+Context · Epoch 4
+Recently read: SDD-v0.17.md · 12 min ago
+
+Primary
+01 ● SDD-v0.17.md        Read ×3
+02   feedback.md         Unread
+
+Supporting
+03   context.md          Read
+04   eval.md             Updated after read
+
+Related
+05   README.md           Re-read after update
+
+Read outside the pack · 2        ← clickable: which ones
+Context just changed             ← clickable: Entered / Left / Moved tier
+```
+
+All four states are **facts**, not scores:
+
+| Label | The fact |
+|---|---|
+| Unread | No successful `read` in this session |
+| Read / Read ×N | It was read successfully, and the file has not changed since the last successful read |
+| Updated after read | The file's `mtimeMs` changed after the last successful read |
+| Re-read after update | It changed and was then read successfully again (another change drops it back one state) |
+
+- **The evidence is the file's `mtimeMs`** — which the workspace scan already collects — so nothing
+  compares content, scans full text, or adds an index. When mtime is unavailable, **no claim is made**
+  (it stays at "Read").
+- `grep` / `glob` / `bash` do not count as reads, and neither does a failed `read`.
+- "Recently read" is decided by event sequence number and is **never called "currently reading"**:
+  Knit cannot prove the agent is still reading it. If it falls outside the Context Pack, it is still
+  shown as-is.
+- **Read outside the pack · N** expresses only "this document is not in the current pack, but the
+  agent did successfully read it" — never "Knit missed it", and no recall rate, hit rate or
+  context-quality number.
+- **Context just changed** shows only the **single latest** delta (`+` entered / `-` left /
+  `↔` moved tier; a changed task adds one line, "Task context updated") — **no timeline, no event
+  explorer**.
+- The status sits between the title and the time, and **the title stays the visual anchor**: no red
+  or green, no score. With the toggle off, **none of it appears** (and nothing is counted).
+- **The list no longer flickers** (requested 2026-10-03): a row that was just read fades in from
+  below, a row squeezed out is wiped away **top-down**, several at once stagger by 45ms (6 steps at
+  most), and a row that changed tier or rank **flies there from where it was** (FLIP, 340ms).
+  Nothing is animated on first paint, when the kind / sort / query changes, or when the system asks
+  for reduced motion. This is not a new feature — it only makes "who arrived, who left, who moved"
+  visible. Indexing, ranking, tiers and the `knit_docs` output are unchanged.
+
+The `knit_docs` tool output **did not grow**: it still only finds context.
 
 ---
 
@@ -452,7 +514,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 468 tests, zero dependencies, no npm install needed
+npm test          # 517 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -476,7 +538,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 468 tests
+└── test/                 # 517 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

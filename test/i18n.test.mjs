@@ -523,3 +523,42 @@ test('i18n: 宿主的每个 Context Pack 理由码都有中英译文', async () 
     assert.ok(used.has(key), `ZH 里的 why.${key} 已经没有一个宿主理由码在用它`)
   }
 })
+
+/* ── v0.17 文档生命周期：数据层英文，界面按语言映射 ─────────────────── */
+
+test('词典：v0.17 的十六条生命周期 / 变化文案中英都对得上', () => {
+  const { registered } = boot('zh')
+  const { zh, en } = registered.knit
+
+  // 状态值本身在数据层是英文（unread / read / ...），中文只活在词典里（SDD §15.4）
+  const expected = {
+    'usage.recentRead': ['最近读取：{rel} · {time}', 'Recently read: {rel} · {time}'],
+    'usage.outsideDocs': ['上下文外读取 · {n} 篇', 'Read outside the pack · {n}'],
+    'usage.deltaTitle': ['上下文刚刚变化', 'Context just changed'],
+    'usage.deltaEnter': ['进入', 'Entered'],
+    'usage.deltaLeave': ['离开', 'Left'],
+    'usage.deltaMove': ['换层', 'Moved tier'],
+    'usage.deltaTask': ['任务上下文已更新', 'Task context updated'],
+    'usage.deltaMore': ['还有 {n} 条', '+{n} more'],
+    'lifecycle.unread': ['未读', 'Unread'],
+    'lifecycle.read': ['已读', 'Read'],
+    'lifecycle.readCount': ['已读 ×{n}', 'Read ×{n}'],
+    'lifecycle.updatedAfterRead': ['读后已更新', 'Updated after read'],
+    'lifecycle.rereadAfterUpdate': ['修改后已重新读取', 'Re-read after update'],
+    'tierName.primary': ['主要', 'Primary'],
+    'tierName.supporting': ['辅助', 'Supporting'],
+    'tierName.related': ['相关', 'Related'],
+  }
+
+  for (const [key, [zhText, enText]] of Object.entries(expected)) {
+    assert.equal(zh[key], zhText, `ZH ${key}`)
+    assert.equal(en[key], enText, `EN ${key}`)
+    assert.ok(!/[\u4e00-\u9fff]/.test(en[key]), `EN ${key} 里不许出现汉字`)
+  }
+  // 四档事实状态只陈述事实：不许写成「Agent 还不知道最新版」这类推断
+  const stateWords = ['lifecycle.unread', 'lifecycle.read', 'lifecycle.updatedAfterRead', 'lifecycle.rereadAfterUpdate']
+  for (const key of stateWords) {
+    assert.ok(!/Agent|还不知道|旧版|没看到|忽略了/.test(zh[key]), `ZH ${key} 不许写推断`)
+    assert.ok(!/Agent|outdated|stale version|missed|ignored/i.test(en[key]), `EN ${key} 不许写推断`)
+  }
+})

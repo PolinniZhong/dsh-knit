@@ -18,10 +18,17 @@
  *
  * ⚠️ 本模块**不碰 Retrieval**（BM25 / IDF / 关键词抽取 / 长度归一化 / freshness 一行不改），
  * 也**不落盘、不联网、不调模型、不写 memory、不自动干预上下文**。
- * 读证据的唯一来源是宿主派发的 `session/event`（v0.16 起）：**不再**调用
+ * 读证据的唯一来源是宿主派发的 `session/event`（v0.16 起）：本模块**自己**从不调用
  * `session.snapshotEvents()` —— 那个 API 已被 DSH 标记 deprecated
  * （「new production calls are prohibited」），而且它在 fork 会话上会把父会话继承来的
- * 前缀事件也算进来。代价是：订阅之前发生的事件不回溯，只记订阅之后真实发生的读。
+ * 前缀事件也算进来。代价是：订阅之前发生的事件不会自动进来。
+ *
+ * v0.17 修订：闸门开晚时（真实用法：读完才想起来看面板），宿主可以在**开闸那一刻**
+ * 回填一次会话已有的事件（`markBackfilled()` 由宿主在 `ingestEvents()` 之后调用）。
+ * 本模块仍然零 I/O、零网络、零模型 —— 事件是宿主喂进来的，它只多知道一件事：
+ * 「这批读是补记的」。**顺序是这个机制的组成部分**：`recordRead()` 在事件入库那一刻就把
+ * 归因冻结，所以宿主必须**先把手上那份包 `noteSnapshot()` 掉、再喂补记的事件**，
+ * 否则那些读会在「一份快照都还没有」的状态下被冻成包外（规格 §6：不知道就不要说）。
  *
  * 这里**没有**：trajectory、span、runtime trace、reasoning、成功率、置信度、归一化评分、
  * quality score、memory 写入。Usage 不是分数，是计数与事实。
@@ -324,6 +331,41 @@ export function isAudited(store, sessionId) {
 }
 
 /**
+ * 标记这个会话的历史**已经被回填过**（v0.17 修订）。
+ *
+ * 幂等：调用方（宿主）在开闸时用它保证「一个会话只回填一次」，之后从订阅来的新事件
+ * 照常单独入账。
+ *
+ * @param {object} store - store
+ * @param {string} sessionId - 会话 id
+ * @returns {boolean} 是否成功
+ */
+export function markBackfilled(store, sessionId) {
+  try {
+    if (!store || !sessionId) return false
+    stateOf(store, sessionId).backfilled = true
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 这个会话的历史回填过了吗。
+ * @param {object} store - store
+ * @param {string} sessionId - 会话 id
+ * @returns {boolean} 是否回填过
+ */
+export function isBackfilled(store, sessionId) {
+  try {
+    const state = store && sessionId ? store.sessions.get(sessionId) : null
+    return !!(state && state.backfilled)
+  } catch {
+    return false
+  }
+}
+
+/**
  * 取（或建）一个会话的状态，并按 LRU 触摸 —— 会话数量超上限时淘汰最久没碰的。
  * @param {object} store - store
  * @param {string} sessionId - 会话 id
@@ -343,6 +385,9 @@ function stateOf(store, sessionId) {
       // ⚠️ 这里**不再**有 `changes` 计数：上下文换过几次 = 最后一个 Epoch 的编号 - 1，
       // 而 Epoch 编号是单调的（被淘汰的 Epoch 也计过数），所以不需要额外记一个累计值。
       churn: { appeared: 0, disappeared: 0, moved: 0, taskChanged: 0 },
+      // v0.17 修订：这份状态里的读是**回填**进来的（开闸时补记的历史）。
+      // 它只用于「一个会话只回填一次」，不影响归因 —— 归因由宿主喂事件的顺序保证。
+      backfilled: false,
     }
     store.sessions.set(sessionId, state)
   }
@@ -372,6 +417,35 @@ function stateOf(store, sessionId) {
  * @param {{root?: string}} [options] - 选项
  * @returns {{ok: boolean, reads: number, cursor: number}} 结果
  */
+/**
+ * 安全地取一次版本标记。**任何异常都咽掉**：记账坏了不许影响宿主。
+ * @param {(rel: string) => unknown} stat - 宿主注入的取样函数
+ * @param {string} rel - 已归一化的工作区相对路径
+ * @returns {number|null} mtimeMs，或 null（拿不到就不猜）
+ */
+function safeStat(stat, rel) {
+  try {
+    const value = stat(rel)
+    return Number.isFinite(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 把**一批**会话事件喂进去，抽出 read 并按「读发生的那一刻」结算归因。
+ *
+ * v0.16 起调用方通常一次只喂一条（`session/event` 订阅）。仍然是幂等的：
+ * 只处理 `seq > state.seq` 的事件，重复喂同一批不会重复计数。
+ *
+ * **任何异常都咽掉并返回 `{ok:false}`** —— 记账失败绝不能让面板或工具失败。
+ *
+ * @param {object} store - store
+ * @param {string} sessionId - 会话 id
+ * @param {object[]} events - 会话事件
+ * @param {{root?: string, stat?: (rel: string) => unknown}} [options] - 选项（v0.17 新增 `stat`）
+ * @returns {{ok: boolean, reads: number, cursor: number}} 结果
+ */
 export function ingestEvents(store, sessionId, events, options = {}) {
   try {
     if (!store || !sessionId) return { ok: false, reads: 0, cursor: -1 }
@@ -383,7 +457,14 @@ export function ingestEvents(store, sessionId, events, options = {}) {
     })
     state.pending = pending
     if (cursor > state.seq) state.seq = cursor
-    for (const read of reads) recordRead(state, read)
+    // v0.17：只在「这次读被确认成功」的时刻取一次版本标记（stat 由宿主注入，
+    // 本模块仍然零 I/O）。取样在 recordRead 之前，而 recordRead 只处理
+    // seq > fromSeq 的新事件 —— 同一事件重复派发既不重复计数，也不重复取样。
+    const stat = typeof options.stat === 'function' ? options.stat : null
+    for (const read of reads) {
+      read.mtimeMs = stat ? safeStat(stat, read.rel) : null
+      recordRead(state, read)
+    }
     return { ok: true, reads: reads.length, cursor: state.seq }
   } catch {
     return { ok: false, reads: 0, cursor: -1 }
@@ -409,10 +490,11 @@ export function noteSnapshot(store, sessionId, pack, meta = {}) {
   try {
     if (!store || !sessionId || !pack) return null
     const state = stateOf(store, sessionId)
-    const next = snapshotOf(pack, {
-      seq: Number.isInteger(meta.seq) ? meta.seq : state.seq,
-      at: meta.at,
-    })
+    // ⚠️ 不传 `seq` 时取**当前事件水位**。回填路径下宿主必须先记包再喂事件 ——
+    // 那一刻水位还是 -1，第一份快照自然落在会话开头，补记的读才有资格归到
+    // 「我们已知最早的那份包」上（见文件头与 index.js 的 `backfillFeedback`）。
+    const seq = Number.isInteger(meta.seq) ? meta.seq : state.seq
+    const next = snapshotOf(pack, { seq, at: meta.at })
     const prev = state.snapshots[state.snapshots.length - 1] || null
 
     if (prev && prev.sig === next.sig) {
@@ -528,6 +610,10 @@ function recordRead(state, read) {
       relatedReads: 0,
       reEntry: false,
       continuedReadAfterExit: false,
+      // v0.17：首次读之前没有「上一次」，三个字段的初值就是「不知道」
+      lastReadMtimeMs: null,
+      prevReadMtimeMs: null,
+      rereadAfterChange: false,
     }
     state.reads.set(read.rel, entry)
     state.readOrder.push(read.rel)
@@ -537,6 +623,13 @@ function recordRead(state, read) {
   }
 
   entry.count += 1
+  // v0.17：把「这次读观察到的版本标记」冻结下来 —— 只在成功 read 时更新，
+  // 永不被扫描或投影改写（与「归因在读那一刻冻结」是同一条纪律）。
+  entry.prevReadMtimeMs = entry.lastReadMtimeMs
+  entry.rereadAfterChange = entry.lastReadMtimeMs !== null
+    && read.mtimeMs !== null
+    && read.mtimeMs !== entry.lastReadMtimeMs
+  entry.lastReadMtimeMs = Number.isFinite(read.mtimeMs) ? read.mtimeMs : null
   // 「第一次读」按**事件 seq** 认（seq 才是真相，墙钟只用来显示）
   if (read.seq < entry.firstRead.seq || (read.seq === entry.firstRead.seq && read.time < entry.firstRead.at)) {
     entry.firstRead = { ...point }
@@ -648,17 +741,128 @@ export function attributeReadFacts(snapshots, rel, readSeq) {
   return { continuedReadAfterExit: true, reEntry: false }
 }
 
+/* ── 6. Lifecycle 投影（v0.17） ─────────────────────────────────────── */
+
+/**
+ * 把一条 read entry 与**当前扫描到的版本标记**投影成一个 lifecycle 事实。
+ *
+ * 判定优先级是**硬顺序**：`changedAfterLastRead` 先于 `rereadAfterChange` ——
+ * 这就是「文件再次变化后状态回到 `读后已更新`」的实现方式。
+ *
+ * 状态值只有四个英文事实，**中文文案不进数据层**（UI 按 locale 映射）：
+ * `unread` / `read` / `updated_after_read` / `reread_after_update`。
+ *
+ * 拿不到版本标记（文件被删、不在扫描结果、stat 失败）时**不做变化判断**，
+ * 状态回落到冻结的事实 —— 宁可少说，也不乱说。
+ *
+ * @param {object|null} entry - `state.reads` 里的 entry
+ * @param {number|null} [mtimeMs] - 当前扫描到的版本标记
+ * @returns {{status: string, lastReadMtimeMs: number|null, changedAfterLastRead: boolean, rereadAfterChange: boolean}} 状态
+ */
+export function lifecycleOf(entry, mtimeMs = null) {
+  const count = entry && Number.isInteger(entry.count) ? entry.count : 0
+  const lastReadMtimeMs = entry && Number.isFinite(entry.lastReadMtimeMs) ? entry.lastReadMtimeMs : null
+  const changedAfterLastRead = Number.isFinite(mtimeMs) && lastReadMtimeMs !== null
+    && mtimeMs !== lastReadMtimeMs
+  let status = 'unread'
+  if (count > 0) {
+    if (changedAfterLastRead) status = 'updated_after_read'
+    else if (entry.rereadAfterChange) status = 'reread_after_update'
+    else status = 'read'
+  }
+  return {
+    status,
+    lastReadMtimeMs,
+    changedAfterLastRead,
+    rereadAfterChange: !!(entry && entry.rereadAfterChange),
+  }
+}
+
+/**
+ * 把 `state.reads` 摊平成数组（Map 与数组都收，测试常直接喂数组）。
+ * @param {Map<string, object>|object[]} reads - 读证据
+ * @returns {object[]} entry 列表
+ */
+function readEntries(reads) {
+  if (reads instanceof Map) return [...reads.values()]
+  return Array.isArray(reads) ? reads : []
+}
+
+/**
+ * 「最近读取」= 所有成功 read 里 `lastRead.seq` 最大的那一篇。
+ *
+ * seq 才是真相（墙钟只用来显示相对时间）；seq 相同时取 `lastRead.at` 较大者，
+ * 保证同样是确定性的。**不建立第二份 read history**，完全从现有 entry 派生。
+ *
+ * @param {Map<string, object>|object[]} reads - 读证据
+ * @returns {{rel: string, at: number, seq: number, epochId: number|null, tier: string|null, rank: number|null, inside: boolean}|null} 最近读取
+ */
+export function latestReadOf(reads) {
+  let best = null
+  for (const entry of readEntries(reads)) {
+    if (!entry || !entry.lastRead || !(entry.count > 0)) continue
+    if (!best
+      || entry.lastRead.seq > best.lastRead.seq
+      || (entry.lastRead.seq === best.lastRead.seq && entry.lastRead.at > best.lastRead.at)) {
+      best = entry
+    }
+  }
+  if (!best) return null
+  return {
+    rel: best.rel,
+    at: best.lastRead.at,
+    seq: best.lastRead.seq,
+    epochId: Number.isInteger(best.lastRead.epochId) ? best.lastRead.epochId : null,
+    tier: best.lastRead.tier || null,
+    rank: Number.isInteger(best.lastRead.rank) ? best.lastRead.rank : null,
+    inside: !!best.lastRead.inside,
+  }
+}
+
+/**
+ * 「当前包外、且真实成功读取过」的文档明细。
+ *
+ * ⚠️ 与 v0.16 的 `stats.outside` / `stats.outsideReads` **语义不同，两个都要留**：
+ * 那个是**历史层**（至少有一次读发生在当时的包外，永不重算），
+ * 这个是**当前层**（这篇文档不在**当前**包内，但被读过）—— 当前包变了它就变。
+ *
+ * @param {Map<string, object>|object[]} reads - 读证据
+ * @param {Array<{rel: string}>} items - 当前快照的扁平条目
+ * @returns {Array<{rel: string, count: number, lastReadAt: number, seq: number}>} 包外明细（按首次读的 seq 升序）
+ */
+export function outsideDocsOf(reads, items) {
+  const inside = new Set()
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item && typeof item.rel === 'string' && item.rel) inside.add(item.rel)
+  }
+  const rows = []
+  for (const entry of readEntries(reads)) {
+    if (!entry || !entry.rel || !(entry.count > 0) || inside.has(entry.rel)) continue
+    if (!entry.firstRead || !entry.lastRead) continue
+    rows.push({
+      rel: entry.rel,
+      count: entry.count,
+      lastReadAt: entry.lastRead.at,
+      seq: entry.firstRead.seq,
+    })
+  }
+  // 阅读顺序（首次读的 seq），同 seq 用 rel 兜底 —— 不用 localeCompare（它依赖运行环境）
+  rows.sort((a, b) => (a.seq - b.seq) || (a.rel < b.rel ? -1 : (a.rel > b.rel ? 1 : 0)))
+  return rows
+}
+
 /**
  * 取一个会话当前的使用情况。没有记录时返回 `null`（不编造空报告）。
  * @param {object} store - store
  * @param {string} sessionId - 会话 id
+ * @param {{mtimes?: Map<string, number>|object}} [options] - v0.17：当前版本标记（rel → mtimeMs）
  * @returns {object|null} 使用情况
  */
-export function usageFor(store, sessionId) {
+export function usageFor(store, sessionId, options = {}) {
   try {
     const state = store && store.sessions.get(sessionId)
     if (!state) return null
-    return usageFrom(state)
+    return usageFrom(state, options)
   } catch {
     return null
   }
@@ -677,11 +881,16 @@ export function usageFor(store, sessionId) {
  * 上下文变过几次、有几篇离开后仍被读、有几篇重新进入。**没有分数、没有百分比评分。**
  *
  * @param {object} state - 会话状态
+ * @param {{mtimes?: Map<string, number>|object}} [options] - v0.17：当前版本标记（rel → mtimeMs）
  * @returns {object} 使用情况
  */
-export function usageFrom(state) {
+export function usageFrom(state, options = {}) {
   const snapshots = (state && state.snapshots) || []
   const snapshot = snapshots[snapshots.length - 1] || null
+  // v0.17：当前版本标记。不传 = 拿不到变化证据 = 保守（只有 read / reread_after_update）
+  const mtimes = options.mtimes instanceof Map
+    ? options.mtimes
+    : new Map(Object.entries(options.mtimes || {}))
   const epochId = snapshot && Number.isInteger(snapshot.epochId) ? snapshot.epochId : null
   const byTier = {
     primary: { total: 0, read: 0 },
@@ -695,7 +904,20 @@ export function usageFrom(state) {
   }
 
   const reads = []
+  // v0.17：lifecycle 是**读证据 + 当前版本标记**的投影，只含有 read 证据的 rel；
+  // 没有 entry 的文档不出现在这里（UI 自行落回 unread），免得把整个工作区灌进来。
+  const lifecycle = {}
   for (const entry of state.reads.values()) {
+    const currentMtimeMs = mtimes.has(entry.rel) ? mtimes.get(entry.rel) : null
+    const life = lifecycleOf(entry, currentMtimeMs)
+    lifecycle[entry.rel] = {
+      status: life.status,
+      count: entry.count,
+      lastReadMtimeMs: life.lastReadMtimeMs,
+      changedAfterLastRead: life.changedAfterLastRead,
+      rereadAfterChange: life.rereadAfterChange,
+      lastReadAt: entry.lastRead.at,
+    }
     reads.push({
       rel: entry.rel,
       count: entry.count,
@@ -732,6 +954,8 @@ export function usageFrom(state) {
   const primaryRel = epoch && epoch.primary ? epoch.primary.rel : ''
   const continued = reads.filter((row) => row.continuedReadAfterExit)
   const reentries = reads.filter((row) => row.reEntry)
+  // 只取 `state.deltas` 的最后一条：与 `delta` 是**同一个对象**的两个引用，永不新建 Delta Store
+  const latestDelta = state.deltas[state.deltas.length - 1] || null
   const lastEpochId = Number.isInteger(epochId) ? epochId : 0
   const epochs = (Array.isArray(state.epochs) ? state.epochs : []).map((e) => ({
     epochId: e.epochId,
@@ -756,7 +980,13 @@ export function usageFrom(state) {
     reads,
     // §16 Epoch 级使用情况：内部 / 离线回放 / 将来评估用，v0.16 **不上**任何 UI 与工具输出
     epochs,
-    delta: state.deltas[state.deltas.length - 1] || null,
+    delta: latestDelta,
+    // ── v0.17 的四个新投影（全部是当前层派生物；`stats` 一个键都不动） ──
+    // `latestDelta` 与 `delta` 同引用，保证两处永远一致
+    latestDelta,
+    lifecycle,
+    recentRead: latestReadOf(state.reads),
+    outsideDocs: outsideDocsOf(state.reads, snapshot ? snapshot.items : []),
     stats: {
       reads: reads.reduce((sum, row) => sum + row.count, 0),
       distinct: reads.length,
