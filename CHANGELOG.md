@@ -5,8 +5,11 @@
 
 ## [0.17.0] - 2026-10-03
 
-> 🚧 **尚未发布**：工作树 = `0.17.0`（`knit/package.json`），未打 tag、未 publish。
-> 发布后把这一行补成 `✅ **… 已发布**：v0.17.0 = <sha> · npm latest = 0.17.0（<n> 文件 / <size> / shasum …）`。
+> ✅ **2026-10-05 已发布**：`v0.17.0` = 轻量 tag = npm `gitHead` = `4d0c74e` · npm `latest = 0.17.0`
+> · **43 文件 / 394.6 kB 打包 / 1.2 MB 解包** / shasum `33bf6faac4de75170e2378ff9096dd4cdb1da81a`。
+> 由 **npm 可信发布（Trusted Publisher / OIDC）** 经 GitHub Actions 发出（带 provenance），不再用 token。
+> ⚠️ **包内这份 CHANGELOG 里对应的那两行仍写着「🚧 尚未发布」** —— 本次改它的提交在 publish 之后，
+> **同一版本号不能再发一次**（与 v0.16 同一个坑）。
 
 **Document Lifecycle（依据 `01_ Knit PRD/Knit-PRD-SDD-v0.17-Document-Lifecycle.md`）**：
 前面几版回答的是「Knit 推荐了什么 → Agent 有没有读 → 读落在哪一层」；
