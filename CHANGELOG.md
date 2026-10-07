@@ -30,6 +30,10 @@
   keywords 24 → 27（新增 `workspace-context` / `context-retrieval` / `context-lifecycle`）。
 - **无代码变更**：`src/`、`test/`、`tools/` 一行没动，测试仍是 588 项全绿。
 
+> ✅ **2026-10-07 已发布**：轻量 tag `v0.19.1` = 发布提交 `8dbbdef80c0d4d691b2724225ee6c4ec93aa6c34`；npm `latest = 0.19.1`、`gitHead` = 同一个提交、共 **16 个**版本；registry 真包 **46 文件 / 490 417 B 打包 / 1 452 990 B 解包 / shasum `a69ed85eb065335fda6a3e6cf91dfb346b76b71a`**；OIDC 可信发布 + provenance（`/slsa.dev/provenance/v1`）；GitHub Release 正文取自本节（27 行 / 2020 字节），`publishedAt 2026-10-07T04:49:46Z`。
+> ⚠️ 本地 `npm pack --dry-run` 报 46 文件 / 483.4 kB / shasum `5bfd69b0…` —— **本地字节与 registry 历来对不上**（v0.18 / v0.19.0 都这样），差的只是 tar/gzip 框架元数据，解包后清单与内容逐字一致。
+> ⚠️ **这一行不在已发布的 tarball 里** —— 它在 publish 成功之后才写进来（下次 `npm view` 看到的是这份仓库里的文件）。
+
 ## [0.19.0] - 2026-10-07
 
 > **Code Context**。产品概念从「Markdown / 图片 / 视频」变成「**文档 / 代码 / 媒体**」——
