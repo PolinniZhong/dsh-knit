@@ -187,6 +187,15 @@
   400 文档截断 + 300 代码（243 条被 cap 挡下）+ 400 媒体，语料 400 → 700 ——
   `MAX_CODE = 300` 在这里正好起到「别让代码把原有 Markdown 上下文挤出去」的作用。
 
+> ✅ **2026-10-07 已发布**：`v0.19.0` = 轻量 tag = npm `gitHead` = `22ab1346f1b8e145ae0940490af13bca02d9ab08`
+> · npm `latest = 0.19.0` · **46 文件 / 486.8 kB 打包 / 1.4 MB 解包** / shasum `7f67559d005fcf19405a96ab459d7aac6515a99f`。
+> （本地 `npm pack --dry-run` 报的是 479.8 kB / `291a9150…`；两个 tarball 的**文件清单与解包内容逐字一致**，
+> 差的只是 tar/gzip 框架元数据 —— 与 v0.17 / v0.18 同一现象。）由 **npm 可信发布（Trusted Publisher / OIDC）**
+> 经 GitHub Actions 发出（带 provenance，`predicateType` = `https://slsa.dev/provenance/v1`），不设 `NODE_AUTH_TOKEN`。
+> GitHub Release 正文直接切自本节（184 行 / 16 858 字节），没有另写一份。
+> ⚠️ **这一行是发布之后补的，所以它不在已发布的 tarball 里** —— 包内那份 CHANGELOG 读到上一段为止
+> （节首刻意写成发布前后都成立的说法，所以包内那份不自相矛盾）。逐条核对见 `03_发布/发布清单-v0.19.0.md` §四。
+
 ## [0.18.0] - 2026-10-06
 
 > ✅ **2026-10-06 已发布**：`v0.18.0` = 轻量 tag = npm `gitHead` = `170ee8f` · npm `latest = 0.18.0`
