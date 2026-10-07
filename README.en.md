@@ -1,9 +1,41 @@
 # Knit
 
-> Your agent writes 20 documents a day. You can't find the one you just saw.
-> Knit puts them next to the conversation — whatever you're talking about, the relevant doc is on top.
+> **Task-aware workspace context retrieval and lifecycle tracking for AI coding agents.**
 >
-> **Your agent has the same problem.** It gets the same ranking as a tool — the ranked documents plus the passage that matched in each.
+> **面向 AI Coding Agent 的任务感知工作区上下文检索与生命周期追踪。**
+
+Knit is the layer between **the task you are on** and **your whole workspace**: it finds the most
+relevant documents, source files and media, organises them into **Primary / Supporting / Related**
+context (the Context Pack) for both the panel and the agent, and keeps tracking **whether they were
+read, and whether they changed after being read**.
+
+**Find → Organise → Track**, all of it plain string work on your own machine — no model calls, no
+network, no latency, nothing leaves the machine.
+
+```text
+                       Current task
+                            │
+                    Workspace retrieval
+            ┌───────────────┼───────────────┐
+            ▼               ▼               ▼
+         Primary        Supporting        Related
+            └───────────────┼───────────────┘
+                            ▼
+                      Context Pack ──►  the `knit_docs` tool (for the agent)
+                            ▼
+                        Agent reads
+                            ▼
+                 Read Evidence · Context Epoch
+                            ▼
+                    Workspace changes
+                            ▼
+                   Re-read · Lifecycle
+```
+
+> **It is not a smarter recent-files list, and it is not a code browser.**
+> A recent-files list records what you happened to open and what is newest; Knit answers
+> **which things in this project are worth looking at first for the task at hand — and what
+> happened to them after they were read.**
 
 ![Screenshot from a real machine: the Knit sidebar left on the Code tab, ranking the workspace source files by relevance, with a code preview expanded in place](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
@@ -37,104 +69,128 @@ dsh plugin --profile web add dsh-knit
 
 ---
 
-## "Isn't this just a recent-files list?"
+## Why it exists
 
-**Fair. Two differences:**
+> An agent produces 20 documents a day, and you cannot find the one from a minute ago.
 
-1. **Scope** — a recent-files list only remembers files you *opened*. Knit scans the
-   **entire project folder**. Restart DSH, start a new session, come back tomorrow: it's all still there.
-2. **Order** — that list sorts by time. Knit sorts by **what you're currently talking about**.
+That is the problem it started from: **output got faster than anyone can browse directories.**
+DSH's built-in "recent files" only records what you opened; once a turn ends, the earlier ones sink
+out of sight.
 
-Three sentences on what it is:
+Knit asks a different question: **not "what is newest", but "what is relevant to what I am doing".**
+It scans the **whole workspace** (not just what this turn produced) and ranks by what you are
+talking about — restart DSH, open a new session, come back the next day, and it is still there.
 
-1. Scans **every Markdown file in the project folder**, not just the ones from this turn —
-   they survive restarts, new sessions, and days.
-2. The order **follows the conversation**: talk about architecture and the architecture doc
-   floats up; talk about competitors and the competitor analysis floats up.
-3. **No model calls, no network egress**: plain local string matching — zero latency,
-   zero cost, your documents never leave the machine.
+Then the problem grew one step further: when you actually change a feature, the first thing worth
+reading is usually not a document but **a few lines of source**. That is what v0.19 added. And after
+that, "ranked first" stopped being enough — **of the things it ranked, did the agent actually read
+them? Did they change afterwards?** v0.15–v0.18 filled in that layer.
+
+Three words: **Find** (scan the workspace, rank by the current task) → **Organise** (three tiers,
+each with its reason) → **Track** (read or not, changed or not).
 
 ---
 
-## How "relevant" is computed
+## It is not a recent-files list, and not a code browser
 
-No magic, just string operations. Three steps:
+Both comparisons catch one **surface** of Knit and miss the question it answers.
 
-**1. Read the conversation.** The host takes the last 6 user/assistant messages, and only
-counts real user messages (`agent.inject()` synthetic context would drag the topic off course).
-Newer messages weigh more: 3 / 2 / 1 / 1 …
-
-**2. Extract keywords.**
-
-- **ASCII words** — high value, one occurrence is enough (`chokidar`, `mtime`)
-- **Chinese 2/3-grams** — either occurring twice, or appearing in the newest message
-- **Drop fragments that straddle a word boundary.** Chinese has no word boundaries, so
-  n-grams glue the last character of one word to the first of the next (「图片和」, 「个插」,
-  「的排」). They share one trait — **the first or last character is a pure function word** —
-  and are dropped. Leave them in and they fill every candidate slot, pushing the real words
-  (「图片」, 「排序」) out of the query entirely
-- stop-word filtering plus greedy de-overlap (picking「相关性排序」drops「相关性」and「排序」)
-
-**3. Score the documents — BM25.**
-
-```
-IDF per term first: rarer in the corpus means more valuable
-                    ln(1 + (N - df + 0.5) / (df + 0.5))
-then a weighted sum over fields: title ×4  +  summary ×2  +  first 2500 chars of body ×1
-each field saturated and length-normalised (k1 = 1.2, b = 0.3 / 0.5 / 0.75)
-plus a 10% recency nudge (relevance still dominates)
-```
-
-**Why BM25 and not "hits × weight"** (the original approach, since replaced):
-
-- with no IDF, a term that appears **everywhere** (the project name) is worth as much as a
-  rare one — so the frequent term discriminates nothing and dilutes the rare ones
-- with no length normalisation, **a long document wins by piling up hits**
-- capping hits at 6 was a hand-drawn knee; `k1` / `b` exist precisely for this
-
-Measured on `test/eval/fixture.mjs` (21 cases, both engines on the same corpus):
-
-| | top-1 | MRR |
-|---|---|---|
-| old (weighted hits) | 76.2% | 0.830 |
-| **BM25** | **95.2%** | **0.976** |
-
-That eval runs inside `npm test`, and the baseline is **recomputed each run** from the old
-engine frozen in `test/eval/legacy.mjs` — so "the new engine must be clearly better" is
-verified automatically rather than asserted against a hard-coded number.
-
-**Against counting keywords yourself** (`knit/tools/scale-benchmark.mjs`, N = 20/60/180/540):
-the corpus is built with a real trap — 12 short, focused topic documents, plus a pile of long
-distractors that mention every topic five times without explaining any of them (which is what a
-real project's CHANGELOG looks like). Half the topic documents have descriptive filenames, half
-are opaque.
-
-| Approach | Descriptive filenames | Opaque filenames | MRR vs. scale |
+|  | Recent-files list | Code browser | **Knit** |
 |---|---|---|---|
-| **Knit (BM25)** | **100%** | **100%** | **1.000 (flat)** |
-| `grep -c` keyword counting | 17% | **0%** | 0.313 → **0.089** |
-| Filenames only | 100% | **0%** | 0.602 |
+| Scope | What you happened to open | A directory tree | **The whole workspace**: documents / code / images / video |
+| Order | Modified time | You scroll it yourself | **Relevance to the current task** (BM25 + IDF, computed locally) |
+| Output | One flat list | The one file you opened | **Primary / Supporting / Related**, each saying why it is there |
+| For whom | You | You | You **and** the agent — the same Context Pack, through `knit_docs` |
+| Afterwards | Nothing | Nothing | **Was it read? Did it change after being read?** (Read Evidence + lifecycle) |
 
-Three things: **the ranking beats counting keywords yourself** (so having the agent recompute it
-is irrational); **filename matching only works when names describe content**, and Knit is the
-only approach that scores 100% either way; and **self-counting degrades as the corpus grows**.
+The three differences that matter:
 
-**About the "sorted by「xxx」" line**: it shows the **span of your own text** that the matched
-terms cover, not the raw candidate tokens. Chinese has no word boundaries, so candidates always
-include fragments that straddle two words (「项目文档」 yields `项目文` / `目文档`), and showing
-those renders as gibberish — merging their spans and slicing the original text recovers `项目文档`.
-The label is **your own wording**, so its casing is preserved (type `BM25`, see `BM25`).
+1. **Scope**: a recent-files list only records the files you **opened**; Knit scans **the whole project
+   folder** — restart DSH, open a new session, come back days later, and it is still there.
+2. **Order**: it sorts by time; Knit sorts by **what you are talking about** — discuss architecture and
+   the architecture docs rise; discuss a loader bug and `plugin-loader.ts` rises.
+3. **It does not stop at finding**: after finding comes **organising** (three tiers, each with a
+   verifiable reason) and **tracking** (which were really read, and whether they changed).
 
-All of it is string arithmetic — **no embeddings, no model calls**.
+**No model calls, no network**: all plain string work, no latency, no cost, nothing leaves the machine.
 
-**And the honest boundaries**:
+---
 
-- **With only one or two messages** there are too few keywords, so it falls back to sorting by
-  modification time and says so in the panel — it does not pretend to rank
-- **With only three to five documents IDF barely does anything**: `df` only takes a few values,
-  so its dynamic range collapses. The more documents, the better this ranking gets
-- **It can only rank documents that share vocabulary with the conversation**: if no term matches,
-  every document scores the same and the order degrades to time
+## Install
+
+```sh
+dsh plugin --profile web add dsh-knit
+```
+
+Then **restart DSH** and hard-refresh the browser (`Cmd + Shift + R`).
+
+**How to open it:**
+
+- The **Knit icon button in the session header** (right next to the sidebar toggle) — one click
+- Or the right sidebar's tab bar「+」→「Knit recent docs」
+
+**Optional**: if `dsh-better-sidebar` is installed, the panel also registers
+as one of its tabs. Each host is an independent optional dependency; missing one doesn't affect the other.
+
+**Upgrading**: same command as installing, and the same restart + hard-refresh afterwards.
+
+---
+
+## Features
+
+| | |
+|---|---|
+| **Code Context** (v0.19): source files join the **same** retrieval pipeline as documents — classify, BM25, Context Pack, lifecycle. A dedicated classification layer decides what a file *is* and what it may do, so extension knowledge lives in exactly one place | ✅ |
+| **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
+| **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
+| **Document lifecycle** (v0.17): each recommended document is shown as `Unread / Read / Updated after read / Re-read after update`, alongside the most recent read, how many reads fell outside the pack (expandable to which ones), and the latest context change | ✅ |
+| One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
+| Scans **documents and code** in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist` / `build` / `out` / `coverage`) | ✅ |
+| Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
+| The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
+| Click to preview inline, click again to collapse | ✅ |
+| Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
+| One-click switch between **Docs / Code / Media / All** (v0.19 adds Code; remembered, defaults to Docs); the selected tab is an **underline tab**, deliberately different from the list row's grey fill | ✅ |
+| Images & video: square thumbnail grid — cells have a **fixed 104px baseline independent of the item count**, columns come from CSS `repeat(auto-fill, minmax(104px, 1fr))`, and **as many rows as there are items are laid out** (no max height, the grid never scrolls itself — scrolling belongs to the list); videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
+| **"Web preview" for `.html`** (v0.19): the preview header hands the file to DSH's own document-preview tab (`openResource`) instead of showing source; the inline preview still shows source, so the two do not duplicate. Knit itself sends no request | ✅ |
+| Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
+| The **All** view splits into **three stacked sections**: docs (max 4, with "View all →" when truncated), **code** (max 4), then images & video (**never truncated**, count only) | ✅ |
+| Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
+| **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
+| Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
+| Filter box over title / summary / path | ✅ |
+| **Click the workspace path** to open the project folder in your file manager | ✅ |
+| **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout; the popover is just header + list — no extra divider or hint line) | ✅ |
+| Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse (`←` `→` span rows in the **media grid only** — the document list is always one column, so they have no spatial meaning there) | ✅ |
+| Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
+| Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
+| Zero model calls, zero network egress | ✅ |
+| **A `knit_docs` tool for the agent** — read-only, so the model can find this project's relevant docs itself | ✅ |
+
+> Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
+> the answer; position is relevance.
+
+### The other two views
+
+![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
+
+*Media: square thumbnails, with the **column count following the panel width continuously** —
+six columns at this width, cells about 110px. These are the workspace's real image and SVG files; this
+particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
+(the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
+a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
+
+![Screenshot of the All tab: the documents section, the code section, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+
+*All: the documents section shows at most 4, the **code section** shows at most 4 (each gets its own
+"View all →" when truncated — here "4 / 19" and "4 / 17"), and the media grid comes last.*
+
+⚠️ All three sections share the **same 40-item window** the host returns — a category that ranks past
+40th by relevance drops out of the All view entirely. This screenshot uses the **Newest** sort: in this
+workspace, under the default Relevance sort, media rank outside that window every time (at `limit=40`
+those 40 rows are 34 documents + 6 code files). The **Media** and **Code** tabs are unaffected — they
+request their own kind. A known defect, with reproduction and the fix recorded in
+[`docs/README.md`](docs/README.md).*
 
 ---
 
@@ -219,6 +275,41 @@ There is **no** "the AI thinks this matters" and **no** percentages, stars or co
 
 ---
 
+## Code as context (v0.19)
+
+Until v0.18 Knit understood Markdown, images and video. v0.19's product concept becomes
+**documents / code / media** — not "a few more extensions", but letting Knit put the source files an
+AI-coding task actually needs into the same Context Pack, on the same main line:
+
+```text
+Current task -> Workspace Retrieval -> Document + Code Candidates
+   -> Primary / Supporting / Related -> Context Pack -> Agent Read
+   -> Read Evidence -> File Changed -> Lifecycle -> Context Epoch / Delta -> Usage Lens
+```
+
+- **One classification layer, not scattered `if (ext === '.js')`** — `src/host/classification.js`
+  turns a filename into `{ kind, language, previewable, searchable, contextual, generated,
+  sourceMap }`. The scanner, retrieval, preview and UI all just read that verdict.
+- **Supported in v0.19**: `.js .mjs .cjs .ts .tsx .jsx .py .json .html .htm .css .scss .yaml .yml
+  .sh .bash .zsh`. **Not yet**: `.go .rs .java .kt .c .cpp .h .hpp .cs .php .rb .swift .sql`.
+- **Code gets its own field weights** — filename x4, path x2, body (first 8 KB) x1, instead of the
+  document weights (title x4 / summary x2 / body x1). A filename like `context-manager.ts` carries
+  the task signal.
+- **Generated files are not context**: `.map`, `*.min.js`, `*.min.css`, `*.bundle.js`,
+  `*.generated.js`, `*.gen.js`, `*.lock` classify as `generated` — previewable, but never in
+  retrieval, the Context Pack or the Usage Lens. When `app.js` and `app.js.map` both exist, the
+  `app.js` preview offers one low-key **"Source map"** entry; the `.map` never shows up as a row.
+  **Context eligibility is not file-system visibility** — the built-in file tree still opens them.
+- **Bounded and capped**: at most `MAX_CODE = 300` code candidates and a head-limited body read, so
+  a large repo cannot flood the Markdown corpus. Corpus pressure is the thing to watch in this
+  version, not recall.
+- **The type tabs become four**: `Docs / Code / Media / All`. The Code tab is **still driven by the
+  current task** — it is not a file tree of the project.
+- **No second engine**: no second retrieval path, no second lifecycle, no second store, no new
+  dependencies, no AST, no LSP, no embedding, no model call, no network, no IDE.
+
+---
+
 ## Also for the agent: the `knit_docs` tool
 
 The same ranking that you see in the panel is also exposed to the model.
@@ -253,103 +344,6 @@ Three details:
 > ⚠️ **The cost, stated plainly**: the tool description goes into the **system prompt of every
 > request**. Installing Knit costs a few extra tokens per session. That is the price of giving the
 > agent the capability.
-
----
-
-## Install
-
-```sh
-dsh plugin --profile web add dsh-knit
-```
-
-Then **restart DSH** and hard-refresh the browser (`Cmd + Shift + R`).
-
-**How to open it:**
-
-- The **Knit icon button in the session header** (right next to the sidebar toggle) — one click
-- Or the right sidebar's tab bar「+」→「Knit recent docs」
-
-**Optional**: if `dsh-better-sidebar` is installed, the panel also registers
-as one of its tabs. Each host is an independent optional dependency; missing one doesn't affect the other.
-
-**Upgrading**: same command as installing, and the same restart + hard-refresh afterwards.
-
----
-
-## Feedback
-
-**Right now this project is not about adding features — it's about finding out whether
-"rank project docs by the current conversation" is something anyone actually uses.**
-So the most valuable thing you can send is not "could you add X" but **how you work around
-this today** — including "I installed it and never opened it", which is more useful than a
-feature request.
-
-- 💬 [Tell us when you actually open it](https://github.com/PolinniZhong/dsh-knit/issues/new?template=feature.yml) — two fields, thirty seconds
-- 🐞 [Won't install / panel won't open / ranking looks wrong](https://github.com/PolinniZhong/dsh-knit/issues/new?template=bug.yml)
-- 📖 Check [known limitations](#known-limitations) first — short conversations degrade to time order and Chinese uses n-gram approximation; those are deliberate trade-offs, not bugs
-
-> A single issue is treated as a real signal. So far this plugin has **no trace of a single
-> real user** — the npm download count is automated version enumeration, not people
-> (only 14% of it is `latest`, and a human install only ever pulls `latest`). One human reply
-> changes what gets built next.
-
----
-
-## Features
-
-| | |
-|---|---|
-| **Code Context** (v0.19): source files join the **same** retrieval pipeline as documents — classify, BM25, Context Pack, lifecycle. A dedicated classification layer decides what a file *is* and what it may do, so extension knowledge lives in exactly one place | ✅ |
-| **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
-| **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
-| **Document lifecycle** (v0.17): each recommended document is shown as `Unread / Read / Updated after read / Re-read after update`, alongside the most recent read, how many reads fell outside the pack (expandable to which ones), and the latest context change | ✅ |
-| One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
-| Scans **documents and code** in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist` / `build` / `out` / `coverage`) | ✅ |
-| Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
-| The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
-| Click to preview inline, click again to collapse | ✅ |
-| Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
-| One-click switch between **Docs / Code / Media / All** (v0.19 adds Code; remembered, defaults to Docs); the selected tab is an **underline tab**, deliberately different from the list row's grey fill | ✅ |
-| Images & video: square thumbnail grid — cells have a **fixed 104px baseline independent of the item count**, columns come from CSS `repeat(auto-fill, minmax(104px, 1fr))`, and **as many rows as there are items are laid out** (no max height, the grid never scrolls itself — scrolling belongs to the list); videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
-| **"Web preview" for `.html`** (v0.19): the preview header hands the file to DSH's own document-preview tab (`openResource`) instead of showing source; the inline preview still shows source, so the two do not duplicate. Knit itself sends no request | ✅ |
-| Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
-| The **All** view splits into **three stacked sections**: docs (max 4, with "View all →" when truncated), **code** (max 4), then images & video (**never truncated**, count only) | ✅ |
-| Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
-| **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
-| Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
-| Filter box over title / summary / path | ✅ |
-| **Click the workspace path** to open the project folder in your file manager | ✅ |
-| **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout; the popover is just header + list — no extra divider or hint line) | ✅ |
-| Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse (`←` `→` span rows in the **media grid only** — the document list is always one column, so they have no spatial meaning there) | ✅ |
-| Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
-| Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
-| Zero model calls, zero network egress | ✅ |
-| **A `knit_docs` tool for the agent** — read-only, so the model can find this project's relevant docs itself | ✅ |
-
-> Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
-> the answer; position is relevance.
-
-### The other two views
-
-![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
-
-*Media: square thumbnails, with the **column count following the panel width continuously** —
-six columns at this width, cells about 110px. These are the workspace's real image and SVG files; this
-particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
-(the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
-a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
-
-![Screenshot of the All tab: the documents section, the code section, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
-
-*All: the documents section shows at most 4, the **code section** shows at most 4 (each gets its own
-"View all →" when truncated — here "4 / 19" and "4 / 17"), and the media grid comes last.*
-
-⚠️ All three sections share the **same 40-item window** the host returns — a category that ranks past
-40th by relevance drops out of the All view entirely. This screenshot uses the **Newest** sort: in this
-workspace, under the default Relevance sort, media rank outside that window every time (at `limit=40`
-those 40 rows are 34 documents + 6 code files). The **Media** and **Code** tabs are unaffected — they
-request their own kind. A known defect, with reproduction and the fix recorded in
-[`docs/README.md`](docs/README.md).*
 
 ---
 
@@ -515,38 +509,89 @@ The `knit_docs` tool output **did not grow**: it still only finds context.
 
 ---
 
-### v0.19: code as context (Code Context)
+## How retrieval works (implementation, not the pitch)
 
-Until v0.18 Knit understood Markdown, images and video. v0.19's product concept becomes
-**documents / code / media** — not "a few more extensions", but letting Knit put the source files an
-AI-coding task actually needs into the same Context Pack, on the same main line:
+> This section is **evidence**, not the sales pitch: it is what backs the claim "ranked by the
+> current task". The product question is answered on the first screen; this answers "why is it
+> any good at ranking".
 
-```text
-Current task -> Workspace Retrieval -> Document + Code Candidates
-   -> Primary / Supporting / Related -> Context Pack -> Agent Read
-   -> Read Evidence -> File Changed -> Lifecycle -> Context Epoch / Delta -> Usage Lens
+No magic, just string operations. Three steps:
+
+**1. Read the conversation.** The host takes the last 6 user/assistant messages, and only
+counts real user messages (`agent.inject()` synthetic context would drag the topic off course).
+Newer messages weigh more: 3 / 2 / 1 / 1 …
+
+**2. Extract keywords.**
+
+- **ASCII words** — high value, one occurrence is enough (`chokidar`, `mtime`)
+- **Chinese 2/3-grams** — either occurring twice, or appearing in the newest message
+- **Drop fragments that straddle a word boundary.** Chinese has no word boundaries, so
+  n-grams glue the last character of one word to the first of the next (「图片和」, 「个插」,
+  「的排」). They share one trait — **the first or last character is a pure function word** —
+  and are dropped. Leave them in and they fill every candidate slot, pushing the real words
+  (「图片」, 「排序」) out of the query entirely
+- stop-word filtering plus greedy de-overlap (picking「相关性排序」drops「相关性」and「排序」)
+
+**3. Score the documents — BM25.**
+
+```
+IDF per term first: rarer in the corpus means more valuable
+                    ln(1 + (N - df + 0.5) / (df + 0.5))
+then a weighted sum over fields: title ×4  +  summary ×2  +  first 2500 chars of body ×1
+each field saturated and length-normalised (k1 = 1.2, b = 0.3 / 0.5 / 0.75)
+plus a 10% recency nudge (relevance still dominates)
 ```
 
-- **One classification layer, not scattered `if (ext === '.js')`** — `src/host/classification.js`
-  turns a filename into `{ kind, language, previewable, searchable, contextual, generated,
-  sourceMap }`. The scanner, retrieval, preview and UI all just read that verdict.
-- **Supported in v0.19**: `.js .mjs .cjs .ts .tsx .jsx .py .json .html .htm .css .scss .yaml .yml
-  .sh .bash .zsh`. **Not yet**: `.go .rs .java .kt .c .cpp .h .hpp .cs .php .rb .swift .sql`.
-- **Code gets its own field weights** — filename x4, path x2, body (first 8 KB) x1, instead of the
-  document weights (title x4 / summary x2 / body x1). A filename like `context-manager.ts` carries
-  the task signal.
-- **Generated files are not context**: `.map`, `*.min.js`, `*.min.css`, `*.bundle.js`,
-  `*.generated.js`, `*.gen.js`, `*.lock` classify as `generated` — previewable, but never in
-  retrieval, the Context Pack or the Usage Lens. When `app.js` and `app.js.map` both exist, the
-  `app.js` preview offers one low-key **"Source map"** entry; the `.map` never shows up as a row.
-  **Context eligibility is not file-system visibility** — the built-in file tree still opens them.
-- **Bounded and capped**: at most `MAX_CODE = 300` code candidates and a head-limited body read, so
-  a large repo cannot flood the Markdown corpus. Corpus pressure is the thing to watch in this
-  version, not recall.
-- **The type tabs become four**: `Docs / Code / Media / All`. The Code tab is **still driven by the
-  current task** — it is not a file tree of the project.
-- **No second engine**: no second retrieval path, no second lifecycle, no second store, no new
-  dependencies, no AST, no LSP, no embedding, no model call, no network, no IDE.
+**Why BM25 and not "hits × weight"** (the original approach, since replaced):
+
+- with no IDF, a term that appears **everywhere** (the project name) is worth as much as a
+  rare one — so the frequent term discriminates nothing and dilutes the rare ones
+- with no length normalisation, **a long document wins by piling up hits**
+- capping hits at 6 was a hand-drawn knee; `k1` / `b` exist precisely for this
+
+Measured on `test/eval/fixture.mjs` (21 cases, both engines on the same corpus):
+
+| | top-1 | MRR |
+|---|---|---|
+| old (weighted hits) | 76.2% | 0.830 |
+| **BM25** | **95.2%** | **0.976** |
+
+That eval runs inside `npm test`, and the baseline is **recomputed each run** from the old
+engine frozen in `test/eval/legacy.mjs` — so "the new engine must be clearly better" is
+verified automatically rather than asserted against a hard-coded number.
+
+**Against counting keywords yourself** (`knit/tools/scale-benchmark.mjs`, N = 20/60/180/540):
+the corpus is built with a real trap — 12 short, focused topic documents, plus a pile of long
+distractors that mention every topic five times without explaining any of them (which is what a
+real project's CHANGELOG looks like). Half the topic documents have descriptive filenames, half
+are opaque.
+
+| Approach | Descriptive filenames | Opaque filenames | MRR vs. scale |
+|---|---|---|---|
+| **Knit (BM25)** | **100%** | **100%** | **1.000 (flat)** |
+| `grep -c` keyword counting | 17% | **0%** | 0.313 → **0.089** |
+| Filenames only | 100% | **0%** | 0.602 |
+
+Three things: **the ranking beats counting keywords yourself** (so having the agent recompute it
+is irrational); **filename matching only works when names describe content**, and Knit is the
+only approach that scores 100% either way; and **self-counting degrades as the corpus grows**.
+
+**About the "sorted by「xxx」" line**: it shows the **span of your own text** that the matched
+terms cover, not the raw candidate tokens. Chinese has no word boundaries, so candidates always
+include fragments that straddle two words (「项目文档」 yields `项目文` / `目文档`), and showing
+those renders as gibberish — merging their spans and slicing the original text recovers `项目文档`.
+The label is **your own wording**, so its casing is preserved (type `BM25`, see `BM25`).
+
+All of it is string arithmetic — **no embeddings, no model calls**.
+
+**And the honest boundaries**:
+
+- **With only one or two messages** there are too few keywords, so it falls back to sorting by
+  modification time and says so in the panel — it does not pretend to rank
+- **With only three to five documents IDF barely does anything**: `df` only takes a few values,
+  so its dynamic range collapses. The more documents, the better this ranking gets
+- **It can only rank documents that share vocabulary with the conversation**: if no term matches,
+  every document scores the same and the order degrades to time
 
 ---
 
@@ -601,6 +646,25 @@ The relevance figure only affects ordering — it is **never displayed and never
   initial `glob` for candidates, but the **doubled `read` count** ate that back. It points
   attention at the right file; that is **not** the same as the agent reading fewer files
 - **Right-sidebar state is memory-only**: a refresh or a new session collapses it again
+
+---
+
+## Feedback
+
+**Right now this project is not about adding features — it's about finding out whether
+"rank project docs by the current conversation" is something anyone actually uses.**
+So the most valuable thing you can send is not "could you add X" but **how you work around
+this today** — including "I installed it and never opened it", which is more useful than a
+feature request.
+
+- 💬 [Tell us when you actually open it](https://github.com/PolinniZhong/dsh-knit/issues/new?template=feature.yml) — two fields, thirty seconds
+- 🐞 [Won't install / panel won't open / ranking looks wrong](https://github.com/PolinniZhong/dsh-knit/issues/new?template=bug.yml)
+- 📖 Check [known limitations](#known-limitations) first — short conversations degrade to time order and Chinese uses n-gram approximation; those are deliberate trade-offs, not bugs
+
+> A single issue is treated as a real signal. So far this plugin has **no trace of a single
+> real user** — the npm download count is automated version enumeration, not people
+> (only 14% of it is `latest`, and a human install only ever pulls `latest`). One human reply
+> changes what gets built next.
 
 ---
 

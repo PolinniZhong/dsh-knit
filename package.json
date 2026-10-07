@@ -1,8 +1,8 @@
 {
   "name": "dsh-knit",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "type": "module",
-  "description": "Task-aware workspace context retrieval for DeepSeek Harness. Ranks the workspace's documents and code by relevance to the current conversation, shows the Context Pack (primary / supporting / related) in the sidebar with inline preview, and tracks which of them the agent actually read and what changed after. Zero model calls, zero network.",
+  "description": "Task-aware workspace context retrieval and lifecycle tracking for DeepSeek Harness. Finds the documents, source files and media most relevant to the current conversation, organises them into a Context Pack (primary / supporting / related) in the sidebar with inline preview, and tracks which of them were actually read and what changed afterwards. Zero model calls, zero network, nothing leaves the machine.",
   "main": "./src/host/index.js",
   "exports": {
     ".": "./src/host/index.js",
@@ -53,6 +53,9 @@
     "recent-files",
     "relevance",
     "context-pack",
+    "workspace-context",
+    "context-retrieval",
+    "context-lifecycle",
     "task-context",
     "images",
     "video",

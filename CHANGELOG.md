@@ -3,6 +3,33 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.19.1] - 2026-10-07
+
+> **定位重构（只改对外叙事，一行代码没动）**。产品已经从 v0.12 时代的「更聪明的最近文件列表」
+> 长成了 **Workspace Context Retrieval**：当前任务 → 工作区检索 → 主要 / 辅助 / 相关 →
+> Context Pack → Agent 读取 → 读取证据 → 工作区变化 → 重新读取。v0.19.1 把 README、
+> 仓库 About 与市场条目文案统一到这条主线上，并把「怎么排序」（BM25 / IDF）
+> 从卖点降级成证据。
+
+### 变化
+
+- **`README.md` / `README.en.md` 第一屏整体换掉**。定位句升级为
+  *Task-aware workspace context retrieval and lifecycle tracking for AI coding agents.*
+  （面向 AI Coding Agent 的任务感知工作区上下文检索与生命周期追踪），并给出
+  Find → Organize → Track 的主线图。原来开头的「Agent 一天产出 20 篇文档，你找不到刚才那篇」
+  降级成 `## 为什么需要它` 里的一句引文。
+- **「这不就是个最近文件列表吗？」不再是「是的，但…」**。改成
+  `## 「最近文件列表」和「代码浏览器」都不是它`，用一张五行对照表（范围 / 排序 / 输出 /
+  给谁 / 之后）说明区别，不再替读者接受「最近文件」这个框架。
+- **BM25 降级为证据**。原「「相关」是怎么算出来的」改成
+  `## 检索是怎么算的（实现细节，不是产品定义）`，正文前加一句「这一节是证据，不是卖点」。
+- **章节重排**：两份 README 的章节顺序现在一一对应；英文版原先嵌在
+  "Did it actually get used?" 里的 `### v0.19: code as context (Code Context)`
+  提升成独立的 `## Code as context (v0.19)`。
+- **`package.json`**：`description` 换成同时讲 retrieval 与 lifecycle tracking 的一版；
+  keywords 24 → 27（新增 `workspace-context` / `context-retrieval` / `context-lifecycle`）。
+- **无代码变更**：`src/`、`test/`、`tools/` 一行没动，测试仍是 588 项全绿。
+
 ## [0.19.0] - 2026-10-07
 
 > **Code Context**。产品概念从「Markdown / 图片 / 视频」变成「**文档 / 代码 / 媒体**」——
