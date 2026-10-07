@@ -2,7 +2,7 @@
 
 > **Knit 的安全属性 —— 每一条都指向一个真实存在的检查。**
 >
-> 最后更新：2026-09-18（v0.11.0）
+> 最后更新：2026-10-07（v0.19.0）
 
 ## 为什么有这份文件
 
@@ -29,10 +29,11 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 | 零运行时依赖 | ✅ | `package.json` 的 `dependencies` 为空；`test/security.test.mjs` 断言 |
 | 无安装期脚本 | ✅ | `package.json` 只有 `test` 一个 script，无 `install`/`postinstall`/`prepare`；`test/security.test.mjs` 断言 |
 | 读文件接口守在会话工作区内 | ✅ | `test/host.test.mjs` 的越界用例（解析后必须落在工作区内，否则一律拒绝） |
+| `/knit/api/doc` 只放行文本类产物 | ✅ | v0.19 起因代码而放宽（原为「仅 Markdown」），所以边界要重新说清：**文档 / 代码 / 生成产物**放行，**媒体与未知后缀一律拒绝**。`test/host.test.mjs` 的 `notPreviewable` 用例 + `test/classification.test.mjs` 的 `isPreviewKind` 闭集断言 |
 | `/knit/api/raw` 叠扩展名白名单 | ✅ | `test/host-http.test.mjs`（非图片/视频扩展名一律拒绝） |
 | 只允许 GET、只允许回环地址 | ✅ | `test/host-http.test.mjs` |
 | 响应带 `nosniff` 与 `default-src 'none'; sandbox` | ✅ | `test/host-http.test.mjs`（两个指令各自断言） |
-| 零网络出口：客户端 `fetch` 全部同源相对路径 | ✅ | `src/client/client.js` 的三个接口常量都是 `/knit/api/*`；`test/security.test.mjs` 断言无协议头 |
+| 零网络出口：客户端 `fetch` 全部同源相对路径 | ✅ | `src/client/client.js` 的三个接口常量都是 `/knit/api/*`；`test/security.test.mjs` 断言无协议头。HTML 的「网页预览」按钮是把文件交给 **DSH 自己的**文档预览标签页去渲染（Knit 这一侧一个请求都不发），渲染的沙箱与 CSP 归 DSH 管 —— 所以这条承诺不变 |
 | 宿主半边不 import `@deepseek-ai/*` | ✅ | `test/security.test.mjs` 扫三个宿主文件，注释里提到可以、真实 `import` 不行 |
 | `knit_docs` 工具只读，不写任何文件 | ✅ | `src/host/tool.js` 只调注入进来的 `scan` 与只读的 `readDocument`；无写文件调用 |
 | 未经第三方安全审计 | ⚠️ | **如实说明**：这张表是**自证**。没有外部审计报告，也没有自动化扫描评分 —— 它不等于「已证明安全」 |
@@ -46,6 +47,6 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 ## 如何自己复核
 
 ```sh
-npm test                       # 231 项，含本节所有断言
+npm test                       # 588 项，含本节所有断言
 npm test -- test/security.test.mjs   # 只跑安全守卫
 ```

@@ -3,6 +3,190 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.19.0] - 2026-10-07
+
+> **Code Context**。产品概念从「Markdown / 图片 / 视频」变成「**文档 / 代码 / 媒体**」——
+> 这不是给后缀表加几行，而是让 Knit 把 AI Coding 任务**当前真正需要的那几个源码文件**
+> 纳入同一条 Context Retrieval 链路。
+> 关键约束：**没有第二条检索链路、没有第二套生命周期、没有第二个 Context Store、
+> 没有 AST / LSP / embedding / 模型调用 / 网络请求、没有把 Knit 变成代码浏览器或 IDE。**
+> 主线数据流一个字没改：当前任务 → Workspace Retrieval → Document + Code Candidates →
+> Primary / Supporting / Related → Context Pack → Agent Read → Read Evidence →
+> File Changed → Lifecycle → Context Epoch / Delta → Usage Lens。
+
+### 变化
+
+- **新增独立的文件分类层 `src/host/classification.js`**。在这之前，扩展名判定是
+  `src/host/index.js` 里一个返回 `''|'md'|'image'|'video'` 的 `kindOfName()`，散在扫描、
+  预览、UI 各处。现在只有一个入口：`classifyFile(name)` →
+  `{kind, language, previewable, searchable, contextual, generated, sourceMap}`，
+  扫描 / 检索 / 预览 / UI **全部消费它的产物**，没有一处再自己看扩展名
+  （有一条架构守卫：`src/host/index.js` 与 `src/client/client.js` 里不许出现
+  `'.ts'` `'.py'` `'.map'` `'.min.js'` 这类后缀字面量）。
+- **第一批支持 17 个代码后缀**：`.js .mjs .cjs .ts .tsx .jsx .py .json .html .htm
+  .css .scss .yaml .yml .sh .bash .zsh`。内部统一 `{kind:'code', language:'…'}`。
+  **刻意不支持** `.go .rs .java .kt .c .cpp .h .hpp .cs .php .rb .swift .sql` ——
+  范围越小，「代码上下文到底有没有用」这个结论越可信。
+- **代码复用 Markdown 的 BM25，只换字段口径**。代码没有 Markdown 的 title/summary/body，
+  所以宿主按 `filename`（**带扩展名**，`plugin-loader.js` 与 `plugin.json` 的差别就在这儿）
+  → `title` 字段、`目录`（保留结尾斜杠）→ `summary` 字段、`正文前 8 KB` → `body` 字段填充，
+  于是 `relevance.js` 里既有的 `FIELD_WEIGHTS = {title:4, summary:2, body:1}`
+  **一行未改**就是需求要的 filename×4 / path×2 / content×1。排序器、语料过滤、
+  门槛规则全是同一个。
+- **`.map` / generated / noise 一律不进上下文**：`*.map`、`*.min.js`、`*.min.css`、
+  `*.bundle.js`、`*.generated.js`、`*.gen.js`、`*.lock`（含 `package-lock.json`）→
+  `{kind:'generated', searchable:false, contextual:false}`。它们不参与检索、不进 Context Pack、
+  不进 Usage Lens、不进代码列表、不进 BM25 语料 —— 但**仍然可以预览**（用户主动从
+  DSH 原生文件树点开时不拦）：**Context eligibility ≠ File system visibility**。
+- **有边界的扫描**：新增 `MAX_CODE = 300`（Markdown 仍是 400）、代码正文只读前 8 KB
+  （`CODE_HEAD_BYTES = 8*1024`，没有无界读取）。目录元信息 → 扩展名分类 → 候选准入 →
+  有界内容读取，顺序不变。数字是**量出来的**：真实项目根（`08_Knit`）59 文档 + 54 代码，
+  上限根本碰不到；而一个 1300+ 目录的大树正好在这里截住（400 文档 + 300 代码 + 400 媒体）。
+- **代码预览就地展开，不新增交互**：复用面板下方那块现有预览区。行号 gutter + 等宽正文、
+  横向滚动只在正文列（纵向滚动仍归 `.knit-preview-body`，**没有第二个纵向滚动容器**）、
+  复制、`打开文件`、同一个 `Source map` 轻量入口（只在同名 `.map` 存在时出现）。
+  超过 4000 行只渲染前 4000 行并明说被截断。**没有**语法高亮 / 折叠 / 多标签 / mini-map /
+  git diff / symbol outline —— 也没有引入 Monaco 或 CodeMirror。
+- **UI 类型档从三档变四档**：`文档 / 代码 / 媒体 / 全部`。代码档**仍然受当前任务检索支配**，
+  不是「项目代码文件树」：任务说「改 Skill loader 支持新 frontmatter」，这一档就该是
+  `skill-loader.ts` 在前，而不是 `src/` 下全部代码。没有第二层语言分类 UI；
+  代码行只多一个很弱的语言徽章（`TS` / `PY` …），文档行不挂（整列都是 MD，是纯噪声）。
+  「全部」档变成三区：文档区（≤4）→ 代码区（≤4）→ 媒体网格。
+- **代码的理由码**：`filenameMatch`（文件名命中，与 Markdown 的 `titleMatch` 同级）与
+  `pathMatch`（目录命中，与 `summaryMatch` 同级）。`why.filenameMatch` / `why.pathMatch`
+  中英各一条；**没有**新增第 8 个条目字段 —— `{rel,title,summary,mtimeMs,kind,source,reason}`
+  与 v0.18 逐字相同，代码只是让 `kind` 多了一个取值。
+- **生命周期 / Read Evidence / Epoch / Delta / Usage Lens 一行未改**。代码被读之后走的是
+  完全同一套归因：读的时候在哪一层就冻结在哪一层，历史证据不许因后来的 BM25 变化而重算；
+  四态（未读 / 已读 / 读后已更新 / 修改后已重新读取）也是同一套；Epoch 是同一份；
+  UI 上多出来的叫法一个都没有（仍然只叫「上下文变化」）。
+- **预览头那条路径改成「在文件管理器里定位到这个文件」**。原文案是「用系统默认应用打开这篇文档」，
+  与页脚那个「本地打开」按钮**做的是同一件事** —— 一个东西两个入口，还偏要悬停才知道。
+  现在两者分工清楚：**路径点开它所在的文件夹、并且已经选中这个文件**
+  （`openWorkspacePath({ path, action: 'reveal' })`，macOS 走 `open -R`、Windows 走
+  `explorer /select,`，正是 Chrome「在文件夹中显示」那个手感 —— 不用在文件夹里自己再找一遍），
+  **「本地打开」点开文件本身**（不带 `action`，走默认应用）。文案随之换成
+  `preview.reveal`（中「在文件管理器中显示并选中这个文件」/ 英 `Show this file in your file manager (and select it)`）。
+  ⚠️ 送过去的是**文件本身的绝对路径**而不是所在目录 —— reveal 一个目录会变成
+  「在上级目录里选中这个文件夹」，不是用户要的。Linux 的 `xdg-open` 没有「选中」这个概念，
+  那边只有打开目录（平台差异，不是少做一步）。
+- **修：开着「使用情况」点全屏，预览没铺满**。全屏的隐藏名单写于 v0.12，当时面板里只有
+  「头部 / 排序条 / 类型档 / 列表 / 预览」这几块，所以只藏了前四块；v0.18 在列表**上方**
+  加了 Context Usage Lens（`.knit-usage`），谁也没回头去补那份名单 —— 于是开着「使用情况」
+  再点全屏，Lens 仍以 `flex:none` 的自然高度占掉面板上方约三分之一，预览被挤在下面，
+  看起来就像「全屏没生效」。补 `.knit-root.fullscreen .knit-usage{display:none}` 一块即可，
+  预览那条 `flex:1 1 auto` 本来就在等它让位。
+  守卫放在 `test/client.test.mjs`：全屏隐藏名单必须覆盖 `.knit-head` / `.knit-bar` /
+  `.knit-types` / `.knit-usage` / `.knit-list`，并跟真的渲染出来的全屏树对一次账 ——
+  以后谁再往列表上方加块，这条会响。
+- **HTML 多了「网页预览」**。加了代码支持之后，`.html` 点开看到的是**源码**；
+  可 HTML 想看的恰恰是它渲染出来的样子。DSH 其实**自带**这个渲染器
+  （`dsh-client-ui-sidebar-documentpreview` 注册了 `["html","htm"]`，默认静态档：
+  DOMPurify 清洗过的文档塞进一个**不给任何 sandbox 权限**的 iframe，CSP 摆在最前挡脚本 /
+  外部资源 / 连接 / 表单 / 嵌套框架，内联 `<style>` 与 `data:` 图片保留），而 Knit 双击一行
+  本来就走 `actions.openResource` → 官方文档预览 —— 通路早就在，缺的只是一个入口。
+  所以预览头给 `.html` / `.htm` 加一个「网页预览」按钮，走的就是双击那条**同一个**
+  `openResource` 通道：**没有新开第二条打开路径、没有 iframe、没有把 DSH 的渲染器搬进面板**，
+  Knit 的零网络出口承诺一个字不用改。
+  这不算「把删掉的功能加回来」：v0.10 撤掉「新标签页」按钮的理由是「就地预览已经能看到内容，
+  重复度高」—— 那条前提对 HTML 不成立（就地给源码、官方给页面），是纠正而不是回退；
+  其余代码类型一个都不给这个按钮。
+- **修掉「工作区是符号链接时，点路径一律报 `Path has no verified Host path`」**（发布前发现的真实 bug）：
+  在 `DSH_Skill_Trace`（→ `10_DSH_Skill_Trace` 的符号链接）这类工作区里，点预览头路径 /
+  「本地打开」/ 点顶部工作区路径**全部失败**，而在真实目录（`08_Knit`）里没事。
+  根因不在 Knit，在 DSH 的校验方式：`dsh-api-session-controller` 的 `verifyDesktopPath()`
+  把路径送进 `ctx.fs`，要求
+  `processPath(await resolve(processPathFromHostPath(p))) === p`，而 `dsh-fs-local` 的
+  targetKey 落的是 **`realpath()`** —— 也就是说**含未展开符号链接的路径一定过不了**。
+  ⇒ Knit 这一侧自己先展开：宿主新增 `hostPathOf()`，下发的 `hostRoot`（工作区根）与
+  每条记录的 `path`（文件本身）都已是 canonical 形态；客户端**打开 / 定位一律用它们**，
+  `root` 只留给界面显示（用户看到的是自己选的那条路径）。
+  `scan()` 内部也改成从 canonical 根走一遍，所以 `rel` 一字不变 ——
+  检索 / Context Pack / 生命周期 / Usage Lens 的输入完全没动。
+- **文档同步**：`knit/README.md` 补上代码档与「网页预览」两处说明、测试数刷成 588；
+  **`knit/README.en.md` 这次也补了一节 v0.19**（它同样进 npm 包 —— 英文 README 停在 v0.18，
+  包内文档就自相矛盾了）；`knit/SECURITY.md` 属性表加一行「`/knit/api/doc` 只放行文本类产物」；
+  `package.json` 的 keywords 去掉了重复的 `code-context`。
+
+### 一处刻意的收窄（引用图）
+
+引用图（`md` 文件之间互相指路的那些边）的**源永远是 Markdown**：代码文件不再进图的
+`list`。理由是不能给代码开一条靠「注释里恰好写了一句 `docs/X.md`」就进 Supporting 的
+后门 —— 那条路不打分。反过来，**文档点名一个代码文件**（设计文档里写了 `src/x.js`）仍然
+和文档指文档一样会被尊重：那不是特例，是同一条规则。
+（代码作为「被指向的一方」能进 Supporting，正是需求 §18 要的混合竞争。）
+
+### 为什么不需要改 DSH 核心 / 新增 model tool / 新增 Store
+
+- **不改 DSH**：DSH 的文件访问走宿主已有的 `ctx.fs` 缝；预览走面板里已有的那块预览区。
+  代码与文档走的是同一个资源身份、同一个读取接口 —— 没有自造 OS 路径、没有
+  `window.open(local file)`、没有 fork DSH 的 preview 实现（代码预览一共就 4 条 CSS 规则）。
+- **不新增 model tool**：`knit_docs` 工具本身没变，只是它现在能把代码算进同一个 Context Pack。
+  工具描述从「Markdown 文档」改成「文档与代码文件」，理由很直接：语料里已经有 `.ts` 了，
+  再说「Markdown documents」就是对模型说假话。
+- **不新增 Store**：没有 `codeStore` / `codeContextStore` / `codeRetrievalStore` /
+  `workspaceArtifactStore`。代码只是一个多出来的 `artifact.kind`，通过既有状态投影出 UI。
+- **不新建 benchmark framework**：V0.19 的前后对比直接扩在 `test/eval/fixture.mjs` 里 ——
+  同一个 `runEval`，同一个 `rankByRelevance`，只把语料换成「Markdown only」与
+  「Markdown + Code」两臂。
+
+### 测试
+- `npm test`：**588 / 588 通过**（v0.18 是 532）。v0.18 的 532 条**一条没删、一条没放宽**；
+  中间有 12 条 v0.18 断言因为契约变化而**同步**（不是降级）：
+  `readDocument` 的「拒绝非 Markdown」拆成「拒绝不可预览的类型」+「v0.19 起代码可读并带分类结论」；
+  类型档从 3 个按钮改成 4 个；`knit_docs` 的文案与两处总数（样本工作区里的 `package.json`
+  现在是一个合法代码候选 —— 那个 `3 → 4` 本身就是「代码真的进了同一个检索池」的证据）。
+- 新增 **`test/classification.test.mjs`（12 条）**：17 个支持后缀的 language 映射、
+  13 个不支持后缀、`.map`/min/generated/lock、锁文件与生成产物的**反例**
+  （`minify.js` / `bundle.js` / `tsconfig.json` 仍是代码）、判定顺序是契约、
+  以及「后缀知识只许活在分类层」的架构守卫。
+- 新增 **`test/code-context.test.mjs`（25 条）**：代码穿过整条链路之后还对不对 ——
+  字段权重的三档可观测、代码进 Primary 的理由码是 `filenameMatch`、
+  只命中目录走 `pathMatch`、混合包里文档与代码公平竞争、条目投影与 v0.18 逐字相同、
+  引用图代码只能当靶不能当源、代码 read evidence 与包外读取、历史归因冻结、
+  代码四态生命周期、Epoch 的进入 / 离开 / 换层 / delta、七条噪声路径一条不进候选。
+- `test/eval.test.mjs` 新增 **6 条 v0.19 基准守卫**（见下）。
+- **发布前补的 3 条符号链接守卫**（`585 → 588`）：`test/host.test.mjs` 造一条指向样本工作区的
+  符号链接当 `root`，断言「下发的 `hostRoot` / 每条 `path` 都满足 `realpath(p) === p`」
+  （这**就是** DSH 的判据）+「换成符号链接后 `rel` 集合一字不差」；
+  `test/path.test.mjs` 两条客户端守卫，分别覆盖「宿主给了 canonical `path`」与
+  「老宿主只有 `hostRoot`」时，reveal / 本地打开 / 打开工作区目录**都用 canonical 路径**，
+  而界面显示的仍是会话原本那条。写完全部做过**证伪**（把修复回滚，3 条如实变红）。
+- `test/client.test.mjs` 新增 **9 条 v0.19 UI 守卫**：代码档请求 `kind=code` 且代码行带语言徽章、
+  文档行一个徽章都不加（整列都是 MD，挂 MD 是纯噪声）、点代码行就地出行号 + 正文且**不落到
+  Markdown 渲染**（夹具正文故意以 `#` 开头 —— 走错分支它就会变成标题）、同名 `.map` 才给
+  「Source map」入口且列表里始终没有 `.map` 那一行、「全部」档三区（文档 / 代码 / 媒体）
+  各自限流、Usage Lens 里的代码路径照常显示（仍是只有事实、没有分数）、
+  全屏隐藏名单必须覆盖列表上方每一块（含 `.knit-usage`）、**「网页预览」只有 HTML 出场
+  且走的是双击那条 `openResource` 通道（正文读到之前按钮就已在场 —— 否则头会长高一下）**，
+  以及一条样式守卫（横向滚动只归正文列，语言徽章无底色无边框无圆角，DSH 令牌必须带回落值）。
+
+### 基准（V0.19 前后对比）
+
+同一个排序器、同一批用例，**唯一变量是语料里有没有代码**：
+
+| 指标 | Markdown only | Markdown + Code |
+| --- | --- | --- |
+| Document Recall (top-1) | 100% | **100%** |
+| Document MRR | 1.000 | **1.000** |
+| Code Recall (top-1) | 0% | **100%** |
+| Code MRR | 0.000 | **1.000** |
+
+- **Overall MRR（文档 + 代码一起量：21 条文档用例 + 3 条代码用例）= 1.000**，top-1 100%。
+  语料规模：Markdown only 16 条 → Markdown + Code 24 条（**只多 8 条代码**）。
+- **Noise Rate = 0%** —— 7 条生成 / 噪声路径（`node_modules/foo.js`、`dist/app.js`、
+  `coverage/report.js`、`app.min.js`、`bundle.generated.js`、`app.js.map`、`package-lock.json`）
+  在真实扫描与评测语料里都是 0 条进入。
+- 对照臂：同样三条代码用例放在**只有文档**的语料里 top-1 是 0% —— 所以「加了代码之后答对了」
+  不是碰巧。混合场景（Case C）里那篇讲分层的设计文档仍排在第 3 名，**没有被代码挤没**。
+- ⚠️ 说清楚这份基准**不是难度竞赛**：三条代码用例的检索意图都很清晰，两臂都接近满分。
+  它的作用是**回归钉** —— 谁把代码候选、噪声过滤、字段权重或 corpus cap 改坏了，这里会红。
+  `node knit/tools/scale-benchmark.mjs` 会把这张表连同原有 20/60/180/540 规模基准一起打印。
+- 真机工作区量到的数（`08_Knit`，扫描 4 ms）：59 文档 + **54 代码** + 6 媒体，
+  0 generated / 10 ignored，语料 59 → 113。一个 1300+ 目录的大树（55 ms）：
+  400 文档截断 + 300 代码（243 条被 cap 挡下）+ 400 媒体，语料 400 → 700 ——
+  `MAX_CODE = 300` 在这里正好起到「别让代码把原有 Markdown 上下文挤出去」的作用。
+
 ## [0.18.0] - 2026-10-06
 
 > ✅ **2026-10-06 已发布**：`v0.18.0` = 轻量 tag = npm `gitHead` = `170ee8f` · npm `latest = 0.18.0`

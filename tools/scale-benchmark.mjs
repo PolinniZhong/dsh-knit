@@ -15,9 +15,16 @@
  *
  * 用法：node knit/tools/scale-benchmark.mjs
  * 依赖：无（只用 Knit 自己的源码）。不进 `npm test` —— 它是基准，不是断言。
+ *
+ * v0.19 追加：**代码上下文的两臂对比**（Markdown only vs Markdown + Code）。
+ * 用的语料与用例是 `test/eval/fixture.mjs` 里那一份 —— 也就是 `npm test` 里
+ * 正在守着的同一份，不另建一套。这里只把它打印成一张表。
  */
 import { pathToFileURL } from 'node:url'
 import { extractKeywords, rankByRelevance } from '../src/host/relevance.js'
+import {
+  runEval, CASES, CODE_CASES, V019_MD_ONLY, V019_WITH_CODE, NOISE_RELS,
+} from '../test/eval/fixture.mjs'
 
 /* ── 语料构造 ───────────────────────────────────────── */
 
@@ -221,6 +228,41 @@ export function runAt(n) {
   return out
 }
 
+/* ── v0.19：代码上下文的两臂对比 ────────────────────── */
+
+/**
+ * 同一个排序器、同一批用例，只差「语料里有没有代码」。
+ *
+ * 报四个数（需求 §37 §50）：Document Recall（加代码前后各一次）、
+ * Code Recall、Overall MRR、Noise Rate。
+ * @returns {object} 两臂的指标与代码用例的逐条名次
+ */
+export function v019Report() {
+  const docsMdOnly = runEval(extractKeywords, rankByRelevance, V019_MD_ONLY, CASES)
+  const docsWithCode = runEval(extractKeywords, rankByRelevance, V019_WITH_CODE, CASES)
+  const codeMdOnly = runEval(extractKeywords, rankByRelevance, V019_MD_ONLY, CODE_CASES)
+  const codeWithCode = runEval(extractKeywords, rankByRelevance, V019_WITH_CODE, CODE_CASES)
+  const mixed = runEval(extractKeywords, rankByRelevance, V019_WITH_CODE, [...CASES, ...CODE_CASES])
+
+  // 噪声率：代码用例里，top-1 落在噪声路径上的比例。
+  const noiseHits = CODE_CASES.filter((c) => {
+    const keywords = extractKeywords(c.messages, 30)
+    const top = rankByRelevance(V019_WITH_CODE, keywords, 1_760_000_000_000).docs[0]
+    return top && NOISE_RELS.includes(top.rel)
+  })
+
+  return {
+    docsMdOnly, docsWithCode, codeMdOnly, codeWithCode, mixed,
+    codeRanks: CODE_CASES.map((c, i) => ({ name: c.name, expect: c.expect, rank: codeWithCode.ranks[i] })),
+    noiseRate: CODE_CASES.length ? noiseHits.length / CODE_CASES.length : 0,
+    corpus: {
+      mdOnly: V019_MD_ONLY.length,
+      withCode: V019_WITH_CODE.length,
+      code: V019_WITH_CODE.length - V019_MD_ONLY.length,
+    },
+  }
+}
+
 /* ── 主流程 ─────────────────────────────────────────── */
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -242,4 +284,25 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     }
     console.log('')
   }
+
+  /* v0.19：代码上下文。 */
+  const v = v019Report()
+  console.log('── v0.19 Code Context ' + '─'.repeat(44))
+  console.log('同一批用例、同一个排序器，唯一变量是语料里有没有代码：')
+  console.log(`  语料：Markdown only ${v.corpus.mdOnly} 条 → +Code ${v.corpus.withCode} 条（+${v.corpus.code}）\n`)
+  console.log('指标                        Markdown only      Markdown + Code')
+  const row = (label, a, b) => console.log(`${label.padEnd(26)}  ${a.padStart(15)}  ${b.padStart(17)}`)
+  row('Document Recall (top-1)', pct(v.docsMdOnly.top1Rate), pct(v.docsWithCode.top1Rate))
+  row('Document MRR', v.docsMdOnly.mrr.toFixed(3), v.docsWithCode.mrr.toFixed(3))
+  row('Code Recall (top-1)', pct(v.codeMdOnly.top1Rate), pct(v.codeWithCode.top1Rate))
+  row('Code MRR', v.codeMdOnly.mrr.toFixed(3), v.codeWithCode.mrr.toFixed(3))
+  console.log('')
+  console.log(`Overall MRR（${CASES.length} 条文档用例 + ${CODE_CASES.length} 条代码用例）  ${v.mixed.mrr.toFixed(3)}`
+    + `   top-1 ${pct(v.mixed.top1Rate)}`)
+  console.log(`Noise Rate（代码用例 top-1 落在 ${NOISE_RELS.length} 条噪声路径上的比例）  ${pct(v.noiseRate)}`)
+  console.log('')
+  for (const r of v.codeRanks) {
+    console.log(`  ${r.rank === 1 ? '✔' : '✖'} 第 ${r.rank || '—'} 名  ${r.name}  → ${r.expect}`)
+  }
+  console.log('')
 }

@@ -5,13 +5,15 @@
 >
 > **Your agent has the same problem.** It gets the same ranking as a tool — the ranked documents plus the passage that matched in each.
 
-![Screenshot from a real machine: the Knit sidebar ranking the workspace documents by relevance, with a Markdown preview expanded in place and the references bar below the preview header](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
+![Screenshot from a real machine: the Knit sidebar left on the Code tab, ranking the workspace source files by relevance, with a code preview expanded in place](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
-*Screenshot from a real machine, not a mock-up: a workspace with 53 documents — the list, an inline
-preview, and the references bar.*
-*The references bar is new in v0.12: expand it to see which documents reference this one, and click
-one to jump straight there.*
-*The header holds only the path, the document count and two toggles; whether the list runs by
+*Screenshot from a real machine, not a mock-up: the same workspace, this one left on the **Code tab** —
+since v0.19 source files are first-class citizens, just like Markdown.*
+*The "why" line under each row says how it matched: a direct hit on the task text, a path hit, or a
+workspace hit.*
+*Click a row to expand the preview **in place**: here `knit/src/host/classification.js`, with line
+numbers; the preview header holds only the path and four actions (copy / full screen / open locally / close).*
+*The header holds only the path, one count and two toggles; whether the list runs by
 relevance or by newest-first is decided by that pair of tabs on the left.*
 *Since v0.14 the list is always one column: the rank number sits in its own column on the far left
 (vertically centred on the title's first line), then Primary dot + title + relative time (time on the
@@ -297,21 +299,23 @@ feature request.
 
 | | |
 |---|---|
+| **Code Context** (v0.19): source files join the **same** retrieval pipeline as documents — classify, BM25, Context Pack, lifecycle. A dedicated classification layer decides what a file *is* and what it may do, so extension knowledge lives in exactly one place | ✅ |
 | **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
 | **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
 | **Document lifecycle** (v0.17): each recommended document is shown as `Unread / Read / Updated after read / Re-read after update`, alongside the most recent read, how many reads fell outside the pack (expandable to which ones), and the latest context change | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
-| Scans `.md` in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist`) | ✅ |
+| Scans **documents and code** in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist` / `build` / `out` / `coverage`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
 | The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
-| One-click switch between **Docs / Media / All** (remembered; defaults to Docs, unchanged); the selected tab is a **neutral grey fill**, with no coloured outline (the tab label became "Media" on 2026-10-06, was "Images & video") | ✅ |
-| Images & video: square thumbnail grid — **at least 3 columns, more only as the pane gets wider**; cells start at 64px and the baseline is **8 per screen**; past 8 nothing is hidden, the whole grid scales down proportionally; videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
+| One-click switch between **Docs / Code / Media / All** (v0.19 adds Code; remembered, defaults to Docs); the selected tab is an **underline tab**, deliberately different from the list row's grey fill | ✅ |
+| Images & video: square thumbnail grid — cells have a **fixed 104px baseline independent of the item count**, columns come from CSS `repeat(auto-fill, minmax(104px, 1fr))`, and **as many rows as there are items are laid out** (no max height, the grid never scrolls itself — scrolling belongs to the list); videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
+| **"Web preview" for `.html`** (v0.19): the preview header hands the file to DSH's own document-preview tab (`openResource`) instead of showing source; the inline preview still shows source, so the two do not duplicate. Knit itself sends no request | ✅ |
 | Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
-| The **All** view splits into **two stacked sections**: docs (max 4, with "View all →" when truncated) and images & video (**never truncated**, count only) | ✅ |
+| The **All** view splits into **three stacked sections**: docs (max 4, with "View all →" when truncated), **code** (max 4), then images & video (**never truncated**, count only) | ✅ |
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
-| **"Open locally"**: opens the previewed document in your default app (the path in the preview header is clickable too, and its tooltip carries the full relative path) | ✅ |
+| **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
@@ -330,20 +334,22 @@ feature request.
 ![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
 
 *Media: square thumbnails, with the **column count following the panel width continuously** —
-six columns at this width, cells about 112px. These are the workspace's real image and SVG files; this
+six columns at this width, cells about 110px. These are the workspace's real image and SVG files; this
 particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
 (the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
 a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
 
-![Screenshot of the All tab: the documents section showing the first 4 with a "View all →" link, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
+![Screenshot of the All tab: the documents section, the code section, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
-*All: the documents section shows at most 4, with a "View all →" link when truncated (here "4 / 39"),
-and the media grid below it.*
+*All: the documents section shows at most 4, the **code section** shows at most 4 (each gets its own
+"View all →" when truncated — here "4 / 19" and "4 / 17"), and the media grid comes last.*
 
-⚠️ Both sections share the **same 40-item window** the host returns — when media rank past 40th by
-relevance, the All view keeps only the few inside that window (this screen keeps just one; the Media
-tab is unaffected, because it requests media on its own). A known defect, with reproduction and the
-fix recorded in [`docs/README.md`](docs/README.md).*
+⚠️ All three sections share the **same 40-item window** the host returns — a category that ranks past
+40th by relevance drops out of the All view entirely. This screenshot uses the **Newest** sort: in this
+workspace, under the default Relevance sort, media rank outside that window every time (at `limit=40`
+those 40 rows are 34 documents + 6 code files). The **Media** and **Code** tabs are unaffected — they
+request their own kind. A known defect, with reproduction and the fix recorded in
+[`docs/README.md`](docs/README.md).*
 
 ---
 
@@ -509,10 +515,49 @@ The `knit_docs` tool output **did not grow**: it still only finds context.
 
 ---
 
+### v0.19: code as context (Code Context)
+
+Until v0.18 Knit understood Markdown, images and video. v0.19's product concept becomes
+**documents / code / media** — not "a few more extensions", but letting Knit put the source files an
+AI-coding task actually needs into the same Context Pack, on the same main line:
+
+```text
+Current task -> Workspace Retrieval -> Document + Code Candidates
+   -> Primary / Supporting / Related -> Context Pack -> Agent Read
+   -> Read Evidence -> File Changed -> Lifecycle -> Context Epoch / Delta -> Usage Lens
+```
+
+- **One classification layer, not scattered `if (ext === '.js')`** — `src/host/classification.js`
+  turns a filename into `{ kind, language, previewable, searchable, contextual, generated,
+  sourceMap }`. The scanner, retrieval, preview and UI all just read that verdict.
+- **Supported in v0.19**: `.js .mjs .cjs .ts .tsx .jsx .py .json .html .htm .css .scss .yaml .yml
+  .sh .bash .zsh`. **Not yet**: `.go .rs .java .kt .c .cpp .h .hpp .cs .php .rb .swift .sql`.
+- **Code gets its own field weights** — filename x4, path x2, body (first 8 KB) x1, instead of the
+  document weights (title x4 / summary x2 / body x1). A filename like `context-manager.ts` carries
+  the task signal.
+- **Generated files are not context**: `.map`, `*.min.js`, `*.min.css`, `*.bundle.js`,
+  `*.generated.js`, `*.gen.js`, `*.lock` classify as `generated` — previewable, but never in
+  retrieval, the Context Pack or the Usage Lens. When `app.js` and `app.js.map` both exist, the
+  `app.js` preview offers one low-key **"Source map"** entry; the `.map` never shows up as a row.
+  **Context eligibility is not file-system visibility** — the built-in file tree still opens them.
+- **Bounded and capped**: at most `MAX_CODE = 300` code candidates and a head-limited body read, so
+  a large repo cannot flood the Markdown corpus. Corpus pressure is the thing to watch in this
+  version, not recall.
+- **The type tabs become four**: `Docs / Code / Media / All`. The Code tab is **still driven by the
+  current task** — it is not a file tree of the project.
+- **No second engine**: no second retrieval path, no second lifecycle, no second store, no new
+  dependencies, no AST, no LSP, no embedding, no model call, no network, no IDE.
+
+---
+
 ## What it reads, and what it doesn't
 
-- Scans `.md`, images and video **inside the current session workspace** (anything resolving
-  outside is rejected); for media it reads metadata only, never the pixels
+- Scans Markdown, **supported code files** (see the v0.19 list above) and media **inside the current
+  session workspace** (anything resolving outside is rejected); for media it reads metadata only,
+  never the pixels, and for code it reads a **bounded head** of the body, never the whole file
+- **Generated / noisy files are excluded from context** (`.map`, `*.min.*`, `*.bundle.*`,
+  `*.generated.*`, `*.lock`): they classify as `generated`, so they never enter retrieval, the
+  Context Pack or the Usage Lens — but `/knit/api/doc` still serves them when you open one on purpose
 - Reads only **the current session's** conversation events (used for ranking)
 - The `knit_docs` tool is **read-only**: it writes no files and persists no index
 - v0.15 usage accounting is **off by default**: when enabled it reads only the **current session's
@@ -521,9 +566,10 @@ The `knit_docs` tool output **did not grow**: it still only finds context.
   the plugin's own same-origin routes
 - **No install-time scripts** (no `install` / `postinstall`)
 - **Zero dependencies** — nothing to build, no build-authorisation prompt
-- The file-reading route only allows an **image/video-extension allowlist** (images ≤ 12MB,
+- The media route only allows an **image/video-extension allowlist** (images ≤ 12MB,
   video ≤ 256MB), serves video over HTTP Range, and responds with
-  `nosniff` plus `default-src 'none'; sandbox`
+  `nosniff` plus `default-src 'none'; sandbox`; the **text route serves documents, code and
+  generated artifacts**, and refuses media and unknown extensions
 
 The relevance figure only affects ordering — it is **never displayed and never sent anywhere**.
 
@@ -564,7 +610,7 @@ The relevance figure only affects ordering — it is **never displayed and never
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 532 tests, zero dependencies, no npm install needed
+npm test          # 588 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -584,11 +630,12 @@ knit/
 │   ├── host/index.js     # /knit/api/recent · /doc · /raw · /links · /context
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   ├── host/links.js     # reference parsing (pure; never touches ranking)
+│   ├── host/classification.js # v0.19 file classification: kind / language / searchable / contextual
 │   ├── host/context.js   # context assembly: the three-tier Context Pack (pure, zero I/O)
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 532 tests
+└── test/                 # 588 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

@@ -14,7 +14,7 @@
  * 零模型、零网络出口：只读本地文件与会话日志。
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, realpathSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
@@ -26,6 +26,13 @@ import { buildLinkGraph, linksOf } from './links.js'
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
 // `renderContextText` 却没人调用 —— 那是个会与 `tool.js` 漂移的第二渲染器，已删。
 import { buildContext } from './context.js'
+// v0.19：文件分类层。**所有「这个文件是什么、能不能预览/检索/进上下文」的判断都在这里**，
+// 本文件（以及 retrieval / preview / UI）不再自己看扩展名 —— 见 `classification.js` 的文件头。
+import {
+  classifyFile, isContextKind, isPreviewKind,
+  KIND_DOCUMENT, KIND_CODE, KIND_IMAGE, KIND_VIDEO, KIND_GENERATED, KIND_IGNORED,
+  IMAGE_TYPES, VIDEO_TYPES,
+} from './classification.js'
 // v0.15：Context Feedback / Context Audit —— 「Context Pack 之后真的被用了吗」。
 // ⚠️ 只做三件确定性的事：从会话事件里抽**真实的 `read`**、把交出去的包记成 Snapshot、
 // 把两者接起来算 Usage。**不订阅 event bus、不落盘、不联网、不调模型、不改 Retrieval。**
@@ -45,8 +52,30 @@ const MAX_DIRS = 500
 const MAX_DOCS = 400
 /** 图片/视频等媒体产物的扫描上限（与文档分开计数，避免截图刷爆文档列表）。 */
 const MAX_MEDIA = 400
+/**
+ * 代码产物的扫描上限（v0.19）。
+ *
+ * ⚠️ 这个数字是**审计真实工作区之后定的**，不是拍的：
+ * 拿 `DeepSeek Harness Native` 这一级真实工作区数过一遍，根下有 635 篇 Markdown、
+ * 773 个代码文件（`.mjs` 270 / `.js` 173 / `.json` 122 / `.py` 105 / `.html` 74 /
+ * `.yml` 13 / `.css` 10 / `.sh` 5），代码比文档多约 1.2 倍。
+ *
+ * 所以取 **300**（≈ 0.75 × `MAX_DOCS`）而不是和文档齐平 400：
+ * 「支持代码」不该让代码把原有的 Markdown 上下文挤出去（需求 §15），
+ * 同一批语料里代码的准入名额略小于文档，是这条要求最直接的落实。
+ * 另外它在面板里也不与文档竞争 —— 文档档的语料只有 Markdown（见 `scan()`）。
+ */
+const MAX_CODE = 300
 const SCAN_BUDGET_MS = 4000
 const HEAD_BYTES = 16 * 1024
+/**
+ * 代码文件参与扫描时读取的头部字节数（v0.19）。
+ *
+ * 比 Markdown 的 16KB 更小是**刻意的**：代码的 haystack 只需要前 `HAYSTACK_CHARS`
+ * 个字符，而真实项目里 `.ts` / `.js` 的数量可能非常高 —— 这是「bounded content read」
+ * 那条要求（需求 §16）唯一的落地点。
+ */
+const CODE_HEAD_BYTES = 8 * 1024
 /** 单次内联预览返回的正文上限（超出截断，面板只做预览不做全量阅读）。 */
 const DOC_MAX_BYTES = 512 * 1024
 /** 参与相关性打分的正文长度（不需要整篇）。 */
@@ -79,34 +108,9 @@ const TASK_ACK = new Set([
 ])
 
 /**
- * 允许内联渲染的图片类型白名单。
- *
- * `/knit/api/raw` 是按路径读文件的接口，口子必须收窄：只有在这个表里的扩展名才放行，
- * 否则就成了「能读工作区里任意文件」的后门。
+ * 图片/视频的类型白名单已经搬进 `classification.js`（v0.19）—— 扩展名归哪一类
+ * 只该有一个事实来源，本文件只 import 它的 MIME 表（`mediaInfo` 按扩展名取 MIME）。
  */
-const IMAGE_TYPES = new Map([
-  ['png', 'image/png'],
-  ['jpg', 'image/jpeg'],
-  ['jpeg', 'image/jpeg'],
-  ['gif', 'image/gif'],
-  ['webp', 'image/webp'],
-  ['avif', 'image/avif'],
-  ['bmp', 'image/bmp'],
-  ['ico', 'image/x-icon'],
-  ['svg', 'image/svg+xml'],
-])
-
-/**
- * 允许内联渲染的视频类型白名单。
- * 与 IMAGE_TYPES 同样的口径：只放行表里的扩展名，/raw 不读其它任何文件。
- */
-const VIDEO_TYPES = new Map([
-  ['mp4', 'video/mp4'],
-  ['m4v', 'video/mp4'],
-  ['webm', 'video/webm'],
-  ['mov', 'video/quicktime'],
-  ['ogv', 'video/ogg'],
-])
 
 /** 单张内联图片的字节上限。 */
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024
@@ -117,10 +121,13 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024
  */
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024
 
-/** 列表条目类型：文档 / 图片 / 视频。 */
-const KIND_DOC = 'md'
-const KIND_IMAGE = 'image'
-const KIND_VIDEO = 'video'
+/**
+ * 列表条目类型：文档（Markdown）/ 代码 / 图片 / 视频。
+ *
+ * v0.19 起这四个常量由 `classification.js` 拥有并在这里重新导出（`KIND_*` 是本文件的
+ * 惯用名）。**不要再在本文件里写扩展名判断** —— 那正是要收拢的东西。
+ */
+const KIND_DOC = KIND_DOCUMENT
 
 /**
  * 机器可读的错误码。
@@ -130,7 +137,15 @@ const KIND_VIDEO = 'video'
  */
 export const ERROR_CODES = {
   outsideWorkspace: 'knit/outside-workspace',
-  markdownOnly: 'knit/markdown-only',
+  /**
+   * v0.19：从 `knit/markdown-only` 改名。
+   *
+   * 名字必须跟着能力改 —— 这个码现在表示「这个类型不支持在面板里预览」
+   * （媒体、二进制、这一版不支持的代码语言、未知扩展名），
+   * 而不只是「不是 Markdown」。留着旧名字会让下一个读代码的人以为
+   * 放行范围还是「只有 Markdown」。
+   */
+  notPreviewable: 'knit/not-previewable',
   notFound: 'knit/not-found',
   notAFile: 'knit/not-a-file',
   imageOnly: 'knit/image-only',
@@ -282,41 +297,111 @@ async function readDoc(absPath) {
 }
 
 /**
- * 按扩展名判定文件是不是 Knit 要管的产物。
- * @param {string} name - 文件名
- * @returns {''|'md'|'image'|'video'} 类型，都不是返回空串
+ * 读一个**代码文件**参与检索所需的头部（v0.19），命中缓存则跳过读盘。
+ *
+ * 与 `readDoc` 共用同一张 `cache`（键是绝对路径，一个路径只可能是文档或代码之一），
+ * 并复用同一套 `haystack` 形状 —— 这正是「不给代码建第二套检索」在数据层面的落实：
+ * `relevance.js` 一个字节都不用改，它看到的仍是它一直在看的 `{title, summary, body}`。
+ *
+ * haystack 的字段语义在这里被**重新指派**（需求 §13：代码不复用 Markdown 的语义）：
+ *
+ *   - `title`   ← 文件名（权重 4，最高价值字段：`plugin-loader.js` 本身就带任务语义）
+ *   - `summary` ← 工作区相对路径的目录部分（权重 2）
+ *   - `body`    ← 正文前 `HAYSTACK_CHARS` 个字符（权重 1）
+ *
+ * 于是 `FIELD_WEIGHTS` 现成的 4 / 2 / 1 恰好等于
+ * 「filename × 4 / path × 2 / content × 1」，排序器零改动。
+ *
+ * @param {string} absPath - 绝对路径
+ * @param {string} root - 工作区根
+ * @returns {Promise<object|null>} 解析结果，读失败返回 null
  */
-function kindOfName(name) {
-  const ext = (name.split('.').pop() || '').toLowerCase()
-  if (ext === 'md') return KIND_DOC
-  if (IMAGE_TYPES.has(ext)) return KIND_IMAGE
-  if (VIDEO_TYPES.has(ext)) return KIND_VIDEO
-  return ''
+async function readCode(absPath, root) {
+  let st
+  try {
+    st = await stat(absPath)
+  } catch {
+    return null
+  }
+  if (!st.isFile()) return null
+
+  const hit = cache.get(absPath)
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit
+
+  let head = ''
+  try {
+    const buf = await readFile(absPath)
+    head = buf.subarray(0, CODE_HEAD_BYTES).toString('utf8')
+  } catch {
+    return null
+  }
+
+  const name = absPath.split(sep).pop() || absPath
+  const rel = relative(root, absPath).split(sep).join('/')
+  const cut = rel.lastIndexOf('/')
+  // 目录部分保留结尾的 `/`（`src/context/`），与列表里第二行的观感一致；
+  // 根目录下的文件是空串 —— 不编一个 `/` 出来。
+  const dir = cut >= 0 ? rel.slice(0, cut + 1) : ''
+
+  const entry = {
+    mtimeMs: st.mtimeMs,
+    size: st.size,
+    head,
+    // ⚠️ 标题是**带扩展名的文件名**，不是去扩展名的 stem。
+    // 代码的文件名里扩展名是信息的一部分（`plugin-loader.js` vs `plugin.json`），
+    // 去掉它反而丢掉了最能区分两个候选的那个字符。
+    title: name,
+    // 摘要位放路径。列表第二行本来就在显示路径，这里只是让同一个值也能参与打分。
+    summary: dir,
+    hayTitle: name.toLowerCase(),
+    haySummary: dir.toLowerCase(),
+    hayBody: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
+  }
+  cache.set(absPath, entry)
+  return entry
 }
 
 /**
- * 广度优先扫出工作区里的 Markdown 与媒体文件。
+ * 广度优先扫出工作区里的文档、代码与媒体文件（v0.19）。
  *
- * 一次遍历同时收两类，目录预算与时间预算共享；文档、媒体各自有数量上限，
- * 截图再多也不会把文档名额挤光。
+ * 一次遍历同时收三类，目录预算与时间预算共享；三类各自有数量上限，
+ * 截图再多也不会把文档名额挤光，代码再多也不会（见 `MAX_CODE`）。
+ *
+ * **扫描只做「目录元数据 → 分类 → 准入」**：这里不读任何文件内容，
+ * 正文读取留给 `collectDocs`（bounded，见 `readCode`）。
  *
  * @param {string} root - 工作区根（会话 cwd）
- * @returns {Promise<{md: string[], media: Array<{abs:string, kind:string}>,
- *                    mdTruncated: boolean, mediaTruncated: boolean}>}
+ * @returns {Promise<{md: string[], code: string[], media: Array<{abs:string, kind:string}>,
+ *                    mdTruncated: boolean, codeTruncated: boolean, mediaTruncated: boolean,
+ *                    stats: object, scanMs: number}>} 分类后的绝对路径与计数
  */
 async function collectEntries(root) {
+  const startedAt = Date.now()
   /** @type {string[]} */
   const md = []
+  /** @type {string[]} */
+  const code = []
   /** @type {Array<{abs:string, kind:string}>} */
   const media = []
-  const deadline = Date.now() + SCAN_BUDGET_MS
+  const deadline = startedAt + SCAN_BUDGET_MS
   /** @type {Array<{dir:string,depth:number}>} */
   const queue = [{ dir: root, depth: 0 }]
   let visited = 0
+  /**
+   * v0.19 验收要的计数（需求 §50）。
+   * `codeSeen` 是**见到的**代码文件数，`codeAdmitted` 是进语料的，
+   * `codeExcluded` 是被 `MAX_CODE` 挡在外面的 —— 三者分开，才看得出上限有没有真的生效。
+   */
+  const stats = {
+    mdSeen: 0, mdAdmitted: 0,
+    codeSeen: 0, codeAdmitted: 0, codeExcluded: 0,
+    mediaSeen: 0, mediaAdmitted: 0,
+    generated: 0, ignored: 0,
+  }
 
   while (queue.length > 0) {
     if (visited >= MAX_DIRS
-      || (md.length >= MAX_DOCS && media.length >= MAX_MEDIA)
+      || (md.length >= MAX_DOCS && media.length >= MAX_MEDIA && code.length >= MAX_CODE)
       || Date.now() > deadline) break
     const { dir, depth } = queue.shift()
     visited += 1
@@ -336,11 +421,26 @@ async function collectEntries(root) {
         if (entry.name.startsWith('.')) continue
         queue.push({ dir: abs, depth: depth + 1 })
       } else if (entry.isFile()) {
-        const kind = kindOfName(entry.name)
-        if (kind === KIND_DOC) {
-          if (md.length < MAX_DOCS) md.push(abs)
-        } else if (kind === KIND_IMAGE || kind === KIND_VIDEO) {
-          if (media.length < MAX_MEDIA) media.push({ abs, kind })
+        const info = classifyFile(entry.name)
+        // **准入判定只有这一处**：`isContextKind()` 回答「算不算上下文候选」，
+        // 下面再按具体类型分账。配额与计数必须分开 —— v0.19 的 corpus pressure
+        // 要求能看出到底是文档还是代码把语料撑大的（需求 §15 §50）。
+        if (isContextKind(info.kind)) {
+          if (info.kind === KIND_DOC) {
+            stats.mdSeen += 1
+            if (md.length < MAX_DOCS) { md.push(abs); stats.mdAdmitted += 1 }
+          } else {
+            stats.codeSeen += 1
+            if (code.length < MAX_CODE) { code.push(abs); stats.codeAdmitted += 1 } else stats.codeExcluded += 1
+          }
+        } else if (info.kind === KIND_IMAGE || info.kind === KIND_VIDEO) {
+          stats.mediaSeen += 1
+          if (media.length < MAX_MEDIA) { media.push({ abs, kind: info.kind }); stats.mediaAdmitted += 1 }
+        } else if (info.kind === KIND_GENERATED) {
+          // 生成/噪声产物：**数一下，但一个都不准入**（需求 §6 §7）。
+          stats.generated += 1
+        } else {
+          stats.ignored += 1
         }
       }
     }
@@ -348,9 +448,13 @@ async function collectEntries(root) {
 
   return {
     md,
+    code,
     media,
     mdTruncated: md.length >= MAX_DOCS,
+    codeTruncated: code.length >= MAX_CODE,
     mediaTruncated: media.length >= MAX_MEDIA,
+    stats,
+    scanMs: Date.now() - startedAt,
   }
 }
 
@@ -386,10 +490,15 @@ async function readMediaMeta(root, { abs, kind }) {
 }
 
 /**
- * 扫出工作区里全部 Markdown 与媒体的元信息（各自按 mtime 倒序）。
+ * 扫出工作区里全部文档、代码与媒体的元信息（各自按 mtime 倒序）。
+ *
+ * 三类共用一次目录遍历（`collectEntries`），但**只有文档与代码会读正文头部**
+ * ——媒体永远只 stat（视频可能上百 MB）。
+ *
  * @param {string} root - 工作区根
- * @returns {Promise<{docs: Array<object>, media: Array<object>,
- *                    truncated: boolean, mediaTruncated: boolean}>}
+ * @returns {Promise<{docs: Array<object>, code: Array<object>, media: Array<object>,
+ *                    truncated: boolean, codeTruncated: boolean, mediaTruncated: boolean,
+ *                    stats: object, scanMs: number}>}
  */
 export async function collectDocs(root) {
   const found = await collectEntries(root)
@@ -414,6 +523,28 @@ export async function collectDocs(root) {
   }
   docs.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
+  // v0.19：代码条目与文档条目**形状完全一致**（同一个 `kind` 位、同一套 haystack、
+  // 同一批下游消费者）。差别只在 haystack 字段的语义 —— 见 `readCode`。
+  // 这不是「第二套数据模型」，就是同一套模型里多了一类 kind。
+  const code = []
+  for (const abs of found.code) {
+    const meta = await readCode(abs, root)
+    if (!meta) continue
+    code.push({
+      kind: KIND_CODE,
+      path: abs,
+      rel: relative(root, abs).split(sep).join('/'),
+      name: abs.split(sep).pop(),
+      title: meta.title,
+      summary: meta.summary,
+      size: meta.size,
+      mtimeMs: meta.mtimeMs,
+      head: meta.head,
+      haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
+    })
+  }
+  code.sort((a, b) => b.mtimeMs - a.mtimeMs)
+
   const media = []
   for (const item of found.media) {
     const meta = await readMediaMeta(root, item)
@@ -421,7 +552,16 @@ export async function collectDocs(root) {
   }
   media.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
-  return { docs, media, truncated: found.mdTruncated, mediaTruncated: found.mediaTruncated }
+  return {
+    docs,
+    code,
+    media,
+    truncated: found.mdTruncated,
+    codeTruncated: found.codeTruncated,
+    mediaTruncated: found.mediaTruncated,
+    stats: found.stats,
+    scanMs: found.scanMs,
+  }
 }
 
 /* ── 会话事件 → 对话文本 ────────────────────────────── */
@@ -606,18 +746,44 @@ function publicDoc(doc) {
  *   HTTP 路由必须走 `publicScanPayload()`（`test/host.test.mjs` 有守卫）。
  */
 export async function scan(root, limit, options = {}) {
-  const collected = await collectDocs(root)
+  // v0.19 修订：**扫的是展开符号链接后的那份路径**。
+  // 每条记录里的 `path`（`publicDoc()` 原样下发给客户端）就是「打开 / 定位」时
+  // 交给宿主的路径，而 DSH 只认 realpath（见 `hostPathOf()`）—— 跟着会话的
+  // 符号链接走一遍，客户端拿到的 `path` 直接可用，不必等 `/api/doc` 回来再校正。
+  // ⚠️ `rel` 用同一个 base 算，所以相对路径一字不变；对外的 `root` 仍是会话
+  // 原本那条（界面显示用），canonical 的那份单独放在 `hostRoot`。
+  const hostRoot = hostPathOf(root)
+  const collected = await collectDocs(hostRoot)
 
   // 默认 doc：旧版客户端 / 悬停浮层不带 kind，行为与「只列 Markdown」时完全一致。
-  const kind = options.kind === 'all' || options.kind === 'media' ? options.kind : 'doc'
+  //
+  // v0.19 的 `kind` 取值集合（**唯一权威**，HTTP 与工具都从这里取）：
+  //   `doc`     仅 Markdown（默认，v0.18 行为逐字不变）
+  //   `code`    仅代码（v0.19）
+  //   `media`   仅图片/视频（v0.18 行为逐字不变）
+  //   `all`     文档 + 代码 + 媒体（面板「全部」档；v0.18 是「文档 + 媒体」，只多不少）
+  //   `context` **内部**语料：文档 + 代码。不给 HTTP —— agent 工具的 Context Pack
+  //             要在「文档与代码混合竞争」上排序（需求 §34 Case C），而媒体不进上下文，
+  //             所以它不能复用 `all`（那会把媒体也塞进候选）。
+  const kind = options.kind === 'all' || options.kind === 'media'
+    || options.kind === 'code' || options.kind === 'context'
+    ? options.kind
+    : 'doc'
   let pool
   let truncated
   if (kind === 'media') {
     pool = collected.media
     truncated = collected.mediaTruncated
+  } else if (kind === 'code') {
+    pool = collected.code
+    truncated = collected.codeTruncated
+  } else if (kind === 'context') {
+    pool = collected.docs.concat(collected.code).sort((a, b) => b.mtimeMs - a.mtimeMs)
+    truncated = collected.truncated || collected.codeTruncated
   } else if (kind === 'all') {
-    pool = collected.docs.concat(collected.media).sort((a, b) => b.mtimeMs - a.mtimeMs)
-    truncated = collected.truncated || collected.mediaTruncated
+    pool = collected.docs.concat(collected.code, collected.media)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    truncated = collected.truncated || collected.codeTruncated || collected.mediaTruncated
   } else {
     pool = collected.docs
     truncated = collected.truncated
@@ -666,6 +832,10 @@ export async function scan(root, limit, options = {}) {
   return {
     ok: true,
     root,
+    // v0.19 修订：`root` 是会话自己那条路径（可能含符号链接，用于显示）；
+    // `hostRoot` 是同一目录展开链接后的 canonical 路径，**只给「打开 / 定位」用** ——
+    // 宿主只认 realpath 形态，理由见 `hostPathOf()`。
+    hostRoot,
     kind,
     total: ordered.length,
     truncated,
@@ -685,6 +855,10 @@ export async function scan(root, limit, options = {}) {
     // 全量列表（未按 limit 切片）。**内部输入**：v0.17 的 lifecycle 需要「被读过但
     // 不一定落在当前页」的文档的当前 mtime。由 `publicScanPayload()` 剥掉。
     allDocs: ordered,
+    // v0.19 扫描计数（需求 §50 要报的那几个数：见到的 / 准入的 / 被排除的 / 生成噪声）
+    // 加上 `corpusSize`（本档语料的实际大小，即 `allDocs.length`）。
+    // **内部输入**，由 `publicScanPayload()` 剥掉 —— HTTP 响应形状一个键都不加。
+    stats: { ...collected.stats, scanMs: collected.scanMs, corpusSize: ordered.length },
   }
 }
 
@@ -701,10 +875,11 @@ export async function scan(root, limit, options = {}) {
  */
 export function publicScanPayload(payload) {
   if (!payload || typeof payload !== 'object') return payload
-  const { ranked, task, allDocs, ...rest } = payload
+  const { ranked, task, allDocs, stats, ...rest } = payload
   void ranked
   void task
   void allDocs
+  void stats
   return rest
 }
 
@@ -719,16 +894,27 @@ export function publicScanPayload(payload) {
  * 同样的 16KB）—— **零额外 I/O**。代价是只看头部 16KB，长文档尾部的引用会漏，
  * 但那只影响「哪些邻居进 Supporting」，不影响任何一篇的名次。
  *
+ * v0.19：**入图的一律只看 Markdown**（`buildLinkGraph` 自己也只认 `.md` 目标）。
+ * 代码不进图有两个理由，都不是洁癖：
+ *   1. 引用图是 `.md` 与 `.md` 之间的关系（`links.js` 的解析规则就是为中文文档语料
+ *      量出来的）。把代码的正文塞进这个索引没有语义，只会让 basename 歧义变多。
+ *   2. 更重要的是**不能给代码开一条新的入围路径**。代码进 Supporting 的唯一正当理由
+ *      应当是「任务检索命中了它」；如果它还能靠「正文里恰好写了一句 `docs/X.md`」
+ *      进 Supporting，那就成了「因为它是代码所以特别」的反面 —— 一条不打分的后门。
+ *
  * @param {string} root - 工作区根
  * @param {boolean} withLinks - 是否要引用关系
- * @param {Map<string, object>} byRel - 本次扫描到的文档（按 rel）
+ * @param {Map<string, object>} byRel - 本次扫描到的产物（按 rel）
  * @returns {Promise<object|null>} 图或 null
  */
 async function linkGraphFor(root, withLinks, byRel) {
   if (!withLinks) return null
   try {
     return await buildLinkGraph(root, {
-      list: async () => ({ docs: [...byRel.values()], truncated: false }),
+      list: async () => ({
+        docs: [...byRel.values()].filter((doc) => doc.kind === KIND_DOC),
+        truncated: false,
+      }),
       read: async (_root, rel) => {
         const entry = byRel.get(rel)
         if (!entry || typeof entry.head !== 'string') return { ok: false }
@@ -801,8 +987,12 @@ function withStats(pack) {
 /**
  * 一次请求里的上下文载荷：不适用（时间序 / 媒体档 / 没有命中）时返回 `null`。
  *
- * **只在文档档 + 相关序 + 有命中词时装配** —— 其余情形返回 null，
+ * **只在「文档档 / 代码档 + 相关序」时装配** —— 其余情形返回 null，
  * 客户端于是退回它一直在用的平铺列表，行为与 v0.13 逐字一致。
+ *
+ * v0.19：代码档走的是**同一个**装配调用，没有任何 code-only 分支。
+ * 引用图仍然只有 Markdown 才建（`links.js` 解析的是 Markdown 链接语法，
+ * 这是它的既有边界，v0.19 不扩）—— 所以 `withLinks` 只在文档档为真。
  *
  * @param {string} root - 工作区根
  * @param {object} payload - `scan()` 的产物
@@ -811,7 +1001,8 @@ function withStats(pack) {
  * @returns {Promise<object|null>} Context Pack（带 `summary`）或 null
  */
 async function contextPayload(root, payload, sort, kind) {
-  if (!payload || payload.mode !== 'relevance' || sort !== 'relevance' || kind !== 'doc') return null
+  const contextKind = kind === 'doc' || kind === 'code' || kind === 'context'
+  if (!payload || payload.mode !== 'relevance' || sort !== 'relevance' || !contextKind) return null
   const ranked = Array.isArray(payload.ranked) ? payload.ranked : []
   if (ranked.length === 0) return null
   try {
@@ -820,8 +1011,9 @@ async function contextPayload(root, payload, sort, kind) {
       topic: payload.topic,
       task: payload.task,
       total: payload.total,
-      // 引用图只在**真有命中**时才值得建（零命中时 Primary 为空，邻居逻辑没有锚点）
-      withLinks: ranked.some((doc) => Number(doc.raw) > 0),
+      // 引用图只在**真有命中**时才值得建（零命中时 Primary 为空，邻居逻辑没有锚点）；
+      // 而且只有 Markdown 有图可建。
+      withLinks: kind === 'doc' && ranked.some((doc) => Number(doc.raw) > 0),
     })
     return withStats(pack)
   } catch {
@@ -831,9 +1023,16 @@ async function contextPayload(root, payload, sort, kind) {
 }
 
 /**
- * 读一篇文档的完整正文，供面板内联预览。
+ * 读一个**可预览的文本产物**的完整正文（Markdown 文档 / 代码 / 生成产物），
+ * 供面板内联预览。
  *
  * 路径必须落在工作区根之内——`rel` 来自浏览器，按不可信输入处理。
+ *
+ * v0.19：放行范围从「只认 `.md`」改成**按分类层判定**（`isPreviewKind`）。
+ * 这条放宽是必须的（否则代码点不开），但边界一点没松：
+ * 媒体仍然只走 `/knit/api/raw`，`ignored`（含这一版不支持的 `.go` / `.rs` / `.java`
+ * / 未知扩展名）一律拒绝 —— **`/knit/api/doc` 仍然是按路径读文件的接口**，
+ * 不能变成「读工作区里任意文件」的后门。
  *
  * @param {string} root - 工作区根
  * @param {string} rel - 工作区相对路径
@@ -846,7 +1045,9 @@ export async function readDocument(root, rel) {
   if (abs !== base && !abs.startsWith(base + sep)) {
     return { ok: false, code: ERROR_CODES.outsideWorkspace }
   }
-  if (!/\.md$/i.test(abs)) return { ok: false, code: ERROR_CODES.markdownOnly }
+  const name = abs.split(sep).pop() || abs
+  const info = classifyFile(name)
+  if (!isPreviewKind(info.kind)) return { ok: false, code: ERROR_CODES.notPreviewable }
 
   let st
   try {
@@ -860,14 +1061,36 @@ export async function readDocument(root, rel) {
   const truncated = buf.length > DOC_MAX_BYTES
   const text = buf.subarray(0, DOC_MAX_BYTES).toString('utf8')
 
-  return {
+  const relPath = relative(base, abs).split(sep).join('/')
+  const payload = {
     ok: true,
-    rel: relative(base, abs).split(sep).join('/'),
-    title: parseMarkdown(text, abs.split(sep).pop() || abs).title,
+    rel: relPath,
+    // v0.19 修订：给「打开 / 定位」用的 canonical 绝对路径（展开符号链接）。
+    // 客户端拿它去 `remote.session.openWorkspacePath`；自己用 root + rel 拼出来的那份
+    // 一旦含符号链接就会被宿主拒掉（`Path has no verified Host path`）。
+    path: hostPathOf(abs),
+    // v0.19：预览分支的判据由宿主给（分类层的结论），客户端不再自己看扩展名。
+    kind: info.kind,
+    language: info.language,
+    // 代码不用 `parseMarkdown` 猜标题 —— 一段开头的 `# 注释` 在 shell 里是注释，
+    // 不是标题。代码的标题就是文件名本身。
+    title: info.kind === KIND_DOC ? parseMarkdown(text, name).title : name,
     bytes: buf.length,
     truncated,
     text,
   }
+  // v0.19（需求 §6 §28）：同名 `<file>.map` 存在时，在 code 预览里给一个**极轻量**入口。
+  // 只多做一次 `stat`（不读内容、不进任何列表、不进检索、不进上下文）——
+  // `.map` 本身仍然不是 Context，这里只是「它就在旁边」这一个事实的搬运。
+  if (info.kind === KIND_CODE && !info.sourceMap) {
+    try {
+      const mapStat = await stat(`${abs}.map`)
+      if (mapStat.isFile()) payload.mapRel = `${relPath}.map`
+    } catch {
+      // 没有就是没有 —— 不加字段，不报错。
+    }
+  }
+  return payload
 }
 
 /**
@@ -966,6 +1189,36 @@ function rootOfSession(session) {
   if (!root) root = process.cwd()
   if (root.startsWith('~')) root = join(homedir(), root.slice(1))
   return resolve(root)
+}
+
+/**
+ * 交给宿主去「打开 / 定位」的路径必须**展开所有符号链接**。
+ *
+ * 判据在 DSH 自己那里：`dsh-api-session-controller` 的 `verifyDesktopPath()` 把路径送进
+ * `ctx.fs`，要求
+ * `fs.processPath(await fs.resolve(fs.processPathFromHostPath(p))) === p`；
+ * 而 `dsh-fs-local` 的 `resolve()` 落的是 `realpath()`。也就是说 ——
+ * **路径里只要有一个符号链接没展开，宿主就回
+ * `gateway/bad-request / Path has no verified Host path`**，
+ * 客户端把它显示成「打开失败：Path has no verified Host path」。
+ *
+ * 会话的工作区根完全可能是符号链接（实测：`DSH_Skill_Trace -> 10_DSH_Skill_Trace`），
+ * 于是「打开」这条路必须另外给一份 canonical 路径。
+ * **显示与检索仍用会话原本那个 root** —— 用户看到的是自己选的那条路径，
+ * 只有交给宿主打开的路径要展开。
+ *
+ * 文件不存在时 `realpathSync` 会抛；调用点都在 `stat` 成功之后，兜底返回原路径，
+ * 免得把一次「打不开」升级成接口 500。
+ *
+ * @param {string} path - 绝对路径
+ * @returns {string} 展开符号链接后的绝对路径
+ */
+function hostPathOf(path) {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
 
 /**
@@ -1362,7 +1615,11 @@ export function apply(ctx) {
           const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100)
           const sort = url.searchParams.get('sort') === 'relevance' ? 'relevance' : 'time'
           const kindParam = url.searchParams.get('kind')
-          const kind = kindParam === 'all' || kindParam === 'media' ? kindParam : 'doc'
+          // v0.19：多一档 `code`。白名单形态不变（认不出的值一律回落 `doc`），
+          // 而 `context` 那个内部语料**不从 HTTP 暴露**。
+          const kind = kindParam === 'all' || kindParam === 'media' || kindParam === 'code'
+            ? kindParam
+            : 'doc'
           const payload = await scan(root, limit, {
             session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
           })
@@ -1410,7 +1667,9 @@ export function apply(ctx) {
           const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || MAX_DOCS, 1), MAX_DOCS)
           const sort = url.searchParams.get('sort') === 'time' ? 'time' : 'relevance'
           const kindParam = url.searchParams.get('kind')
-          const kind = kindParam === 'all' || kindParam === 'media' ? kindParam : 'doc'
+          const kind = kindParam === 'all' || kindParam === 'media' || kindParam === 'code'
+            ? kindParam
+            : 'doc'
           const payload = await scan(root, limit, {
             session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
           })
@@ -1430,7 +1689,7 @@ export function apply(ctx) {
           if (sessionId && feedbackActive(sessionId)) {
             auditBridge.note(sessionId, context)
           }
-          sendJson(res, 200, { ok: true, root, mode: payload.mode, topic: payload.topic, context })
+          sendJson(res, 200, { ok: true, root, hostRoot: hostPathOf(root), mode: payload.mode, topic: payload.topic, context })
           return
         }
 

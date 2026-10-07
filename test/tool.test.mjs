@@ -405,7 +405,7 @@ test('空工作区: 返回空数组并渲染出「没找到」', async () => {
   const bare = mkdtempSync(join(tmpdir(), 'knit-bare-'))
   const result = await runTool(fakeExec(fakeSession([], { cwd: bare })))
   assert.deepEqual(allItems(result), [])
-  assert.match(renderToolText(result), /No Markdown documents found/)
+  assert.match(renderToolText(result), /No documents or code files found/)
 })
 
 /* ── 渲染 ───────────────────────────────────────────── */
@@ -447,7 +447,10 @@ test('renderToolText: 三层各有序号、rel、标题、单行摘要与 Why �
     ],
     related: [{ rel: 'CHANGELOG.md', title: '丙', summary: '', reason: { code: 'related', terms: [], fields: 0 } }],
   }))
-  assert.match(text, /Context for 「排序、sidebar」: 3 matching documents of 9 Markdown documents/)
+  // v0.19：语料从「只有 Markdown」变成「文档 + 代码」，所以头部与空态的称谓
+  // 也跟着换成「documents and code files」—— 说「Markdown documents」而语料里
+  // 含着 `.ts`，是在对模型说假话（tool.js 里那段注释写了同样的理由）。
+  assert.match(text, /Context for 「排序、sidebar」: 3 matching of 9 documents and code files/)
   assert.match(text, /split into primary \/ supporting \/ related by deterministic local rules/)
   assert.match(text, /Primary \(read these first\):/)
   assert.match(text, /Supporting \(evidence, implementation, next step\):/)
@@ -466,14 +469,14 @@ test('renderToolText: 头部同时回答「漏没错」与「凭什么信这个�
     topic: 'x', total: 21, matched: 4,
     primary: [{ rel: 'a.md', title: '甲', summary: '' }],
   }))
-  assert.match(relevance, /of 21 Markdown documents/, '要回答「一共多少篇」')
+  assert.match(relevance, /of 21 documents and code files/, '要回答「一共多少篇」')
   assert.match(relevance, /not a flat relevance list/, '要回答「这跟平铺列表有什么不一样」')
   assert.match(relevance, /IDF-weighted relevance/, '要说清排名口径')
 
   const time = renderToolText({
     mode: 'time', topic: '', total: 21, docs: [{ rel: 'a.md', title: '甲', summary: '', mtimeMs: 1 }],
   })
-  assert.match(time, /most recently modified of 21 Markdown documents/)
+  assert.match(time, /most recently modified of 21 documents and code files/)
   assert.match(time, /Not enough conversation/)
 
   // 没有 total 时不写 undefined
@@ -487,7 +490,7 @@ test('renderToolText: 只有一篇时用单数', () => {
   const text = renderToolText(packOf({
     total: 1, matched: 1, primary: [{ rel: 'a.md', title: '甲', summary: '' }],
   }))
-  assert.match(text, /1 matching document of 1 Markdown document,/)
+  assert.match(text, /1 matching of 1 document and code file,/)
   assert.ok(!text.includes('1 matching documents'))
 })
 
@@ -506,28 +509,28 @@ test('renderToolText: 没有话题时不写空引号', () => {
 })
 
 test('renderToolText: 三层都空时才说「没找到」', () => {
-  assert.match(renderToolText(packOf({})), /No Markdown documents found/)
+  assert.match(renderToolText(packOf({})), /No documents or code files found/)
   // 只有 Related 有内容 —— 仍然要渲染出来（它是「背景资料」，不是没有）
   const onlyRelated = renderToolText(packOf({
     matched: 0, total: 5, related: [{ rel: 'a.md', title: '甲', summary: '' }],
   }))
   assert.match(onlyRelated, /Related \(background — do not start here\):/)
-  assert.ok(!onlyRelated.includes('No Markdown documents found'))
+  assert.ok(!onlyRelated.includes('No documents or code files found'))
 })
 
-test('renderToolText: 工作区有文档、但话题一个词都没命中 —— 不许说成「工作区里没有 Markdown」', () => {
+test('renderToolText: 工作区有文档或代码、但话题一个词都没命中 —— 不许说成「工作区里是空的」', () => {
   // 真机实测的场景：问「路径越界怎么防」，49 篇一篇都没命中（文档侧只看每篇前 2500 字，
   // 而这个词在 5 篇 .md 里全部出现在 2500 字之后）。原先这里打印的是
   // "No Markdown documents found in the workspace." —— 工作区里明明有 49 篇。
   const text = renderToolText(packOf({ total: 49 }))
-  assert.ok(!text.includes('No Markdown documents found'), '总数为 49 时不能说「一篇都没有」')
-  assert.match(text, /No document matched the current topic/)
-  assert.match(text, /0 of 49 Markdown documents/)
+  assert.ok(!text.includes('No documents or code files found'), '总数为 49 时不能说「一篇都没有」')
+  assert.match(text, /No document or code file matched the current topic/)
+  assert.match(text, /0 of 49 documents and code files/)
   assert.match(text, /2500 characters/) // 窗口限制必须说出来
   assert.match(text, /grep/) // 并给下一步
 
   // 真的空工作区仍然走原来那句
-  assert.match(renderToolText(packOf({ total: 0 })), /No Markdown documents found in the workspace\./)
+  assert.match(renderToolText(packOf({ total: 0 })), /No documents or code files found in the workspace\./)
 })
 
 /* ── v0.11 ②：命中段落 ───────────────────────────────── */
@@ -700,7 +703,7 @@ test('renderToolText: 头部的命中数走 totals.matched —— 不能恒为 0
     totals: { matched: 32, total: 44 },
   }
   const head = renderToolText(value).split('\n')[0]
-  assert.match(head, /32 matching documents of 44 Markdown documents/, head)
+  assert.match(head, /32 matching of 44 documents and code files/, head)
   assert.ok(!head.includes('0 matching'), '头部不能写 0 而下面列着结果')
 })
 
@@ -708,7 +711,11 @@ test('execute: 返回的 totals 带上 matched 与 total', async () => {
   const session = fakeSession([userMessage(1, 'sidebar 相关性排序')])
   const out = await runTool(fakeExec(session))
   assert.ok(out.totals, '结果必须带 totals —— 渲染层靠它写头部的命中数')
-  assert.equal(out.totals.total, 3, '样本工作区有 3 篇 Markdown')
+  // v0.19：`total` 是**可进上下文的候选数**（文档 + 代码）。样本工作区里
+  // README.md / docs/notes.md / CHANGELOG.md 三篇 Markdown **加上 package.json**
+  // —— 后者在 v0.19 是合法的代码候选（json 在第一批范围内），所以从 3 变成 4。
+  // 这个数字变了本身就是要证明的事：代码真的进了同一个检索池。
+  assert.equal(out.totals.total, 4, '样本工作区有 3 篇 Markdown + 1 个 package.json')
   assert.ok(out.totals.matched >= 1, `命中了应当 > 0，实际 ${out.totals.matched}`)
   const head = renderToolText(out).split('\n')[0]
   assert.ok(!head.includes('0 matching'), head)
@@ -766,7 +773,8 @@ test('audit: true 时先问 summary 再 note，并把这一行放进返回的 us
   assert.equal(noted.root, undefined, 'v0.16：桥不再收工作区根（读路径由订阅回调自己归一化）')
   assert.equal(noted.hasSession, undefined, 'v0.16：桥不再收会话对象（它不再去拉事件）')
   assert.ok(noted.pack && noted.pack.totals, 'note 记的是刚交出去的那份包（含 totals）')
-  assert.equal(noted.pack.totals.total, 3)
+  // v0.19：3 篇 Markdown + package.json（代码候选）—— 与上一条同源。
+  assert.equal(noted.pack.totals.total, 4)
 })
 
 test('audit: 桥抛错 / 返回非字符串时，工具照常返回且不带 usage', async () => {

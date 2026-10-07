@@ -239,6 +239,256 @@ Knit 浮层里的点击是即时响应的，不走列表接口，也不等轮询
 ]
 
 /**
+ * 造一条**代码**记录，haystack 口径严格照抄宿主的 `readCode()`
+ * （`src/host/index.js:346-359`）：
+ *
+ * ```text
+ * filename → title   （权重 ×4）
+ * path     → summary （权重 ×2，保留结尾斜杠）
+ * content  → body    （权重 ×1，前 HAYSTACK_CHARS 字）
+ * ```
+ *
+ * `title` 是**带扩展名的文件名**，不是去扩展名的 stem —— 代码的文件名里扩展名本身
+ * 就是信息（`plugin-loader.js` vs `plugin.json`），去掉它反而丢掉最能把两个候选
+ * 分开的那几个字符。
+ *
+ * 为什么要有这个工厂：v0.19 的 `CODE_CASES` 必须验的是「同一个 `rankByRelevance`
+ * 在文档与代码混合的语料上怎么排」，而不是另写一套排序器。所以**代码条目和文档条目
+ * 走完全相同的 `{rel, haystack, mtimeMs}` 形状**，只是三段文本的来源不同。
+ *
+ * @param {string} rel - 工作区相对路径
+ * @param {string} head - 文件开头的内容（会被截到 `HAYSTACK_CHARS`）
+ * @param {string} [kind] - 产物类型，默认 `'code'`
+ * @returns {object} 语料记录
+ */
+function codeDoc(rel, head, kind = 'code') {
+  const name = rel.split('/').pop()
+  const cut = rel.lastIndexOf('/')
+  const dir = cut >= 0 ? rel.slice(0, cut + 1) : ''
+  return {
+    rel,
+    path: rel,
+    name,
+    kind,
+    size: head.length,
+    mtimeMs: SHARED_MTIME,
+    haystack: {
+      title: name.toLowerCase(),
+      summary: dir.toLowerCase(),
+      body: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
+    },
+  }
+}
+
+/**
+ * v0.19 新增的**文档**候选（只给混合场景用，不进 `CORPUS`）。
+ *
+ * 单独一份的理由：`CORPUS` 是 v0.6 起就被 21 条用例钉住的基线，往里加一篇
+ * 就是在动历史刻度。Case C 需要一篇「相关但排在代码后面」的文档候选，
+ * 于是把它放进 v0.19 自己的池子里 —— 两个对比臂（只 Markdown / Markdown+Code）
+ * **都含它**，所以它不会变成某一臂的额外优势。
+ */
+export const V019_DOCS = [
+  doc('docs/architecture.md', {
+    title: '架构分层',
+    summary: '扫描 → 分类 → 检索 → Context Pack 的分层与职责边界。',
+    body: `
+这份设计文档说明 knit 的分层：workspace scan 只负责找到文件，file classification
+决定一个文件算文档、代码还是媒体，retrieval 用 BM25 在当前任务与候选之间排序，
+最后装配成 Context Pack 的三层。分层之间只通过 artifact.kind 传递，不许互相偷看。
+
+session context 的装配属于 retrieval 之后的一步：把检索结果按 primary / supporting /
+related 分组，再冻结成一次 context epoch。session 的持久化不在这份文档的范围里，
+它由 session-store 负责。架构上刻意不引入 embedding 与向量库，检索保持纯本地确定性。
+    `,
+  }),
+]
+
+/**
+ * v0.19 的代码语料 —— 三个真实 AI Coding 场景。
+ *
+ * 刻意让**不相关的东西也留在池子里**（`CORPUS` 那 16 篇文档全在），因为要回答的
+ * 问题不是「代码能不能排第一」，而是：
+ *
+ * > 把代码放进同一个 BM25 池子之后，**原有文档的检索质量会不会被挤坏**。
+ *
+ * 那只有在真竞争里才量得出来。
+ */
+export const CODE_CORPUS = [
+  // ── Case A：React / TypeScript ──────────────────────────
+  codeDoc('src/components/Component.tsx', `
+import React, { useState, useEffect } from 'react'
+
+/**
+ * 任务面板。父级把 state 传下来，这里同步到本地 draft。
+ * bug：父级 state 变了，这个组件 render 之后还是旧值。
+ */
+export function Component({ task, onChange }) {
+  const [draft, setDraft] = useState(task.title)
+
+  useEffect(() => {
+    // 同步不上的地方：依赖数组是空的，只在 mount 时跑一次，
+    // 父级后续的 props 改动被整个丢掉了。
+    setDraft(task.title)
+  }, [])
+
+  const onInput = (event) => {
+    setDraft(event.target.value)
+    onChange(event.target.value)
+  }
+
+  return <input value={draft} onChange={onInput} />
+}
+`),
+  codeDoc('src/state/state.ts', `
+/**
+ * 任务状态。组件之间的状态同步都要经过这里，不许各存一份。
+ */
+export interface TaskState {
+  title: string
+  dirty: boolean
+}
+
+export const initialState: TaskState = { title: '', dirty: false }
+
+export function reducer(state: TaskState, action: { type: string, value?: string }) {
+  switch (action.type) {
+    case 'title': return { ...state, title: action.value || '', dirty: true }
+    default: return state
+  }
+}
+`),
+  codeDoc('src/hooks/hooks.ts', `
+import { useEffect, useRef, useState } from 'react'
+
+/** 把外部值同步进本地 state —— 依赖数组必须带上外部值本身。 */
+export function useSyncedValue(external) {
+  const [value, setValue] = useState(external)
+  useEffect(() => { setValue(external) }, [external])
+  return [value, setValue]
+}
+
+/** 去抖，避免每次按键都 render 父级。 */
+export function useDebounced(value, ms = 200) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), ms)
+    return () => clearTimeout(id)
+  }, [value, ms])
+  return debounced
+}
+`),
+
+  // ── Case B：Node / JavaScript ───────────────────────────
+  codeDoc('src/plugin/plugin-loader.js', `
+/**
+ * plugin loader：扫插件目录、读 metadata、注册到 loader 表。
+ * 新增的 metadata 字段在这里认不出来，于是被静默丢掉。
+ */
+export async function loadPlugin(dir) {
+  const metadata = await readMetadata(dir)
+  if (!metadata || !metadata.name) {
+    throw new Error('metadata.name is required')
+  }
+  return { ...metadata, dir, loaded: true }
+}
+
+export async function loadAll(root) {
+  const dirs = await listPluginDirs(root)
+  const out = []
+  for (const dir of dirs) out.push(await loadPlugin(dir))
+  return out
+}
+`),
+  codeDoc('src/plugin/plugin.ts', `
+/** 插件的运行时形状，以及 loader 认得的 metadata 字段。 */
+export interface PluginMetadata {
+  name: string
+  version?: string
+  main?: string
+}
+
+export interface Plugin extends PluginMetadata {
+  dir: string
+  loaded: boolean
+}
+
+export interface PluginLoader {
+  loadPlugin(dir: string): Promise<Plugin>
+  loadAll(root: string): Promise<Plugin[]>
+}
+`),
+  codeDoc('src/plugin/metadata.js', `
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
+/** 读 plugin.json —— loader 只认这里的字段，别处的一律忽略。 */
+export async function readMetadata(dir) {
+  try {
+    const raw = await readFile(join(dir, 'plugin.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? parsed : null
+  } catch {
+    return null
+  }
+}
+`),
+
+  // ── Case C：混合上下文（文档 + 代码竞争同一层）──────────
+  codeDoc('src/context/context-manager.ts', `
+/**
+ * session context 的装配：把检索结果按 primary / supporting / related 分组，
+ * 再冻结成一次 context epoch。所有对 session 的读写都要经过这里。
+ */
+export function assembleContext(session, ranked) {
+  const primary = ranked.filter((entry) => entry.score >= HIGH)
+  const supporting = ranked.filter((entry) => entry.score >= MID && entry.score < HIGH)
+  const related = ranked.filter((entry) => entry.score < MID)
+  return { session: session.id, primary, supporting, related, epoch: session.epoch + 1 }
+}
+`),
+  codeDoc('src/context/session-store.ts', `
+/**
+ * session 的持久化层。只存 id / epoch / 已读证据，不存任何检索中间结果。
+ */
+export function saveSession(store, session) {
+  store.set(session.id, { id: session.id, epoch: session.epoch, reads: session.reads })
+  return store.get(session.id)
+}
+
+export function loadSession(store, id) {
+  return store.get(id) || null
+}
+`),
+]
+
+/**
+ * v0.19 必须**一个都不准进语料**的生成 / 噪声产物（需求 §6 §7 §35）。
+ *
+ * 这张表有两个消费方，所以放在这里而不是某个测试里：
+ *
+ *  1. `code-context.test.mjs` 拿它去**真实扫描**一个临时工作区，断言这 7 条
+ *     在候选里一个都找不到（这是「verification」，不是「说明」）。
+ *  2. 基准里用它算 noise rate —— 只要有一条出现在代码用例的 top-1，
+ *     这个数就不再是 0。
+ *
+ * 注意 `node_modules` / `dist` / `coverage` 三条**同时**会被既有的 `SKIP_DIRS`
+ * 挡掉：所以它们验的是「目录级排除仍然生效」，而 `app.min.js` / `bundle.generated.js`
+ * / `app.js.map` / `package-lock.json` 验的是「新增的 code-specific noise 规则生效」。
+ * 两层都要有，因为任意一层接手都不会让它们漏进来 —— 但测出来必须是零。
+ */
+export const NOISE_RELS = [
+  'node_modules/foo.js',
+  'dist/app.js',
+  'coverage/report.js',
+  'app.min.js',
+  'bundle.generated.js',
+  'app.js.map',
+  'package-lock.json',
+]
+
+
+/**
  * 用例。
  *
  * `expect` 是**期望的 top-1**。
@@ -386,18 +636,71 @@ export const CASES = [
 ]
 
 /**
+ * v0.19 的代码用例 —— 需求 §34 点名的三个真实 AI Coding 场景。
+ *
+ * 标注口径与 `CASES` 完全相同（`expect` ＝ 期望的 top-1），**不新增一套标注格式**：
+ * 二元标注够用，因为要回答的问题是「这块上下文有没有被找出来」，
+ * 而不是「它比第二名好多少」。
+ */
+export const CODE_CASES = [
+  {
+    name: 'V0.19-A React/TS：组件状态同步',
+    messages: [
+      '修复当前任务中的 React 组件状态同步问题',
+      'Component 里的 state 跟父级不同步，重新 render 之后还是旧值',
+    ],
+    expect: 'src/components/Component.tsx',
+    // 这四条是「任务里根本没提到、但池子里有的东西」——
+    // 架构文档、变更日志、临时笔记都不该赢过一个正在报 bug 的组件。
+    notTop: ['docs/architecture.md', 'CHANGELOG.md', 'docs/one-off.md', 'docs/long-archive.md'],
+  },
+  {
+    name: 'V0.19-B Node/JS：plugin loader 的 metadata',
+    messages: [
+      '修改 plugin loader，使它支持新的 plugin metadata',
+      'loader 读 metadata 的时候认不出新加的那个字段',
+    ],
+    expect: 'src/plugin/plugin-loader.js',
+    notTop: ['docs/architecture.md', 'README.md', 'docs/long-archive.md'],
+  },
+  {
+    name: 'V0.19-C 混合：session context 的实现',
+    messages: [
+      '根据项目设计修改 session context 实现',
+      'context 的装配逻辑跟 session 的存储对不上',
+    ],
+    expect: 'src/context/context-manager.ts',
+    notTop: ['README.md', 'docs/long-archive.md', 'docs/one-off.md'],
+  },
+]
+
+/**
+ * v0.19 的两个对比臂 —— **同一个语料形状，只差一个代码语料**。
+ *
+ * 这样「Markdown only vs Markdown + Code」就不是两次不同实验的比较，
+ * 而是同一池子加料前后的差值，唯一变量就是代码。
+ */
+export const V019_MD_ONLY = [...CORPUS, ...V019_DOCS]
+export const V019_WITH_CODE = [...V019_MD_ONLY, ...CODE_CORPUS]
+
+/**
  * 跑一遍评测。
  *
  * @param {(messages: string[], limit?: number) => Array<{term: string, weight: number}>} extract -
  *   关键词抽取（注入真实实现，便于新旧对比）
  * @param {(docs: object[], keywords: object[], now: number) => {docs: object[]}} rank -
  *   排序（注入真实实现）
+ * @param {object[]} [corpus] - 语料；默认 `CORPUS`。
+ *   v0.19 新增这个口子是为了量「同一个排序器在只 Markdown 与 Markdown+Code 上的差」——
+ *   代码条目与文档条目走**完全相同的** `{rel, haystack, mtimeMs}` 形状，
+ *   所以不值得（也不允许）为代码另写一个评测器。
+ * @param {object[]} [cases] - 用例；默认 `CASES`
  * @returns {{total: number, top1: number, top1Rate: number, mrr: number,
  *   misses: Array<{name: string, got: string, want: string}>,
  *   trapViolations: Array<{name: string, offender: string}>,
  *   degenerate: number, ranks: number[]}} 评测结果
  */
-export function runEval(extract, rank) {
+export function runEval(extract, rank, corpus = CORPUS, cases = CASES) {
   let top1 = 0
   let mrrSum = 0
   let degenerate = 0
@@ -405,9 +708,9 @@ export function runEval(extract, rank) {
   const trapViolations = []
   const ranks = []
 
-  for (const testCase of CASES) {
+  for (const testCase of cases) {
     const keywords = extract(testCase.messages, 30)
-    const { docs: ranked } = rank(CORPUS, keywords, NOW)
+    const { docs: ranked } = rank(corpus, keywords, NOW)
     const order = ranked.map((d) => d.rel)
     const position = order.indexOf(testCase.expect)
     // 名次从 1 开始；找不到记为 0（对 MRR 没有贡献）
@@ -427,10 +730,10 @@ export function runEval(extract, rank) {
   }
 
   return {
-    total: CASES.length,
+    total: cases.length,
     top1,
-    top1Rate: top1 / CASES.length,
-    mrr: mrrSum / CASES.length,
+    top1Rate: top1 / cases.length,
+    mrr: mrrSum / cases.length,
     misses,
     trapViolations,
     degenerate,

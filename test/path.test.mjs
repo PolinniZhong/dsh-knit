@@ -207,9 +207,13 @@ test('路径：成功时不残留上一次的错误提示', async () => {
   assert.equal(byClass(nodes, 'knit-notice').length, 0, '再成功，提示应清掉')
 })
 
-/* ── 预览头那行路径：点它打开的是这篇文档本身 ────────── */
+/* ── 预览头那行路径：点它＝在文件管理器里**定位到这个文件** ──
+   走的是同一个 remote（`openWorkspacePath`），多带一个 `action: 'reveal'`
+   （主机侧 macOS `open -R` / Windows `explorer /select,`）—— 打开所在文件夹**并选中**它，
+   用户不必再自己找。与页脚「本地打开」刻意分开：那个打开文件，这个只定位文件。
+   ⚠️ reveal 要的是**文件本身**的绝对路径；传目录过去会变成「在上级目录里选中这个文件夹」。 */
 
-test('路径：点预览头的路径，打开的是这篇文档的绝对路径', async () => {
+test('路径：点预览头的路径＝在文件管理器里定位到「这个文件」（reveal，不是打开目录）', async () => {
   const calls = []
   globalThis.fetch = async (url) => ({
     json: async () => (String(url).includes('/api/doc')
@@ -231,10 +235,11 @@ test('路径：点预览头的路径，打开的是这篇文档的绝对路径',
   await harness.flush()
 
   assert.equal(calls.length, 1, '应调用一次')
-  assert.deepEqual(calls[0], { path: '/Users/me/proj/a.md' }, '用宿主给的绝对 path')
+  assert.deepEqual(calls[0], { path: '/Users/me/proj/a.md', action: 'reveal' },
+    'reveal 的是文件本身的绝对路径，且带上 action')
 })
 
-test('路径：宿主没给 path 时用 root + rel 兜底', async () => {
+test('路径：宿主没给 path 时用 root + rel 兜底，reveal 的仍然是文件本身', async () => {
   const calls = []
   const payload = listPayload({
     docs: [{ rel: 'sub/b.md', name: 'b.md', title: 'B', summary: 's', mtimeMs: Date.now(), score: null }],
@@ -258,7 +263,8 @@ test('路径：宿主没给 path 时用 root + rel 兜底', async () => {
   byExactClass(nodes, 'knit-preview-path')[0].props.onClick()
   await harness.flush()
 
-  assert.deepEqual(calls[0], { path: '/Users/me/proj/sub/b.md' }, 'root + rel 拼出来')
+  assert.deepEqual(calls[0], { path: '/Users/me/proj/sub/b.md', action: 'reveal' },
+    'root + rel 拼出文件本身，再去定位 —— 不是把目录送过去')
 })
 
 test('路径：拼不出绝对路径时按钮 disabled，点了也不发请求', async () => {
@@ -326,6 +332,8 @@ test('预览头：右上角是「本地打开」，点击打开这篇文档', as
   assert.match(String(localBtn.props.title), /a\.md/, 'tooltip 里带相对路径')
   localBtn.props.onClick()
   await harness.flush()
+  // ⚠️ **不带 `action: 'reveal'`** —— 这是与面包屑那条的分水岭：
+  //    面包屑只定位文件（在文件管理器里选中它），这个按钮真去打开文件。
   assert.deepEqual(calls[0], { path: '/Users/me/proj/a.md' }, '打开的是这篇文档的绝对路径')
 })
 
@@ -354,4 +362,88 @@ test('预览头：没有 remote.session 时「本地打开」给出提示，不�
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   assert.ok(byClass(nodes, 'knit-notice').length >= 1, '应给出可见提示而不是白点一下')
+})
+
+/* ── 符号链接工作区：交给宿主打开的路径必须是 realpath（v0.19 修订） ──
+   现象：在 `DSH_Skill_Trace`（→ `10_DSH_Skill_Trace` 的符号链接）这类工作区里，
+   点预览头路径 / 「本地打开」/ 点工作区路径，一律弹
+   「打开失败：Path has no verified Host path」；而在 08_Knit（真实目录）里同样操作没事。
+   根因在 DSH 侧、不在 Knit：`dsh-api-session-controller` 的 `verifyDesktopPath()` 把路径
+   送进 `ctx.fs` 做一次 realpath 再**逐字比对**（`lib/index.js:3068`），
+   而 `dsh-fs-local` 的 targetKey 落的是 `realpath()` ⇒
+   **任何含未展开符号链接的路径都过不了**。
+   ⇒ Knit 这一侧要自己先展开：宿主给 `hostRoot`（工作区根的 canonical 形态）与
+   每条记录的 `path`（文件的 canonical 形态），客户端**打开一律用它们**，
+   `root` 只留给界面显示。 */
+
+test('路径：工作区是符号链接时，打开 / 定位一律用宿主给的 canonical 路径', async () => {
+  const calls = []
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'sub/b.md', path: '/real/ws/sub/b.md', title: 'B', text: '正文', truncated: false }
+      : listPayload({
+        root: '/link/ws',
+        hostRoot: '/real/ws',
+        docs: [{ path: '/real/ws/sub/b.md', rel: 'sub/b.md', name: 'b.md', title: 'B', summary: 's', mtimeMs: Date.now(), score: null }],
+      })),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  // ① 点预览头路径 → reveal 文件本身
+  byExactClass(nodes, 'knit-preview-path')[0].props.onClick()
+  await harness.flush()
+  assert.deepEqual(calls[0], { path: '/real/ws/sub/b.md', action: 'reveal' },
+    'reveal 必须用宿主算好的 canonical 文件路径，不能用 root + rel 拼')
+
+  // ② 页脚「本地打开」→ 打开文件（不带 action）
+  const localBtn = byClass(nodes, 'knit-btn').find((n) => textOf(n) === '本地打开')
+  localBtn.props.onClick()
+  await harness.flush()
+  assert.deepEqual(calls[1], { path: '/real/ws/sub/b.md' }, '打开文件同样用 canonical 路径')
+
+  // ③ 点头部工作区路径 → 打开 canonical 目录（目录也会被同一条校验拒）
+  byClass(nodes, 'knit-root-path')[0].props.onClick()
+  await harness.flush()
+  assert.deepEqual(calls[2], { path: '/real/ws' }, '打开工作区目录用的是 hostRoot')
+
+  // ④ 界面显示仍是会话原本那条路径 —— 用户看到的是自己选的那个目录名
+  assert.equal(textOf(byClass(nodes, 'knit-root-path')[0]), '/link/ws',
+    '显示用 root，不把 canonical 路径摊给用户')
+})
+
+test('路径：老宿主不给 path 时退回 hostRoot + rel（仍然避开符号链接）', async () => {
+  const calls = []
+  globalThis.fetch = async (url) => ({
+    json: async () => (String(url).includes('/api/doc')
+      ? { ok: true, rel: 'sub/b.md', title: 'B', text: '正文', truncated: false }
+      : listPayload({
+        root: '/link/ws',
+        hostRoot: '/real/ws',
+        docs: [{ rel: 'sub/b.md', name: 'b.md', title: 'B', summary: 's', mtimeMs: Date.now(), score: null }],
+      })),
+  })
+  const { KnitBody } = boot({
+    openWorkspacePath: async (request) => { calls.push(request); return { ok: true, value: { opened: true } } },
+  }).exports.__test
+
+  harness.reset()
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  byExactClass(nodes, 'knit-preview-path')[0].props.onClick()
+  await harness.flush()
+  assert.deepEqual(calls[0], { path: '/real/ws/sub/b.md', action: 'reveal' },
+    '没有 path 时用 hostRoot + rel —— 兜底的也必须是 canonical 那份')
 })

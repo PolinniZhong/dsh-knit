@@ -1,7 +1,7 @@
 /**
  * Knit · agent 文档工具（v0.7）
  *
- * 把一个**只读**工具交给模型：`knit_docs` —— 列出这个项目里已有的 Markdown 文档，
+ * 把一个**只读**工具交给模型：`knit_docs` —— 列出这个项目里已有的**文档与代码文件**，
  * 按与当前对话（或调用方给出的 query）的相关性排序。
  *
  * 解决的问题：agent 想引用项目里已有的文档时只能靠猜路径、或者把 glob 出来的
@@ -85,7 +85,7 @@ const HAYSTACK_NOTE =
  * 所以描述要点名两件它自己做不到的事：**稀有词权重**（不是数次数）
  * 与**不依赖文件名**。最后一句是行为引导 —— 直说「别自己来」。
  */
-const DESCRIPTION = 'Project context for the current task, from the workspace Markdown: '
+const DESCRIPTION = 'Project context for the current task, from the workspace documents and code: '
   + 'primary (read first) / supporting (evidence, implementation) / related. '
   + 'Ranked by IDF-weighted relevance to the conversation (or an explicit query), then split '
   + 'by deterministic local rules — prefer it to globbing filenames or counting keyword hits. '
@@ -140,8 +140,8 @@ const ITEM_SCHEMA = {
     mtimeMs: { type: 'integer' },
     // 项目里的角色：impl / test / config / design / doc。纯路径规则，不是内容理解。
     source: { type: 'string', enum: ['impl', 'test', 'config', 'design', 'doc'] },
-    // 条目是什么：md / image / video。
-    // ⚠️ **故意不给它 enum**。取值集合归 `index.js` 的 `kindOfName()` 所有；
+    // 条目是什么：md / code / image / video。
+    // ⚠️ **故意不给它 enum**。取值集合归 `classification.js` 的 `classifyFile()` 所有；
     // 在这里钉一份名单，等于以后每加一种文件类型就让工具在**校验层**静默失败一次。
     // v0.14 正是这么坏掉的：`kind` 当时压根没被声明，而 schema 是 `additionalProperties: false`。
     kind: { type: 'string' },
@@ -153,7 +153,7 @@ const ITEM_SCHEMA = {
         code: {
           type: 'string',
           enum: [
-            'direct', 'titleMatch', 'summaryMatch', 'bodyMatch',
+            'direct', 'titleMatch', 'filenameMatch', 'summaryMatch', 'pathMatch', 'bodyMatch',
             'linkTarget', 'linkSource', 'related',
           ],
         },
@@ -185,7 +185,7 @@ const OUTPUT_SCHEMA = {
   properties: {
     mode: { type: 'string', enum: ['relevance', 'time'] },
     topic: { type: 'string' },
-    // 本批语料里**一共有多少篇** Markdown —— 让模型知道这不是「随便挑的几条」，
+    // 本批语料里**一共有多少个文件**（文档 + 代码）—— 让模型知道这不是「随便挑的几条」，
     // 不必再自己 glob 一遍做交叉验证（v0.8，依据是真机验收里观察到的行为）。
     total: { type: 'integer' },
     // v0.14：三层。`primary` 是「先读这几篇」，`supporting` 是「证据 / 实现 / 下一步」，
@@ -393,11 +393,18 @@ export function renderToolText(value, readSnippet) {
   const topic = value && typeof value.topic === 'string' ? value.topic : ''
   const total = Number.isInteger(value && value.total) ? value.total : 0
 
+  // v0.19：语料从「只有 Markdown」变成「文档 + 代码」，所以这里的称谓必须跟着改。
+  // 说「9 Markdown documents」而实际语料里含着 `.ts`，是在对模型说假话 ——
+  // 而且它会误导模型以为「这个项目里没有代码可看」。**称谓集中在这一处**，
+  // 免得以后改口径时要追四条字符串。
+  const files = (n) => `${n} document${n === 1 ? '' : 's'} and code file${n === 1 ? '' : 's'}`
+  const EMPTY = 'No documents or code files found in the workspace.'
+
   // 退化（时间序）与「没有对话」是同一件事的两面：都没有命中词。
   if (mode !== 'relevance') {
     const docs = (value && Array.isArray(value.docs)) ? value.docs : []
-    if (docs.length === 0) return 'No Markdown documents found in the workspace.'
-    const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
+    if (docs.length === 0) return EMPTY
+    const scope = ` of ${files(total)}`
     return [`Not enough conversation to rank by relevance — showing the ${docs.length} most recently modified${scope}:`,
       ...docs.map((doc, index) => `${index + 1}. ${doc.rel} — ${doc.title}`)].join('\n')
   }
@@ -409,14 +416,14 @@ export function renderToolText(value, readSnippet) {
   // 三层都空 = 真的没有可看的上下文。**不能只判 total** —— 工作区有文档、
   // 但当前话题一篇都没命中、且一条引用邻居都没有时，`total` 是正数而三层全空。
   if (primary.length + supporting.length + related.length === 0) {
-    if (total === 0) return 'No Markdown documents found in the workspace.'
-    // 文档在、但一个词都没命中 —— **不许说成「工作区里没有 Markdown」**：
+    if (total === 0) return EMPTY
+    // 文档在、但一个词都没命中 —— **不许说成「工作区里没有文档」**：
     // 那是一句假话，而且会把 agent 推向一个错的结论（「这个项目里没有相关材料」）。
     // 真机实测：问「路径越界怎么防」时 49 篇一篇都没命中，因为文档侧只看每篇
     // **前 2500 字**（`index.js` 的 HAYSTACK_CHARS），而这个词在 5 篇 .md 里
     // 全部出现在 2500 字之后。说实话 + 给下一步，比一句错的空结果有用。
     return [
-      `No document matched the current topic — 0 of ${total} Markdown document${total === 1 ? '' : 's'} contain the query terms.`,
+      `No document or code file matched the current topic — 0 of ${files(total)} contain the query terms.`,
       HAYSTACK_NOTE,
     ].join('\n')
   }
@@ -436,9 +443,8 @@ export function renderToolText(value, readSnippet) {
   const out = []
   const matched = (value && value.totals && Number.isInteger(value.totals.matched))
     ? value.totals.matched : 0
-  const scope = ` of ${total} Markdown document${total === 1 ? '' : 's'}`
   out.push(`Context for ${topic ? `「${topic}」` : 'the current conversation'}: `
-    + `${matched} matching document${matched === 1 ? '' : 's'}${scope}, split into `
+    + `${matched} matching of ${files(total)}, split into `
     + 'primary / supporting / related by deterministic local rules (first-read order — '
     + 'not a flat relevance list; each tier is still ranked by IDF-weighted relevance):')
 
@@ -471,7 +477,12 @@ function whyText(reason) {
   switch (code) {
     case 'direct': return terms ? `direct topic match in the title (${terms})` : 'direct topic match in the title'
     case 'titleMatch': return terms ? `matched in the title (${terms})` : 'matched in the title'
+    // v0.19：代码没有「标题 / 摘要」，占这两个槽位的是**文件名**与**所在目录**
+    // （见 `index.js` 的 `readCode()`）。判据与 `titleMatch` / `summaryMatch` 完全一样，
+    // 只有称谓不同 —— 对一个 `.ts` 文件说 "matched in the title" 是错的。
+    case 'filenameMatch': return terms ? `matched in the filename (${terms})` : 'matched in the filename'
     case 'summaryMatch': return terms ? `matched in the summary (${terms})` : 'matched in the summary'
+    case 'pathMatch': return terms ? `matched in the path (${terms})` : 'matched in the path'
     case 'bodyMatch': return terms ? `matched in the body (${terms})` : 'matched in the body'
     case 'linkTarget': return 'referenced by a primary document'
     case 'linkSource': return 'references a primary document'
@@ -574,6 +585,11 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
         sessionId,
         sort: 'relevance',
         query,
+        // v0.19：工具的语料是**文档 + 代码**（不给 HTTP 的 `context` 档）。
+        // 这一条正是本次版本的核心主张：代码和 Markdown 在**同一套 BM25、同一套分层**
+        // 里竞争，谁进 Primary 只由任务检索决定，没人给代码留座位。
+        // 媒体不进 —— 图片/视频没有可检索的正文，进上下文只会稀释（v0.18 起如此）。
+        kind: 'context',
       })
 
       // 命中词用 `scan()` 的 `keywords` —— 它是**语料里真实存在**的那批词

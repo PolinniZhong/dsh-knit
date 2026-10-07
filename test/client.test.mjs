@@ -737,7 +737,7 @@ test('媒体：类型偏好默认 doc，合法值保留，非法值回落', () =
   assert.equal(readKindPref(), 'doc')
 })
 
-test('媒体：默认文档视图有三个类型按钮，但不出现媒体网格，计数仍按文档', async () => {
+test('媒体：默认文档视图有四个类型按钮（文档/代码/媒体/全部），但不出现媒体网格，计数仍按文档', async () => {
   installFetch(kindResponder({ doc: listPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -747,8 +747,10 @@ test('媒体：默认文档视图有三个类型按钮，但不出现媒体网�
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
   const btns = byClass(nodes, 'knit-type-btn')
-  assert.equal(btns.length, 3)
-  assert.deepEqual(btns.map(textOf), ['文档', '媒体', '全部'])
+  // v0.19：一级分类从「文档 / 媒体 / 全部」扩成「文档 / 代码 / 媒体 / 全部」。
+  // 刻意**只加一档** —— 不再给代码做第二层语言分类 UI（需求 §46）。
+  assert.equal(btns.length, 4)
+  assert.deepEqual(btns.map(textOf), ['文档', '代码', '媒体', '全部'])
   assert.equal(btns.find((b) => textOf(b) === '文档').props['aria-selected'], true)
   assert.equal(byClass(nodes, 'knit-media-grid').length, 0)
   assert.equal(byClass(nodes, 'knit-doc').length, 2)
@@ -1434,6 +1436,57 @@ test('样式：预览面板底色恒为纯阅读底色，不靠底色分层；�
   // ⚠️ 旧行为已废：不再有 .knit-preview.reading，也没有背景过渡
   assert.ok(!css.includes('.knit-preview.reading'))
   assert.ok(!css.includes('transition:background-color'))
+})
+
+test('全屏：隐藏名单必须覆盖「列表之外还在正常流里」的每一块 —— 漏一块预览就被挤一次', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // 全屏的隐藏名单。它可以写成一条逗号列表，也可以按块拆成多条规则 ——
+  // 这里把**所有**带 display:none 的 `.knit-root.fullscreen <sel>` 收进一个集合。
+  const hidden = new Set()
+  for (const rule of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+    if (!/display\s*:\s*none/.test(rule[2])) continue
+    for (const sel of rule[1].matchAll(/\.knit-root\.fullscreen\s+(\.[\w-]+)/g)) hidden.add(sel[1])
+  }
+  assert.ok(hidden.size > 0, '全屏必须有一条 display:none 的隐藏名单')
+
+  // 这些都在**正常流**里（不是浮层），全屏时必须一起让位，否则预览被它们挤在下面。
+  // ⚠️ 2026-10-07 用户反馈：开了「使用情况」再点全屏，Lens 仍占掉面板上方约三分之一，
+  //    看起来就像「全屏没生效」—— `.knit-usage` 是 flex:none 的自然高度，漏了就抢不回来。
+  for (const section of ['.knit-head', '.knit-bar', '.knit-types', '.knit-usage', '.knit-list']) {
+    assert.ok(hidden.has(section), `全屏必须藏掉 ${section}（它是列表上方的正常流块，不藏就挤压预览）`)
+  }
+
+  // 再把名单跟**真的渲染出来的**全屏树对一次账：改名 / 删块时这条要响。
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  // usageOn 在 hook 顺序里的下标是 **15**（useRef 也占槽位，与真实 React 一致）：
+  //   notice/sort/kind/state/preview/tick/cursor/query/ratio/fullscreen = 0..9
+  //   listRef/rootRef = 10,11 → listWidth=12, links=13, linksExpandedTick=14, usageOn=15
+  const seeded = ['', 'time']
+  seeded[15] = true
+  harness.seed(seeded)
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byToken(nodes, 'knit-btn').find((b) => textOf(b) === '全屏').props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const root = nodes.find((n) => String(n.props.className || '').startsWith('knit-root'))
+  assert.match(String(root.props.className), /fullscreen/, '点过全屏后根节点要带 fullscreen')
+  const present = new Set(nodes.map((n) => '.' + String(n.props.className || '').split(/\s+/)[0]))
+  for (const section of ['.knit-usage', '.knit-list', '.knit-preview']) {
+    assert.ok(present.has(section), `${section} 应当出现在全屏树里（靠 CSS 藏，不是不渲染）`)
+  }
+  // 名单里只允许出现「顶栏 / 观察层 / 列表」这三类，别去藏预览本身
+  assert.ok(!hidden.has('.knit-preview'), '全屏当然不能把预览自己藏掉')
 })
 
 test('媒体：点类型按钮切到「媒体」会带 kind=media 重拉并记住偏好', async () => {
@@ -3276,3 +3329,378 @@ test('v0.17 交互审：列表只在光标真的换了（且焦点在列表上�
   assert.match(code, /scrollIntoView\(\{ block: 'nearest' \}\)/, '滚的是最小距离，不是把行顶到最上面')
 })
 
+
+/* ── v0.19 代码上下文 ───────────────────────────────────────────────
+   这一组的职责：守住「代码这一档在**浏览器半边**长什么样」。
+   宿主侧的规则（分类 / 排序 / 包 / 生命周期 / Epoch）在
+   `test/classification.test.mjs` 与 `test/code-context.test.mjs` 里守，
+   这里只管三件事：**它出现在哪个档、行上多了什么、点开怎么渲染**。
+   贯穿约束：代码**不是**一个新的工具页 —— 它仍然受当前任务检索支配，
+   所以这里从不假设「代码档 = 项目全部代码」。 */
+
+/** 一份代码档载荷：一条带目录、一条在根。 */
+function codePayload(overrides = {}) {
+  const now = Date.now()
+  return {
+    ok: true, root: '/p', total: 2, mode: 'time', topic: '', kind: 'code',
+    docs: [
+      {
+        path: '/p/src/context-manager.ts', rel: 'src/context-manager.ts', name: 'context-manager.ts',
+        title: 'context-manager.ts', kind: 'code', summary: 'src/', size: 2400,
+        mtimeMs: now - 30000, score: null,
+      },
+      {
+        path: '/p/plugin-loader.js', rel: 'plugin-loader.js', name: 'plugin-loader.js',
+        title: 'plugin-loader.js', kind: 'code', summary: '', size: 900,
+        mtimeMs: now - 60000, score: null,
+      },
+    ],
+    ...overrides,
+  }
+}
+
+test('v0.19 代码：「代码」档请求 kind=code，代码行带语言徽章而文档行不带', async () => {
+  const { calls } = installFetch(kindResponder({ code: codePayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.ok(calls.some((u) => u.includes('kind=code')), `实际 URL：${calls.join(' ')}`)
+  assert.equal(byToken(nodes, 'knit-doc').length, 2, '两条代码候选各一行')
+  // 徽章是**纯展示**：它把文件名后缀说给人看，不参与任何判定（判定在宿主分类层）。
+  assert.deepEqual(byExactClass(nodes, 'knit-lang').map(textOf), ['TS', 'JS'])
+  assert.equal(byExactClass(nodes, 'knit-media-grid').length, 0, '代码档没有媒体网格')
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /2 个代码文件/)
+})
+
+test('v0.19 代码：文档行的语言徽章不出场 —— 整列都是 Markdown，挂 MD 是纯噪声', async () => {
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.equal(byToken(nodes, 'knit-doc').length, 2)
+  assert.equal(byExactClass(nodes, 'knit-lang').length, 0, '文档行一个徽章都不加')
+})
+
+test('v0.19 代码：点代码行就地渲染行号 + 正文，绝不落到 Markdown 渲染', async () => {
+  const { calls } = installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      return {
+        ok: true, rel: 'src/context-manager.ts', kind: 'code', language: 'typescript',
+        title: 'context-manager.ts',
+        // 故意用 Markdown 会吃掉的两行：`#` 开头 + `-` 开头。
+        // 如果代码误落到 MarkdownText，这两行会变成标题和列表项 —— 那正是这条测试要钉的。
+        text: '# not a heading\nexport class A {}\n',
+        truncated: false,
+      }
+    }
+    return codePayload()
+  })
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.ok(calls.some((u) => u.includes('/api/doc')), '选中代码行必须读正文')
+  assert.equal(byExactClass(nodes, 'knit-codepane').length, 1, '代码走 CodePane')
+  assert.equal(byExactClass(nodes, 'knit-code-gutter').length, 1, '有独立行号列')
+  assert.equal(byExactClass(nodes, 'knit-code-src').length, 1, '有正文列')
+  // 行号与正文各是**一个**文本节点（靠 white-space:pre 换行）—— 不做逐行 DOM。
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-gutter')[0]), '1\n2')
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-src')[0]), '# not a heading\nexport class A {}')
+  // 落到 Markdown 渲染的判据：降级分支那个 `pre.knit-raw` 一个都不许有
+  assert.equal(byExactClass(nodes, 'knit-raw').length, 0, '代码不许走纯文本降级那条路')
+})
+
+test('v0.19 代码：同名 source map 才给「Source map」入口，没有就不给', async () => {
+  const docResponder = (mapRel) => (url) => {
+    if (url.includes('/api/doc')) {
+      return {
+        ok: true, rel: 'plugin-loader.js', kind: 'code', language: 'javascript',
+        title: 'plugin-loader.js', text: 'export const x = 1\n', truncated: false,
+        ...(mapRel ? { mapRel } : {}),
+      }
+    }
+    return codePayload()
+  }
+  const { KnitBody } = loadClientModule().exports.__test
+
+  // ① 有同名 `.map`：入口出现，且是**低权重**按钮（.knit-btn-quiet）
+  installFetch(docResponder('plugin-loader.js.map'))
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byToken(nodes, 'knit-doc')[1].props.onClick()
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const mapBtn = byToken(nodes, 'knit-btn-quiet').find((b) => textOf(b) === 'Source map')
+  assert.ok(mapBtn, '有 .map 时必须给「Source map」入口')
+  // 列表里**没有** .map 那一行 —— 它是生成产物，不进上下文（Context eligibility ≠ 文件可见性）
+  assert.ok(!byToken(nodes, 'knit-doc').some((r) => String(r.props['data-knit-rel']).endsWith('.map')),
+    '.map 不许作为独立行出现在代码列表里')
+  mapBtn.props.onClick()
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.ok(byExactClass(nodes, 'knit-codepane').length === 1,
+    '.map 也走同一个 CodePane（以纯文本 / JSON 看）')
+
+  // ② 没有同名 `.map`：一个入口都不给（不留空壳按钮）
+  installFetch(docResponder(''))
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  byToken(nodes, 'knit-doc')[1].props.onClick()
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byToken(nodes, 'knit-btn-quiet').filter((b) => textOf(b) === 'Source map').length, 0,
+    '没有同名 .map 就不许画这个按钮')
+})
+
+/**
+ * v0.19 追加：HTML 的「网页预览」入口。
+ *
+ * 就地预览给的是**源码**；这个按钮开的是**官方文档预览标签页**（`actions.openResource`
+ * → `dsh-resource://file/session/…`），那一侧有 DSH 自带的 HTML 渲染器，出来的是网页。
+ * 这条测试钉三件事：
+ *   ① **只有 HTML 出场** —— 其余代码类型一个都不给，别把按钮变成常驻噪声；
+ *   ② 走的是**同一条** `openResource` 通道（不新开第二条打开路径），地址就是这个文件的
+ *      session 资源地址；
+ *   ③ **正文还没到手时按钮已经在了**（`language` 还空着，靠列表徽章那张表兜底）——
+ *      否则头部会在读完正文后突然长出一个按钮，正是 v0.19 一直在避免的那种几何跳动。
+ */
+test('v0.19 网页预览：只有 HTML 给这个入口，点了走官方标签页，读正文前后都在', async () => {
+  const opened = []
+  const now = Date.now()
+  const htmlRow = {
+    path: '/p/02_方案与 Demo/knit-demo.html', rel: '02_方案与 Demo/knit-demo.html',
+    name: 'knit-demo.html', title: 'knit-demo.html', kind: 'code',
+    summary: '02_方案与 Demo/', size: 1200, mtimeMs: now - 30000, score: null,
+  }
+  const tsRow = {
+    path: '/p/src/context-manager.ts', rel: 'src/context-manager.ts',
+    name: 'context-manager.ts', title: 'context-manager.ts', kind: 'code',
+    summary: 'src/', size: 2400, mtimeMs: now - 60000, score: null,
+  }
+  // 正文那边的 `language` 按「当前打开的是哪一行」给 —— 分类结论由宿主说了算（v0.19）。
+  let language = 'html'
+  installFetch((url) => {
+    if (String(url).includes('/api/doc')) {
+      return {
+        ok: true, rel: htmlRow.rel, kind: 'code', language,
+        title: 'knit-demo.html', text: '<!DOCTYPE html>\n<h1>hi</h1>\n', truncated: false,
+      }
+    }
+    return { ok: true, root: '/p', total: 2, mode: 'time', topic: '', kind: 'code', docs: [htmlRow, tsRow] }
+  })
+
+  const { OfficialTabBody } = loadClientModule().exports.__test
+  const props = {
+    sessionId: 's-1',
+    useTabInfo: () => ({
+      tab: { id: 't', visible: true, actions: { openResource: (a) => opened.push(a) } },
+    }),
+  }
+  const render = () => harness.render(h(OfficialTabBody, props))
+
+  // ① 打开 HTML 行：**不等正文**，按钮就得在
+  harness.reset()
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  language = 'html'
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  nodes = render()
+  const beforeLoad = byToken(nodes, 'knit-btn').find((b) => textOf(b) === '网页预览')
+  assert.ok(beforeLoad, '正文还没到手时「网页预览」就该在场（否则头会长高一下）')
+
+  // 正文到手后仍在，且带完整相对路径的 tooltip
+  await harness.flush()
+  nodes = render()
+  const webBtn = byToken(nodes, 'knit-btn').find((b) => textOf(b) === '网页预览')
+  assert.ok(webBtn, '读完正文后「网页预览」仍在')
+  assert.notEqual(webBtn.props.disabled, true, '有 openResource 时不禁用')
+  assert.match(String(webBtn.props.title), /knit-demo\.html/, 'tooltip 里带相对路径')
+
+  // ② 点了走官方标签页那条通道，地址就是这个文件的 session 资源地址
+  webBtn.props.onClick()
+  await harness.flush()
+  assert.deepEqual(opened, ['dsh-resource://file/session/s-1/02_%E6%96%B9%E6%A1%88%E4%B8%8E%20Demo/knit-demo.html'],
+    '「网页预览」必须与双击同一条 openResource 通道')
+
+  // ③ 换一个非 HTML 的代码行：这个入口一个都不许有
+  language = 'typescript'
+  harness.reset()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  byToken(nodes, 'knit-doc')[1].props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  assert.equal(byToken(nodes, 'knit-btn').filter((b) => textOf(b) === '网页预览').length, 0,
+    '非 HTML 的代码不许出现「网页预览」')
+  assert.ok(byExactClass(nodes, 'knit-codepane').length === 1, '它照旧走就地代码预览')
+})
+
+test('v0.19 代码：「全部」档是三区（文档 / 代码 / 媒体），代码区排在媒体区之前且限流', async () => {
+  const now = Date.now()
+  const docs = []
+  for (let i = 1; i <= 7; i += 1) {
+    docs.push({
+      path: `/p/d${i}.md`, rel: `d${i}.md`, name: `d${i}.md`, title: `文档${i}`,
+      kind: 'md', summary: '摘要', size: 500, mtimeMs: now - i * 1000, score: null,
+    })
+  }
+  for (let i = 1; i <= 6; i += 1) {
+    docs.push({
+      path: `/p/src/c${i}.ts`, rel: `src/c${i}.ts`, name: `c${i}.ts`, title: `c${i}.ts`,
+      kind: 'code', summary: 'src/', size: 900, mtimeMs: now - i * 1000, score: null,
+    })
+  }
+  for (let i = 1; i <= 3; i += 1) {
+    docs.push({
+      path: `/p/i${i}.png`, rel: `i${i}.png`, name: `i${i}.png`, title: `图${i}`,
+      kind: 'image', summary: '', size: 1024, mtimeMs: now - i * 1000, score: null,
+    })
+  }
+  installFetch(kindResponder({ all: { ok: true, root: '/p', total: docs.length, mode: 'time', topic: '', kind: 'all', docs } }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'all'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['文档', '代码', '媒体'],
+    '三区的顺序是文档 → 代码 → 媒体')
+  // 文档区 4 条 + 代码区 4 条 = 8 行文本行；媒体区是格子，不算行
+  assert.equal(byToken(nodes, 'knit-doc').length, 8, '文档区与代码区各自限 4 条')
+  assert.equal(byExactClass(nodes, 'knit-lang').length, 4, '语言徽章只跟着代码区那 4 行')
+  assert.equal(byToken(nodes, 'knit-media-card').length, 3, '媒体一格不隐藏')
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /16 项/, '顶行仍报总数')
+})
+
+test('v0.19 代码：Usage Lens 里的代码路径照常显示（读的是一份事实、不是两套）', async () => {
+  installFetch(() => contextPayload({
+    usage: {
+      at: 1_700_000_000_000,
+      epochId: 4,
+      stats: {
+        reads: 5,
+        distinct: 2,
+        outside: 1,
+        outsideReads: ['src/util.ts'],
+        firstReadTier: 'primary',
+        firstReadRel: 'src/context-manager.ts',
+        firstReadAt: 1,
+        primaryRel: 'src/context-manager.ts',
+        primaryFollowThrough: true,
+        byTier: {
+          primary: { total: 1, read: 1 },
+          supporting: { total: 1, read: 1 },
+          related: { total: 1, read: 0 },
+        },
+        supportingCoverage: 1,
+        churn: { snapshots: 2, deltas: 1, retained: 2, appeared: 1, disappeared: 0, moved: 0, taskChanged: 0 },
+      },
+      delta: { appeared: ['src/context-manager.ts'], disappeared: [], moved: [], taskChanged: false },
+      // 最近读取与包外读取都是**代码路径**：Lens 只按 rel 渲染，认不出这是不是 Markdown。
+      recentRead: { rel: 'src/context-manager.ts', at: 1_700_000_000_000, status: 'updated_after_read' },
+      outsideDocs: [{ rel: 'src/util.ts', count: 2, lastReadAt: 1_699_000_000_000 }],
+    },
+  }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const toggle = byExactClass(nodes, 'knit-btn').find((node) => textOf(node) === '使用情况')
+  assert.ok(toggle, '头部必须有「使用情况」按钮')
+  toggle.props.onClick()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const line = byExactClass(nodes, 'knit-usage')[0]
+  assert.ok(line, '打开后必须出现 Usage Lens')
+  // 代码与文档共用同一份 Lens：这里只是 rel 恰好是个 .ts —— 没有第二套展示
+  assert.match(textOf(line), /src\/context-manager\.ts/, '最近读取的代码路径要出现')
+  // 包外读取那一块是**可展开**的（默认收起），展开后才逐条列 rel
+  const gapBtn = byToken(nodes, 'knit-more-btn').find((b) => textOf(b).includes('上下文外读取'))
+  assert.ok(gapBtn, '必须有「上下文外读取」这一块')
+  gapBtn.props.onClick()
+  await harness.flush()
+  nodes = render()
+  const text = textOf(byExactClass(nodes, 'knit-usage')[0])
+  assert.match(text, /src\/util\.ts/, '包外读取的代码路径也要出现')
+  // 纪律没变：只有事实，没有分数 / 百分比 / 评分条
+  assert.ok(!/分|%|score/i.test(text), `Usage Lens 里不许出现分数或百分比：${text}`)
+})
+
+test('v0.19 代码：样式守卫 —— 行号/正文各归各的滚动，语言徽章不是胶囊', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // ① 横向滚动只属于正文列（min-width:0 才滚得动），纵向仍归 .knit-preview-body
+  const pane = css.match(/\.knit-codepane\{([^}]*)\}/)
+  const src = css.match(/\.knit-code-src\{([^}]*)\}/)
+  assert.ok(pane && src, '必须有 .knit-codepane 与 .knit-code-src 两条规则')
+  assert.ok(!/overflow-[xy]/.test(pane[1]), 'CodePane 自己不滚动 —— 别开第二个滚动容器')
+  assert.match(src[1], /overflow-x:auto/, '正文列负责横向滚动')
+  assert.match(src[1], /min-width:0/, 'flex 子项没有 min-width:0 就永远滚不动')
+  assert.match(css.match(/\.knit-code-gutter\{([^}]*)\}/)[1], /white-space:pre/, '行号靠 pre 换行，不做逐行节点')
+
+  // ② 语言徽章是**一条弱注释**，不是标签：无底色、无边框、无圆角
+  const lang = css.match(/\.knit-lang\{([\s\S]*?)\}/)[0]
+  assert.ok(!/background/.test(lang), `徽章不许有底色：${lang}`)
+  assert.ok(!/border/.test(lang), `徽章不许有边框：${lang}`)
+  assert.ok(!/border-radius/.test(lang), `徽章不许有圆角：${lang}`)
+  assert.match(lang, /flex:none/, '窄侧边栏里压缩的是标题，不是徽章')
+
+  // ③ 颜色全走 DSH 令牌（亮 / 暗两套主题各给各的值），失败时有中性回落
+  for (const rule of [lang, css.match(/\.knit-code-gutter\{([^}]*)\}/)[0]]) {
+    for (const token of rule.match(/var\(--dsw-[a-z0-9-]+[^)]*\)/g) || []) {
+      assert.ok(token.includes(','), `DSH 令牌必须带回落值：${token}`)
+    }
+  }
+})

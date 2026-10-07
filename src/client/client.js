@@ -31,6 +31,8 @@ window.__ModuleLoader__.load({
 
       'count': '{n} 篇',
       'count.filtered': '{hit} / {total} 篇',
+      'count.code': '{n} 个代码文件',
+      'count.code.filtered': '{hit} / {total} 个代码文件',
       'count.media': '{n} 个媒体',
       'count.media.filtered': '{hit} / {total} 个媒体',
       'count.all': '{n} 项',
@@ -47,6 +49,10 @@ window.__ModuleLoader__.load({
 
       'kind.all': '全部',
       'kind.doc': '文档',
+      // v0.19：「代码」这一档。文案口径刻意保持朴素 —— 不写「代码知识库 / AI Code
+      //   Intelligence / 智能代码分析」。Knit 只是把**当前任务真正需要的**代码文件
+      //   纳入同一份 Context Pack，它不是代码浏览器、不是 grep、不是 IDE（需求 §44）。
+      'kind.code': '代码',
       // ⚠️ 2026-10-06 用户定：类型页签与「全部」分区标题都用**「媒体」**，不用「图片与视频」
       //    （原话：「我想修改成 媒体 或者 多媒体，你觉得呢？」→ 随后确认「媒体」）。
       //    理由：① 这一档的计数本来就是「{n} 个媒体」（count.media），页签叫「图片与视频」
@@ -137,6 +143,12 @@ window.__ModuleLoader__.load({
       // 读起来像调试信息。现在它是**标签 + 值**，词之间用「 · 」分隔。
       'why.direct': '直接命中：{term}',
       'why.titleMatch': '标题命中：{term}',
+      // v0.19：代码占的是 `title` / `summary` 两个槽位（文件名、所在目录），
+      // 但**不能**对 `.ts` 文件说「标题命中」—— 判据一样，称谓必须分开。
+      // 这两个码由宿主直接给出（`context.js` 的 `explainContext()`），
+      // 客户端不做 kind → key 的重映射：宿主给什么码就翻什么码。
+      'why.filenameMatch': '文件名命中：{term}',
+      'why.pathMatch': '路径命中：{term}',
       'why.summaryMatch': '摘要命中：{term}',
       'why.bodyMatch': '正文命中：{term}',
       'why.bodyMatchPlain': '正文命中',
@@ -151,6 +163,7 @@ window.__ModuleLoader__.load({
       'list.failed': '读取失败：{error}',
       'list.failedHint': '确认插件宿主半边已加载。',
       'list.empty': '这个工作区里还没有 Markdown 文档。',
+      'list.emptyCode': '这个工作区里还没有可纳入上下文的代码文件。',
       'list.emptyMedia': '这个工作区里还没有图片或视频。',
       'list.noMatch': '没有匹配「{query}」的文档。',
       // 文档列表这个 listbox 的无障碍名字（原先硬编码在 JSX 里，英文界面下会漏出中文）
@@ -177,9 +190,31 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreen': '退出全屏',
       'preview.fullscreenTitle': '全屏阅读',
       'preview.exitFullscreenTitle': '退出全屏（Esc）',
+      // v0.19 追加：HTML 的「网页预览」入口。
+      // 就地预览给的是**源码**，这个按钮开的是**官方文档预览标签页** ——
+      // 那一侧有 DSH 自带的 HTML 渲染器（`extensions:['html','htm']`，默认走静态档：
+      // 清洗过的完整文档 + 不给任何 sandbox 权限的 iframe + 摆在 `<head>` 最前的 CSP，
+      // 挡脚本 / 外部资源 / 表单 / 嵌套框架，内联 `<style>` 与 `data:` 图片保留）。
+      // 两者**不重复**，所以它不是把 v0.10 撤掉的那个「新标签页」按钮原样搬回来。
+      'preview.openWeb': '网页预览',
+      'preview.openWebTitle': '{path}\n在官方文档预览里按网页渲染',
       'preview.openLocal': '{path}\n用系统默认应用打开这篇文档',
       'preview.openLocalBtn': '本地打开',
+      // 面包屑那条路径点开的是**文件管理器里这个文件所在的位置**（并把文件选中），
+      // 不是「打开文件」—— 那是页脚「本地打开」的事，所以文案也得说清。
+      'preview.reveal': '{path}\n在文件管理器中显示并选中这个文件',
       'preview.close': '收起预览',
+      // v0.19：同名 source map 的入口。**它是低权重动作，不是文件列表条目** ——
+      //   `.map` 不参与检索、不进上下文、不进代码列表（需求 §6 §28），
+      //   只有用户在这个 .js 的预览里主动点它才会打开，且以纯文本/JSON 呈现。
+      'preview.sourceMap': 'Source map',
+      'preview.sourceMapTitle': '查看同名 source map（不进入上下文检索）',
+      // v0.19：代码预览的两条边界提示。
+      //   `codeTruncated` —— 渲染侧的行数上限（与宿主 512 KB 字节上限是两道不同的闸门）。
+      //   `copyFailed` —— 剪贴板两条路都失败时才出现。**不能静默**：点了没反应，
+      //   用户会以为是按钮坏了，而不是「浏览器不给权限」。
+      'preview.codeTruncated': '（文件较大，仅显示前 {n} 行）',
+      'preview.copyFailed': '复制失败，请手动选择文本',
       'preview.resizeTitle': '拖动调整高度',
       // v0.12 引用条。⚠️ 不放任何表情符号（test/i18n.test.mjs 有守卫）。
       'links.summary': '被引用 {in} · 引用了 {out}',
@@ -204,7 +239,9 @@ window.__ModuleLoader__.load({
       'error.bsEditorDisabled': 'better-sidebar 的「编辑器」标签页被禁用了（设置 → 侧边卡片）',
 
       'host.outsideWorkspace': '路径越出工作区',
-      'host.markdownOnly': '只支持 Markdown',
+      // v0.19：从 `host.markdownOnly`（「只支持 Markdown」）改名。能力已经不止
+      //   Markdown 了，文案必须跟着说清**真正的**边界：这个类型不支持在面板里预览。
+      'host.notPreviewable': '这个类型不支持在面板里预览',
       'host.notFound': '文件不存在',
       'host.notAFile': '不是普通文件',
       'host.imageOnly': '只允许图片类型',
@@ -225,6 +262,8 @@ window.__ModuleLoader__.load({
 
       'count': '{n} docs',
       'count.filtered': '{hit} / {total} docs',
+      'count.code': '{n} code files',
+      'count.code.filtered': '{hit} / {total} code files',
       'count.media': '{n} media',
       'count.media.filtered': '{hit} / {total} media',
       'count.all': '{n} items',
@@ -241,6 +280,7 @@ window.__ModuleLoader__.load({
 
       'kind.all': 'All',
       'kind.doc': 'Docs',
+      'kind.code': 'Code',
       // 2026-10-06: user picked 「媒体」 for the tab + the "All" section title, so English
       // follows the same word as count.media ("{n} media"): the tab says Media, and the
       // explicit "images and videos" wording stays in the empty state / README prose.
@@ -320,6 +360,8 @@ window.__ModuleLoader__.load({
       // ⚠️ Flattened on 2026-09-29: "direct topic match: …" read like debug output.
       'why.direct': 'direct match: {term}',
       'why.titleMatch': 'title match: {term}',
+      'why.filenameMatch': 'filename match: {term}',
+      'why.pathMatch': 'path match: {term}',
       'why.summaryMatch': 'summary match: {term}',
       'why.bodyMatch': 'body match: {term}',
       'why.bodyMatchPlain': 'body match',
@@ -334,6 +376,7 @@ window.__ModuleLoader__.load({
       'list.failed': 'Failed to read: {error}',
       'list.failedHint': 'Make sure the plugin’s host half is loaded.',
       'list.empty': 'No Markdown documents in this workspace yet.',
+      'list.emptyCode': 'No code files eligible for context in this workspace yet.',
       'list.emptyMedia': 'No images or videos in this workspace yet.',
       'list.noMatch': 'No documents match “{query}”.',
       // Accessible name of the document listbox (was hardcoded in JSX before)
@@ -361,9 +404,16 @@ window.__ModuleLoader__.load({
       'preview.exitFullscreen': 'Exit fullscreen',
       'preview.fullscreenTitle': 'Read fullscreen',
       'preview.exitFullscreenTitle': 'Exit fullscreen (Esc)',
+      'preview.openWeb': 'Web preview',
+      'preview.openWebTitle': '{path}\nRender as a web page in the official document preview',
       'preview.openLocal': '{path}\nOpen this document in your default app',
       'preview.openLocalBtn': 'Open locally',
+      'preview.reveal': '{path}\nShow this file in your file manager (and select it)',
       'preview.close': 'Close preview',
+      'preview.sourceMap': 'Source map',
+      'preview.sourceMapTitle': 'View the sibling source map (not part of context retrieval)',
+      'preview.codeTruncated': '(large file — showing the first {n} lines)',
+      'preview.copyFailed': 'Copy failed — select the text manually',
       'preview.resizeTitle': 'Drag to resize',
       'links.summary': 'Referenced by {in} · links to {out}',
       'links.incoming': 'Referenced by',
@@ -387,7 +437,7 @@ window.__ModuleLoader__.load({
       'error.bsEditorDisabled': 'better-sidebar’s Editor tab is disabled (Settings → Side card)',
 
       'host.outsideWorkspace': 'Path escapes the workspace',
-      'host.markdownOnly': 'Markdown only',
+      'host.notPreviewable': 'This type cannot be previewed here',
       'host.notFound': 'File not found',
       'host.notAFile': 'Not a regular file',
       'host.imageOnly': 'Images only',
@@ -426,7 +476,7 @@ window.__ModuleLoader__.load({
      */
     const HOST_ERROR_KEY = {
       'knit/outside-workspace': 'host.outsideWorkspace',
-      'knit/markdown-only': 'host.markdownOnly',
+      'knit/not-previewable': 'host.notPreviewable',
       'knit/not-found': 'host.notFound',
       'knit/not-a-file': 'host.notAFile',
       'knit/image-only': 'host.imageOnly',
@@ -507,10 +557,36 @@ window.__ModuleLoader__.load({
      */
     const USAGE_KEY = 'dsh-knit:usage'
 
-    /** 列表类型：仅文档 / 仅图片视频 / 全部混排。默认 doc，与旧版体验一致。 */
+    /** 列表类型：仅文档 / 仅代码 / 仅图片视频 / 全部混排。默认 doc，与旧版体验一致。 */
     const KIND_DOC = 'doc'
+    /**
+     * v0.19：代码档。**它是同一份 Context Retrieval 结果的另一个切片，不是代码工具页。**
+     * 这一档里显示的仍然是「按当前任务排出来的代码候选」，不是仓库的代码文件树
+     * （需求 §24：任务「修改 Skill loader 使它支持新的 frontmatter」时，
+     * 应该看到 skill-loader.ts / frontmatter.ts，而不是 src/ 下的全部 .ts）。
+     */
+    const KIND_CODE = 'code'
     const KIND_MEDIA = 'media'
     const KIND_ALL = 'all'
+
+    /**
+     * v0.19：分类层给的「生成产物」档（`.map` / `*.min.js` / `package-lock.json` …）。
+     *
+     * **它不出现在任何列表里**（`contextual:false`、`searchable:false`，宿主根本不会
+     * 把它放进候选），但它**可以预览** —— 用户主动点「Source map」时才走到这里。
+     * 「能不能进上下文」与「能不能看」是两件事（需求 §29：Context eligibility ≠
+     * File system visibility）。
+     */
+    const KIND_GENERATED = 'generated'
+
+    /* ── 产物 kind（宿主 `classification.js` 的取值）─────────────────────
+       ⚠️ **不要把它和上面的页签常量 `KIND_DOC` 混起来**：`KIND_DOC` 是**页签值**
+       （`'doc'`，只活在 URL 参数与 localStorage 里），而宿主下发的 `doc.kind` 是
+       **分类层的产物类型**（Markdown 是 `'md'`）。两者字面量不同、语义也不同，
+       写成 `doc.kind === KIND_DOC` 会恒为假 —— 那正是「代码区永远空白」这类
+       看起来像没数据、其实是比较写错的问题。 */
+    const ARTIFACT_DOC = 'md'
+    const ARTIFACT_CODE = 'code'
 
     /** 预览面板高度的上下限：任何一端都不把对方挤没。 */
     const MIN_RATIO = 0.2
@@ -529,6 +605,8 @@ window.__ModuleLoader__.load({
 
     /** 「全部」视图里文档区的固定上限。 */
     const ALL_DOC_CAP = 4
+    /** 「全部」视图里代码区的固定上限（与文档区同量级 —— 代码不该在这一档里压过文档）。 */
+    const ALL_CODE_CAP = 4
     /**
      * 一屏基准：两行 × 4 列的观感（只在「媒体」这一档决定一屏铺几行时用）。
      * **它不决定列数** —— 列数交给 CSS 的 `auto-fill`，见 mediaLayoutFor。
@@ -671,6 +749,13 @@ body[data-ds-dark-theme] .knit-root{
   color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);border-color:var(--dsw-alias-border-l4,rgba(255,255,255,.22))}
+/* v0.19「低权重动作」：Source map。
+   它**不是**主要操作 —— .map 不参与检索，只是一个「顺手看一眼」的旁路。
+   所以去掉边框、压到 caption 色，让「复制 / 全屏 / 本地打开」保持主次分明。
+   ⚠️ 不要在这里加 accent 色（类型页签那条守卫也是这个道理）。
+   ⚠️ 这段注释在模板串里：**任何反引号都会截断样式表**（AGENTS.md 的老坑）。 */
+.knit-btn-quiet{border-color:transparent;color:var(--dsw-alias-label-caption,#80868b);font-size:11px;padding:0 8px}
+.knit-btn-quiet:hover{color:var(--dsw-alias-label-secondary,#9aa0a6)}
 /* 排序切换与搜索框：v0.18 UI 迭代（md §四~§六）把这两个控件**按输入控件的尺度重做** ——
    圆角 10px / 字号 13px。原来那套 22px 迷你胶囊读起来像「标签」而不是控件，
    与 14px 的页签、15px 的 Usage 标题差了两档，是「审美欠缺」最直观的一处。
@@ -1087,6 +1172,27 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .knit-preview-note{font-size:11px;color:var(--dsw-alias-label-caption,#80868b);padding:2px 0 8px}
 
+/* v0.19：代码行的语言徽章（TS / JS / PY …）。
+   刻意**不是**一个胶囊：没有底色、没有边框、没有圆角 —— 它是一条弱注释，
+   不是标签墙。字号比标题小两档，颜色用 caption，永远不抢标题。
+   窄侧边栏里它 flex:none，压缩的是标题（.knit-title 会省略号收尾）而不是它。 */
+.knit-lang{flex:none;margin-left:6px;font-size:10px;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--dsw-alias-label-caption,#80868b)}
+
+/* ── 代码预览（v0.19）────────────────────────────────────
+   轻量：行号栏 + 代码正文。**不做语法高亮、不做折叠、不做 minimap**，
+   也没引入 Monaco / CodeMirror —— Knit 不是编辑器（需求 §8 §25）。
+   横向滚动只发生在正文那一格（overflow-x:auto + min-width:0），
+   行号栏 flex:none 留在左边；纵向滚动仍由外面的 .knit-preview-body 负责，
+   所以这里**不开第二个纵向滚动容器**（两个纵向滚动条会互相打架）。 */
+.knit-codepane{display:flex;align-items:stretch;min-height:100%;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.6}
+.knit-code-gutter{flex:none;white-space:pre;text-align:right;user-select:none;
+  padding:0 8px 0 2px;color:var(--dsw-alias-label-caption,#80868b);
+  border-right:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08))}
+.knit-code-src{flex:1 1 auto;min-width:0;margin:0;padding:0 0 0 10px;
+  white-space:pre;overflow-x:auto;color:var(--dsw-alias-label-primary,#e8eaed)}
+
 /* ── 引用条（v0.12）────────────────────────────────────
    夹在预览头与正文之间的一层。全用中性令牌：它是「信息」，不是「操作」。
    ⚠️ 2026-09-30 用户裁决：它自己那条 border-l2 底边**删掉** —— 与预览头的底边
@@ -1250,6 +1356,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 .knit-root.fullscreen .knit-bar,
 .knit-root.fullscreen .knit-types,
 .knit-root.fullscreen .knit-list{display:none}
+/* v0.19 修补（2026-10-07 用户反馈）：**使用情况也是列表上方的观察层**，全屏时同样让位。
+   这条规则漏了它 ⇒ 开着「使用情况」再点全屏，Lens 仍占掉面板上方约三分之一，
+   预览被挤在下面 —— 看起来就像「全屏没生效」。它是 flex:none 的自然高度，
+   不是浮层，所以必须显式 display:none，光靠预览 flex:1 抢不回来。 */
+.knit-root.fullscreen .knit-usage{display:none}
 /* 全屏时预览铺满整个面板：圆角与向上柔影是「浮在列表上」的隐喻，这里没有列表，去掉 */
 .knit-root.fullscreen .knit-preview{flex:1 1 auto;max-height:none;
   border-top:none;border-radius:0;box-shadow:none}
@@ -1307,7 +1418,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      */
     function readKindPref() {
       const v = readPref(KIND_KEY)
-      return v === KIND_MEDIA || v === KIND_ALL ? v : KIND_DOC
+      return v === KIND_MEDIA || v === KIND_ALL || v === KIND_CODE ? v : KIND_DOC
     }
 
     /**
@@ -1738,6 +1849,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     /** 幽灵行所在的「区」：分层视图用层名，平铺与「全部」各一个 —— 幽灵要插回原位。 */
     const MOTION_TIER_FLAT = 'flat'
     const MOTION_TIER_ALL_DOCS = 'all-docs'
+    /** v0.19：「全部」档里的代码区自己的区名 —— 幽灵行要插回**它原来那一区**，共用会插错位置。 */
+    const MOTION_TIER_ALL_CODE = 'all-code'
     /** 幸存行位移（换层 / 重排）的 FLIP 时长：比进入略长，它要真的「走」完一段距离。 */
     const MOTION_MOVE_MS = 340
     /** 位移小于这个像素数（含亚像素抖动）就当没动过，不排补间。 */
@@ -1928,6 +2041,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       glyph, onGlyph, onSelect, onOpenTab, optionId, entering, leaving }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       const rowRef = React.useRef(null)
+      /* v0.19：只有**代码行**带语言徽章。
+         文档列表整列都是 Markdown，给每一行都挂一个「MD」是纯噪声 —— 信息量为零，
+         还多占横向空间（§47 要求窄侧边栏不许溢出）。代码行混在文档里时才需要
+         「这是 TS 还是 PY」这一眼。 */
+      const lang = doc.kind === ARTIFACT_CODE ? langBadge(doc.name || doc.rel) : ''
 
       /* 进 / 出两段补间都跑在 **layout effect** 里：放到 paint 之后会先闪一帧完整高度的
          行，那正是用户抱怨的那一下。没有 DOM 时 `motionAllowed()` 直接挡掉。 */
@@ -2034,7 +2152,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           }, glyph.status === 'reread_after_update' ? glyph.char : null)) : null,
           h('div', { className: 'knit-title' },
             fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
-            doc.title || doc.name),
+            doc.title || doc.name,
+            lang ? h('span', { className: 'knit-lang' }, lang) : null),
           // v0.17：生命周期状态（文案已算好；没有证据时是 null，一个节点都不加）。
           // 插在**标题与时间之间**：`.knit-title` 是 flex:1 1 auto，会把状态与时间一起推到
           // 行尾，状态在时间左侧、行尾仍然是时间。
@@ -2134,12 +2253,148 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
     /**
      * 列表下方的预览面板。
-     * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenLocal:Function|null,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
+     * @param {{preview:object,pathImages:object|null,fullscreen:boolean,onClose:Function,onOpenLocal:Function|null,onReveal:Function|null,onToggleFullscreen:Function,onResizeStart:Function}} props - 渲染入参
      * @returns {import('react').ReactElement} 元素
      */
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onToggleFullscreen, onResizeStart }) {
+    /**
+     * 复制一段文本。
+     *
+     * 优先 `navigator.clipboard`（异步；非 secure context 里可能根本没有）；
+     * 拿不到就退回 `document.execCommand('copy')` + 一个离屏 textarea。
+     * 两条路都失败返回 `false` —— **由调用方决定怎么告诉用户**（静默失败比报错更糟）。
+     *
+     * @param {string} text - 要复制的文本
+     * @returns {Promise<boolean>} 是否成功
+     */
+    function copyText(text) {
+      const value = String(text == null ? '' : text)
+      const legacy = () => {
+        try {
+          const area = document.createElement('textarea')
+          area.value = value
+          area.setAttribute('readonly', 'readonly')
+          area.style.position = 'fixed'
+          area.style.top = '-1000px'
+          document.body.appendChild(area)
+          area.select()
+          const ok = document.execCommand('copy')
+          document.body.removeChild(area)
+          return ok
+        } catch (error) {
+          return false
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(value).then(() => true, legacy)
+      }
+      return Promise.resolve(legacy())
+    }
+
+    /**
+     * 语言徽章：文件后缀 → 短标签（TS / JS / PY / JSON / MD …）。
+     *
+     * **纯展示，不是判据。** 「这是什么类型、能不能进上下文、能不能预览」的权威
+     * 一律是宿主的分类层（`src/host/classification.js`）；这里只是把后缀压成一个
+     * 窄标签给列表行和预览头用。认不出的后缀返回空串 —— **不猜**，宁可不显示。
+     *
+     * ⚠️ 这份表**不决定**任何文件是否被接纳：加一个后缀进这张表不会让 `.go` 变成
+     * 上下文候选（宿主那边它是 `ignored`）。反过来也一样。
+     */
+    const LANG_BADGE = {
+      js: 'JS', mjs: 'JS', cjs: 'JS', ts: 'TS', tsx: 'TSX', jsx: 'JSX', py: 'PY',
+      json: 'JSON', html: 'HTML', htm: 'HTML', css: 'CSS', scss: 'SCSS',
+      yaml: 'YAML', yml: 'YAML', sh: 'SH', bash: 'SH', zsh: 'SH',
+      md: 'MD', map: 'MAP',
+    }
+
+    /**
+     * @param {string} name - 文件名（带后缀）
+     * @returns {string} 徽章文本，认不出时为空串
+     */
+    function langBadge(name) {
+      const m = /\.([a-z0-9]+)$/i.exec(String(name || ''))
+      return m ? (LANG_BADGE[m[1].toLowerCase()] || '') : ''
+    }
+
+    /**
+     * 代码预览里最多渲染多少行。
+     *
+     * 一次最多这么多行号 —— 长文件不会把 DOM 撑爆（`readDocument` 那边已经按
+     * `DOC_MAX_BYTES` 截过字节，这里是第二道、面向渲染的边界）。
+     * 超出的部分明说「只显示前 N 行」，不静默砍掉。
+     */
+    const CODE_LINES_MAX = 4000
+
+    /**
+     * 轻量代码预览：行号栏 + 代码正文。
+     *
+     * 刻意的取舍（需求 §8 §25 §26）：
+     *  - **不做语法高亮、不做折叠、不做 minimap、不做 AST / symbol outline**，
+     *    不引入 Monaco / CodeMirror。Knit 不是编辑器。
+     *  - 行号与正文**各是一个文本节点**（靠 `white-space: pre` 换行），不是每行一个
+     *    元素 —— 4000 行代码因此只有两个节点，横向滚动交给 CSS 的 `overflow-x:auto`。
+     *  - 字体、配色全部走既有 `--knit-*` / `--dsw-alias-*` 变量，随 light/dark 主题走。
+     *
+     * @param {{text: string}} props - `preview.text` 原文
+     * @returns {import('react').ReactElement} 元素
+     */
+    function CodePane({ text }) {
+      const lines = String(text == null ? '' : text).split('\n')
+      // 末尾换行会切出一个空尾行 —— 显示它会让行数比编辑器里多一行。
+      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+      const clipped = lines.length > CODE_LINES_MAX
+      const shown = clipped ? lines.slice(0, CODE_LINES_MAX) : lines
+      let gutter = ''
+      for (let i = 1; i <= shown.length; i += 1) gutter += (i === 1 ? '' : '\n') + i
+      return h('div', { className: 'knit-codepane' },
+        h('div', { className: 'knit-code-gutter', 'aria-hidden': 'true' }, gutter),
+        h('pre', { className: 'knit-code-src' }, shown.join('\n')),
+        clipped
+          ? h('div', { className: 'knit-preview-note' },
+            t('preview.codeTruncated', { n: CODE_LINES_MAX }))
+          : null)
+    }
+
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onReveal, onOpenMap, onOpenWeb, onToggleFullscreen, onResizeStart }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
+
+      /* ── v0.19：复制整篇 + Source map ──────────────────────
+       * 「复制」只给代码 —— Markdown 那边 MarkdownText 自带每个代码块的复制按钮，
+       * 再给一个「复制整篇」会和它挤在一起，而且很少用。
+       * `copied` 只活在这个组件里（1.6s 后自己复位），不落盘、不进任何 store。 */
+      const isCodeView = preview.kind === ARTIFACT_CODE || preview.kind === KIND_GENERATED
+      /* v0.19 追加：**网页预览**只给 HTML。
+         判据优先用宿主给的 `language` —— 那是分类层（`src/host/classification.js`）
+         的结论，v0.19 起客户端不再自己看扩展名。正文还没到手时 `language` 是空的，
+         退回列表徽章那张表（`LANG_BADGE`）兜一下：它**只决定这个按钮出不出场**，
+         不改变任何文件的接纳结论 —— 该表自己的注释也是这么写的。 */
+      const isWebPage = isCodeView && (preview.language === 'html'
+        || (!preview.language && langBadge(preview.title || preview.rel) === 'HTML'))
+      const [copied, setCopied] = React.useState(false)
+      const [copyFailed, setCopyFailed] = React.useState(false)
+      // 两个提示都自己复位（1.6s / 2.4s）—— 它们只活在组件里，不落盘、不进 store。
+      React.useEffect(() => {
+        if (!copied) return undefined
+        const id = setTimeout(() => setCopied(false), 1600)
+        return () => clearTimeout(id)
+      }, [copied])
+      React.useEffect(() => {
+        if (!copyFailed) return undefined
+        const id = setTimeout(() => setCopyFailed(false), 2400)
+        return () => clearTimeout(id)
+      }, [copyFailed])
+      // 换一篇就复位 —— 否则「已复制」会跟着下一篇继续亮着，说的是上一篇的事。
+      React.useEffect(() => {
+        setCopied(false)
+        setCopyFailed(false)
+      }, [preview.rel])
+      const onCopySource = React.useCallback(() => {
+        copyText(preview.text).then((ok) => {
+          if (ok) setCopied(true)
+          else setCopyFailed(true)
+        })
+      }, [preview.text])
 
       /* ── v0.12 引用条 ────────────────────────────────────
        * 位置：预览头**下面**、正文**上面** —— 一条可折叠的窄条。
@@ -2208,6 +2463,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       })()
 
       // 图片/视频不读正文，直接用同源字节地址渲染；Markdown 才走加载 / MarkdownText / 降级。
+      // v0.19：代码（含 `.map` 这类生成产物）走轻量 CodePane —— **绝不能落到
+      // MarkdownText 那支**，否则 `#` 开头的注释会变成标题、`*` 会变成列表。
+      const isCode = preview.kind === ARTIFACT_CODE || preview.kind === KIND_GENERATED
       const body = preview.status === 'loading'
         ? h('div', { className: 'knit-preview-note' }, t('preview.loading'))
         : preview.status === 'error'
@@ -2224,7 +2482,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                   playsInline: true,
                   'aria-label': t('media.play'),
                 })
-              : MarkdownText
+              : isCode
+                ? h(CodePane, { text: preview.text })
+                : MarkdownText
                 ? h(MarkdownText, {
                     text: preview.text,
                     labels: { code: { copyLabel: t('code.copy'), copiedLabel: t('code.copied') }, footnotes: '' },
@@ -2250,30 +2510,68 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       },
         fullscreen ? null : h('div', { className: 'knit-resize', onPointerDown: onResizeStart, title: t('preview.resizeTitle') }),
         h('div', { className: 'knit-preview-head' },
-          // 路径，**可点**：用系统默认应用打开这篇本地文档 —— 阅读时多一个
-          // 「跳到本地」的入口。不放标题：正文 H1 已经写了，重复会让
-          // 「列表行 / 预览头 / 正文」出现三遍同一个词，反而分不清哪块是详情。
+          // 路径，**可点**：在文件管理器里打开它所在的文件夹**并选中这个文件**
+          // （`action: 'reveal'` → macOS `open -R` / Windows `explorer /select,`）。
+          // 与面板顶部那行工作区路径是同一套 remote（`openWorkspacePath`），
+          // 差别只在多带一个 `action` —— 那行是「打开目录」，这条是「定位到文件」。
+          // **打开文件本身**是页脚那个「本地打开」按钮的事，两者刻意分开。
+          // 不放标题：正文 H1 已经写了，重复会让「列表行 / 预览头 / 正文」出现三遍
+          // 同一个词，反而分不清哪块是详情。
           // 目录收敛成 `…/`（2026-10-01 用户要求），完整相对路径在 title 里。
           h('button', {
             type: 'button',
             className: 'knit-preview-path',
-            title: onOpenLocal ? t('preview.openLocal', { path: preview.rel }) : preview.rel,
-            disabled: !onOpenLocal,
-            onClick: () => { if (onOpenLocal) onOpenLocal() },
+            title: onReveal ? t('preview.reveal', { path: preview.rel }) : preview.rel,
+            disabled: !onReveal,
+            onClick: () => { if (onReveal) onReveal() },
           },
           previewPath.dir
             ? h('span', { className: 'knit-preview-dir' }, '…/')
             : null,
           h('span', { className: 'knit-preview-name' }, previewPath.name)),
+          // 复制整篇（只给代码；MarkdownText 自己带代码块复制）
+          isCodeView
+            ? h('button', {
+                className: 'knit-btn',
+                onClick: onCopySource,
+                title: copyFailed ? t('preview.copyFailed') : t('code.copy'),
+              }, copied ? t('code.copied') : t('code.copy'))
+            : null,
+          // Source map：**低权重**入口 —— 只在同名 `<file>.map` 真的存在时出现，
+          // 且 `.map` 本身不参与检索（需求 §6 §28）。点开仍是这个面板，纯文本。
+          isCodeView && preview.mapRel
+            ? h('button', {
+                className: 'knit-btn knit-btn-quiet',
+                onClick: () => { if (onOpenMap) onOpenMap(preview.mapRel) },
+                title: t('preview.sourceMapTitle'),
+              }, t('preview.sourceMap'))
+            : null,
           h('button', {
             className: 'knit-btn',
             onClick: onToggleFullscreen,
             title: fullscreen ? t('preview.exitFullscreenTitle') : t('preview.fullscreenTitle'),
           }, fullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')),
+          // v0.19 追加：**网页预览** —— 只给 HTML。
+          // 它开的是官方文档预览标签页（`actions.openResource`，与双击列表行**同一条**路），
+          // 那一侧有 DSH 自带的 HTML 渲染器，出来的是**网页**而不是源码。
+          // ⚠️ 这不是把 v0.10 撤掉的那个「新标签页」按钮原样搬回来：当时撤的理由是
+          // 「面板里已经有就地预览，重复度高、用得少」—— 那个判断对 Markdown / 图片 /
+          // 视频成立，对 HTML **不成立**（就地给源码，那边给页面）。所以这里按类型放它出来，
+          // 其余类型仍然只靠双击开新标签页。
+          isWebPage
+            ? h('button', {
+                className: 'knit-btn',
+                onClick: () => { if (onOpenWeb) onOpenWeb() },
+                disabled: !onOpenWeb,
+                title: onOpenWeb ? t('preview.openWebTitle', { path: preview.rel }) : preview.rel,
+              }, t('preview.openWeb'))
+            : null,
           // 「本地打开」＝ 之前那个「新标签页」的位置（v0.10）。
           // 「新标签页」开的是官方文档预览，但面板里已经有就地预览，重复度高、用得少；
           // 而「用默认应用打开这篇文档」原本只藏在路径的悬停提示里 ——
           // 把值钱的那个放到显眼处，把鸡肋的那个让位（双击列表行仍能开新标签页）。
+          // v0.19 例外：HTML 那边就地预览给不了网页，所以「网页预览」按钮又回来了
+          // （见上面那条）；这条注释描述的取舍对其余类型仍然成立。
           h('button', {
             className: 'knit-btn',
             onClick: () => { if (onOpenLocal) onOpenLocal() },
@@ -2388,6 +2686,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
               status: 'ready',
               docs: data.docs || [],
               root: data.root || '',
+              // v0.19 修订：`hostRoot` 是同一个工作区、但符号链接已展开的那份路径。
+              // 界面**显示**仍用 `root`（用户看到的是自己选的那条路径），凡是**交给宿主
+              // 去打开 / 定位**的路径一律用 `hostRoot` —— DSH 的 `openWorkspacePath` 只认
+              // realpath，含未展开链接的路径会被它判成 `Path has no verified Host path`。
+              hostRoot: data.hostRoot || data.root || '',
               total: data.total || 0,
               error: '',
               mode: data.mode || 'time',
@@ -2430,12 +2733,16 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           || String(doc.rel || '').toLowerCase().includes(q))
       }, [state.docs, query])
 
-      /* ── 「全部」：按类型分上下两区 ─────────────────────
-         文档区固定 4 条，多余的在分区标题给「查看全部」；
-         媒体区**不截断** —— 一屏两行以外交给媒体区内部滚动（不隐藏、也不压小格子）。 */
-      const docItems = kind === KIND_ALL ? visibleDocs.filter((doc) => !isMedia(doc)) : []
+      /* ── 「全部」：按类型分三区 ─────────────────────
+         文档区与代码区各固定 4 条，多余的在分区标题给「查看全部」；
+         媒体区**不截断** —— 一屏两行以外交给媒体区内部滚动（不隐藏、也不压小格子）。
+         v0.19 新增代码区，**顺序放在文档之后**：这不是排序（各区的条目顺序都来自
+         同一套任务检索），只是混排时的展示次序 —— Markdown 仍然是这个面板的主角。 */
+      const docItems = kind === KIND_ALL ? visibleDocs.filter((doc) => doc.kind === ARTIFACT_DOC) : []
+      const codeItems = kind === KIND_ALL ? visibleDocs.filter((doc) => doc.kind === ARTIFACT_CODE) : []
       const mediaItems = kind === KIND_ALL ? visibleDocs.filter(isMedia) : []
       const shownDocs = docItems.slice(0, ALL_DOC_CAP)
+      const shownCode = codeItems.slice(0, ALL_CODE_CAP)
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
       // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
       // 文档列表**没有列数可算**：永远一个文档一行（见 `DOC_GRID` 那段说明）。
@@ -2520,8 +2827,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       /**
        * v0.14：当前任务上下文的分层视图。
        *
-       * **只在「文档档 + 相关序 + 宿主给了 context」时成立**；否则返回 null，
-       * 下面的渲染退回与 v0.13 逐字一致的平铺列表。
+       * **只在「文档档 / 代码档 + 相关序 + 宿主给了 context」时成立**；否则返回 null，
+       * 下面的渲染退回平铺列表。
+       *
+       * v0.19：多认一档 `KIND_CODE` —— 代码和文档走的是**同一个 Context Pack**
+       * （同一份 Primary / Supporting / Related），只是列表按 `kind` 切了一刀。
+       * 宿主在 `code` 档下同样给 `context`（见 `index.js` 的 `contextPayload()`），
+       * 「全部」档不给 —— 混排视图的分区已经是它自己的结构了。
        *
        * 这一层是**纯投影**：分组、顺序、理由都来自宿主（同一个 Context Model），
        * 客户端不重算任何东西 —— 面板与 `knit_docs` 用的是同一份结果。
@@ -2531,7 +2843,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        */
       const contextView = React.useMemo(() => {
         const pack = state.context
-        if (!relevance || kind !== KIND_DOC || !pack) return null
+        if (!relevance || (kind !== KIND_DOC && kind !== KIND_CODE) || !pack) return null
         const tiers = [
           ['primary', 'context.primary', 'context.primaryHint'],
           ['supporting', 'context.supporting', 'context.supportingHint'],
@@ -2616,14 +2928,19 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       /**
        * 为一个条目造预览状态：图片/视频直接 ready（字节地址交给 <img>/<video>），
-       * Markdown 才进 loading 去拉正文。
+       * 其余（Markdown / 代码）进 loading 去拉正文。
+       *
+       * v0.19：`kind` 必须**原样透传**。这里以前无条件写 `KIND_DOC`，代码接进来之后
+       * 那个写法会让 `.ts` 文件走 MarkdownText 渲染 —— 一行行代码会被当成 Markdown
+       * 排版（`#` 变标题、`*` 变列表、缩进被吃掉）。宿主已经在 `/api/doc` 的响应里
+       * 给了分类结论，客户端照抄即可，不再自己看扩展名。
        */
       const previewFor = React.useCallback((doc) => {
         const base = { rel: doc.rel, title: doc.title || doc.name, path: doc.path || '', text: '', truncated: false }
         if (isMedia(doc)) {
           return { ...base, kind: doc.kind, src: mediaUrl(sessionId, doc.rel), status: 'ready' }
         }
-        return { ...base, kind: KIND_DOC, status: 'loading' }
+        return { ...base, kind: doc.kind || ARTIFACT_DOC, status: 'loading' }
       }, [sessionId])
 
       /** 打开（不切换）某篇的预览。 */
@@ -2723,8 +3040,17 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
          */
         const apply = (target) => {
           setNotice('')
-          // 悬停浮层只列 Markdown，这里固定按文档走 loading→拉正文。
-          setPreview({ rel: target.rel, title: target.title, path: target.path || '', kind: KIND_DOC, status: 'loading', text: '', truncated: false })
+          // 悬停浮层由宿主下发 `kind`（v0.19 起浮层也可能列代码）—— 拿不到就当文档，
+          // 走 loading→拉正文。**不要在这里写死**，否则代码会进 MarkdownText。
+          setPreview({
+            rel: target.rel,
+            title: target.title,
+            path: target.path || '',
+            kind: target.kind || ARTIFACT_DOC,
+            status: 'loading',
+            text: '',
+            truncated: false,
+          })
         }
         if (pendingPreview) {
           const queued = pendingPreview
@@ -2742,14 +3068,32 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * 必然拿到 `knit/not-found`，面板会把它显示成「读取失败」。
        * **与其显示一个假的失败，不如压根不请求、也不显示这一条。**
        */
-      const previewIsDoc = !preview || (preview.kind !== 'image' && preview.kind !== 'video')
+      const previewIsDoc = !preview || preview.kind === ARTIFACT_DOC
 
-      /** 这篇文档在磁盘上的绝对路径：宿主给的 path 优先，拿不到就用 root + rel 拼。 */
+      /**
+       * 这篇文档在磁盘上的绝对路径，优先级：
+       * ① 宿主 `/api/doc` 给的 `path`（它已经展开过符号链接）；
+       * ② `hostRoot + rel`（同一个工作区根，也是 canonical 的）；
+       * ③ `root + rel`（老宿主，可能含符号链接 —— 点了会被 DSH 拒）。
+       * 「打开 / 定位」要的是**宿主验证得过的路径**，不是看起来对的那条。
+       */
       const previewAbsPath = preview
-        ? (preview.path || joinPath(state.root, preview.rel))
+        ? (preview.path || joinPath(state.hostRoot || state.root, preview.rel))
         : ''
 
-      /** 点预览头那行路径 → 用系统默认应用打开本地文档。 */
+      /**
+       * 点预览头那条面包屑 → 在文件管理器里**打开它所在的文件夹并选中这个文件**
+       * （`action: 'reveal'`，macOS 上是 `open -R`）。用户不必在文件夹里自己找。
+       *
+       * 与页脚「本地打开」的分工：那个用默认应用**打开文件**，这个只**定位文件**。
+       * reveal 要的是**文件本身的绝对路径**（不是所在目录）—— 传目录过去会变成
+       * 「在上级目录里选中这个文件夹」，不是我们要的。
+       */
+      const openPreviewReveal = React.useCallback(async () => {
+        setNotice((await openLocalPath(previewAbsPath, { reveal: true })) || '')
+      }, [previewAbsPath])
+
+      /** 页脚「本地打开」→ 用系统默认应用打开这篇文档本身。 */
       const openPreviewLocal = React.useCallback(async () => {
         setNotice((await openLocalPath(previewAbsPath)) || '')
       }, [previewAbsPath])
@@ -2765,9 +3109,24 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             if (!alive) return
             setPreview((cur) => {
               if (!cur || cur.rel !== previewRel) return cur
-              return data && data.ok
-                ? { ...cur, status: 'ready', text: data.text || '', truncated: Boolean(data.truncated) }
-                : { ...cur, status: 'error', error: hostMessage(data) }
+              if (!data || !data.ok) return { ...cur, status: 'error', error: hostMessage(data) }
+              return {
+                ...cur,
+                status: 'ready',
+                text: data.text || '',
+                truncated: Boolean(data.truncated),
+                /* v0.19：分类结论以宿主响应为准 —— 本地点开时已经带上了，但
+                   「悬停浮层点的」「引用条点的」这些入口未必知道，正文到手后
+                   就地校正一次，渲染分支（CodePane vs MarkdownText）才不会选错。
+                   `mapRel` 是宿主那次有界 stat 的结果：有同名 `.map` 才给入口。 */
+                kind: data.kind || cur.kind,
+                language: data.language || cur.language,
+                mapRel: data.mapRel || '',
+                /* v0.19 修订：正文到手后把「打开用」的绝对路径也校正过来 ——
+                   自己用 root + rel 拼的那份在符号链接工作区里会被 DSH 判成
+                   `Path has no verified Host path`（见宿主 `hostPathOf()`）。 */
+                path: data.path || cur.path,
+              }
             })
           } catch (error) {
             if (!alive) return
@@ -3006,9 +3365,13 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         if (state.status === 'error' || state.docs.length === 0 || visibleDocs.length === 0) return []
         if (kind === KIND_MEDIA) return []   // 媒体格子不参与：网格里收起高度没有意义
         if (kind === KIND_ALL) {
-          if (docItems.length === 0) return []
-          return shownDocs.map((doc, index) => (
-            { rel: doc.rel, tierKey: MOTION_TIER_ALL_DOCS, index, doc }))
+          if (docItems.length === 0 && codeItems.length === 0) return []
+          return [
+            ...shownDocs.map((doc, index) => (
+              { rel: doc.rel, tierKey: MOTION_TIER_ALL_DOCS, index, doc })),
+            ...shownCode.map((doc, index) => (
+              { rel: doc.rel, tierKey: MOTION_TIER_ALL_CODE, index, doc })),
+          ]
         }
         if (contextView) {
           const rows = []
@@ -3150,6 +3513,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         docItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'docs' },
           sectionHead('kind.doc', shownDocs.length, docItems.length, KIND_DOC),
           docsGrid(withGhosts(MOTION_TIER_ALL_DOCS, shownDocs))),
+        codeItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'code' },
+          sectionHead('kind.code', shownCode.length, codeItems.length, KIND_CODE),
+          docsGrid(withGhosts(MOTION_TIER_ALL_CODE, shownCode))),
         mediaItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'media' },
           // 媒体不截断，所以只给一个标题，不给「已显示 / 总数」和「查看全部」
           h('div', { className: 'knit-section-head' },
@@ -3160,7 +3526,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
       // 媒体视图：一格都不隐藏 —— 一屏两行以外的部分在媒体区**内部滚动**，
       // 既不让面板被整面媒体墙顶爆，也不会像旧版那样把剩下的条目直接切掉。
-      const emptyText = kind === KIND_MEDIA ? t('list.emptyMedia') : t('list.empty')
+      const emptyText = kind === KIND_MEDIA
+        ? t('list.emptyMedia')
+        : kind === KIND_CODE
+          ? t('list.emptyCode')
+          : t('list.empty')
       const body = state.status === 'loading' && state.docs.length === 0
         ? h('div', { className: 'knit-msg' }, t('list.scanning'))
         : state.status === 'error'
@@ -3422,12 +3792,14 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         lensOpen ? h('div', { className: 'knit-lens-body' },
           coverageNode, recentNode, outsideNode, deltaNode) : null)
 
-      // 不同类型用不同量词：文档「篇」、媒体「个」、混排「项」。
+      // 不同类型用不同量词：文档「篇」、代码「个」、媒体「个」、混排「项」。
       const countKey = kind === KIND_MEDIA
         ? (filtering ? 'count.media.filtered' : 'count.media')
-        : kind === KIND_ALL
-          ? (filtering ? 'count.all.filtered' : 'count.all')
-          : (filtering ? 'count.filtered' : 'count')
+        : kind === KIND_CODE
+          ? (filtering ? 'count.code.filtered' : 'count.code')
+          : kind === KIND_ALL
+            ? (filtering ? 'count.all.filtered' : 'count.all')
+            : (filtering ? 'count.filtered' : 'count')
       const countText = filtering
         ? t(countKey, { hit: visibleDocs.length, total: state.total })
         : t(countKey, { n: state.total })
@@ -3444,7 +3816,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           title: state.root ? t('path.openTitle') : '',
           disabled: !state.root,
           onClick: async () => {
-            setNotice((await openLocalPath(state.root)) || '')
+            // 打开文件夹同样要走 canonical 路径 —— 目录也会被同一条 `verifyDesktopPath` 拒。
+            setNotice((await openLocalPath(state.hostRoot || state.root)) || '')
           },
         }, state.root || '—'),
         h('div', { className: 'knit-count' }, countText),
@@ -3480,7 +3853,9 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           },
         })),
       h('div', { className: 'knit-types', role: 'tablist', 'aria-label': t('kind.title') },
-        [[KIND_DOC, 'kind.doc'], [KIND_MEDIA, 'kind.media'], [KIND_ALL, 'kind.all']].map(([value, labelKey]) =>
+        // v0.19：四档「文档 / 代码 / 媒体 / 全部」。**没有第二层分类** ——
+        // 代码里不再按语言（JS / TS / Python…）分组（需求 §46：不给代码加视觉层级压迫）。
+        [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_ALL, 'kind.all']].map(([value, labelKey]) =>
           h('button', {
             type: 'button',
             key: value,
@@ -3540,6 +3915,18 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         onOpenLink: (item) => requestPreview(item),
         // 拿不到绝对路径就不给点（而不是点了没反应）
         onOpenLocal: previewAbsPath ? openPreviewLocal : null,
+        onReveal: previewAbsPath ? openPreviewReveal : null,
+        /* v0.19 Source map：仍走 `requestPreview` 这条既有通道，不新开一条打开路径。
+           `.map` 是宿主分类层判定的 `generated`（previewable 但 contextual:false）——
+           面板能看它，列表与检索永远见不到它（需求 §6 §28 §29）。 */
+        onOpenMap: (rel) => requestPreview({
+          rel,
+          title: rel.split('/').pop(),
+          kind: KIND_GENERATED,
+        }),
+        /* v0.19 追加：HTML 的「网页预览」走**同一条**官方标签页通道（`onOpenTab`），
+           不新开第二条打开路径。宿主没提供这条能力时按钮置灰，而不是点了没反应。 */
+        onOpenWeb: typeof openInTab === 'function' ? () => onOpenTab(preview) : null,
         onClose: closePreview,
         onToggleFullscreen: () => setFullscreen((v) => !v),
         onResizeStart,
@@ -3940,12 +4327,19 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 
     /**
      * 请求在面板里打开某一篇。面板挂着就立刻生效，没挂就留一份挂起。
-     * @param {{rel:string, title?:string, name?:string}} doc - 目标文档
+     * @param {{rel:string, title?:string, name?:string, path?:string, kind?:string}} doc - 目标文档
      * @returns {void}
      */
     function requestPreview(doc) {
       if (!doc || !doc.rel) return
       const target = { rel: doc.rel, title: doc.title || doc.name || doc.rel }
+      /* v0.19：把 `path` / `kind` 一起带过去。
+         以前这里只传 `rel` + `title`，于是接收端只能自己猜类型（猜的结果就是
+         「一律当 Markdown」）。分类结论在宿主，这一路上不该被丢掉。
+         ⚠️ 两个字段都**只在有值时**写入：调用方常传 `{rel, title}`，别把
+         `kind: undefined` 传下去，那会覆盖掉接收端的兜底默认值。 */
+      if (doc.path) target.path = doc.path
+      if (doc.kind) target.kind = doc.kind
       if (previewSubscribers.size === 0) {
         pendingPreview = target
         return
@@ -3970,17 +4364,27 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * 它把业务值折进一个信封（`{ ok: true, value } | { ok: false, error }`），
      * 所以这里要拆信封而不是直接 await 出结果。
      *
-     * @param {string} path - 绝对路径
+     * `options.reveal` 走的是**同一个** remote 的同一个方法，只是多带一个
+     * `action: 'reveal'`（DSH 的 `SessionOpenWorkspacePathRequest.action`）。
+     * 主机侧落在 `revealNativePath` 上：macOS 是 `open -R`、Windows 是
+     * `explorer /select,`，也就是**打开所在文件夹并选中这个文件** ——
+     * 用户不必再在文件夹里自己找（Chrome「在文件夹中显示」是同一件事）。
+     * ⚠️ Linux 的 xdg-open 没有「选中」这个概念，那边只有打开目录，
+     * 这是平台差异，不是我们少做了一步。
+     *
+     * @param {string} path - 绝对路径（reveal 要的是**文件本身**，不是它所在的目录）
+     * @param {{reveal?:boolean}} [options] - `reveal` 为真则在文件管理器里选中它
      * @returns {Promise<string>} 空串表示成功，否则是失败原因
      */
-    async function openLocalPath(path) {
+    async function openLocalPath(path, options = {}) {
       if (!path) return t('error.hostFailed')
       const services = rootCtx && typeof rootCtx.get === 'function' ? rootCtx.get('remote.session') : null
       if (!services || typeof services.openWorkspacePath !== 'function') {
         return t('error.noHostTab')
       }
+      const request = options.reveal ? { path, action: 'reveal' } : { path }
       try {
-        const result = await services.openWorkspacePath({ path })
+        const result = await services.openWorkspacePath(request)
         if (result && result.ok === false) {
           const detail = result.error && (result.error.message || result.error.code)
           return t('error.openFailed', { error: String(detail || 'unknown') })

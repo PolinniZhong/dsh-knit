@@ -62,9 +62,11 @@
  *
  * ## 已知边界（不要读成缺陷报告，是如实记录）
  *
- * - **只看 Markdown。** 工作区里的 `.js` / `.mjs` 是真实存在的「实现 / 测试」，
- *   但它们不进语料（v0.14 明确不做源码索引），所以
- *   「Supporting = 实现文件」只能由**描述该实现的 Markdown** 承担。
+ * - **不做符号级理解。** v0.19 起代码文件可以进语料，但进来的只是
+ *   「文件名 + 路径 + 正文前 N 字符」这一层词面信息 —— **没有 AST、没有符号表、
+ *   没有调用图**（那是后续 Deep Retrieval 的方向，不是 v0.19）。所以
+ *   「Supporting = 实现文件」现在可以由**代码文件本身**承担，但它凭什么进这一层
+ *   仍然是 BM25 的命中，不是「谁调用了谁」。
  * - **不做任务理解。** `task` 字段是**引用**，不是推断：它由调用方传入
  *   （`index.js` 取「最新一条有实质内容的用户消息」原文），本模块只负责透传，
  *   **永远不生成**任务描述 —— 那需要模型，违反约束 1。
@@ -74,6 +76,13 @@
  * - **不判断「够不够」**。Primary 一篇都没有也要照常交付（三层全空就是全空）——
  *   硬凑一篇「看起来像主文档的」是编造。`MAX_PRIMARY = 1` 是上限，不是指标。
  */
+
+// v0.19：理由码要按条目类型分叉（Markdown 说「标题 / 摘要」，代码说「文件名 / 路径」），
+// 所以这里要看条目的 `kind`。**看的是分类层给的常量，不是裸字符串** ——
+// 本文件里出现的单引号字母串会被 `test/i18n.test.mjs` 当作理由码抽出来（那正是它的用途），
+// 在这里写 `doc.kind === 'code'` 会让 `code` 被误认成一个理由码。
+// `classification.js` 零依赖，import 它不会成环。
+import { KIND_CODE } from './classification.js'
 
 /* ── 上限（对外契约的一部分，测试直接断言它们）───────────────── */
 
@@ -217,20 +226,27 @@ function fieldCount(fields) {
  * 判定顺序是**固定的**，所以同一篇文档每次拿到同一个理由：
  *
  *   1. `direct`      —— 命中标题，且命中 ≥2 个话题词：作者把它写进标题、你还问了不止一个词
- *   2. `titleMatch`  —— 命中标题
- *   3. `summaryMatch`—— 命中摘要（没有标题命中时）
+ *   2. `titleMatch`  —— 命中标题（**代码**文件名沿用同一条判据，码是 `filenameMatch`）
+ *   3. `summaryMatch`—— 命中摘要（没有标题命中时；**代码**的「摘要」是所在目录，
+ *                        码是 `pathMatch`）
  *   4. `bodyMatch`   —— 只在正文命中（`fields` 是**焦点词**的正文命中个数，能区分
  *                        「真的在讲」与「正文里蹭了一下」，且不暴露 BM25 分数）
  *   5. `linkTarget`  —— 被某个 Primary 引用
  *   6. `linkSource`  —— 引用了某个 Primary
  *   7. `related`     —— 兜底：名次靠后的命中项
  *
- * @param {object} doc - 记录（`{rel, matchedTerms}`；`matchedTerms[].fields` 是字段位图）
+ * v0.19 给代码换的只是**两个码的名字**，不是两套判据 —— 命中位置完全一样
+ * （文件名占的是 `title` 槽、目录占的是 `summary` 槽，见 `index.js` 的 `readCode()`）。
+ * 换名字是为了让界面能说人话：对 `context-manager.ts` 说「标题命中」是错的，
+ * 它的「标题」就是文件名。**判据没有分叉，只有称谓分叉。**
+ *
+ * @param {object} doc - 记录（`{rel, kind, matchedTerms}`；`matchedTerms[].fields` 是字段位图）
  * @param {{linkTarget?:boolean, linkSource?:boolean}} [links] - 与 Primary 的关系
  * @returns {{code:string, terms:string[], fields:number, term:string}} 理由
  */
 export function explainContext(doc, links = {}) {
   const terms = Array.isArray(doc && doc.matchedTerms) ? doc.matchedTerms : []
+  const isCode = Boolean(doc && doc.kind === KIND_CODE)
   const names = terms.map((t) => t.term)
   const merged = { title: false, summary: false, body: false }
   let titleTerm = ''
@@ -254,14 +270,16 @@ export function explainContext(doc, links = {}) {
 
   if (merged.title) {
     return {
-      code: merged.title && names.length >= 2 ? 'direct' : 'titleMatch',
+      code: merged.title && names.length >= 2
+        ? 'direct'
+        : (isCode ? 'filenameMatch' : 'titleMatch'),
       terms: names,
       fields: total,
       term: titleTerm || names[0] || '',
     }
   }
   if (merged.summary) {
-    return { code: 'summaryMatch', terms: names, fields: total, term: names[0] || '' }
+    return { code: isCode ? 'pathMatch' : 'summaryMatch', terms: names, fields: total, term: names[0] || '' }
   }
   if (names.length > 0) {
     return { code: 'bodyMatch', terms: names, fields: bodyHits, term: bodyTerm || names[0] }
@@ -278,7 +296,11 @@ export function explainContext(doc, links = {}) {
 const REASON_ORDER = {
   direct: 0,
   titleMatch: 1,
+  // 代码的「文件名命中」与 Markdown 的「标题命中」是同一条判据（见 `explainContext()`），
+  // 所以强弱同级 —— 不能因为它是代码就排前面或后面。
+  filenameMatch: 1,
   summaryMatch: 2,
+  pathMatch: 2,
   bodyMatch: 3,
   linkTarget: 4,
   linkSource: 5,
@@ -509,7 +531,7 @@ export function buildContext(input = {}) {
       kind: record.kind,
       source: record.source,
       reason: explainContext(
-        { rel: record.rel, matchedTerms: record.termFields },
+        { rel: record.rel, kind: record.kind, matchedTerms: record.termFields },
         entry,
       ),
     }

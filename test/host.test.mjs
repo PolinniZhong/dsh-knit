@@ -7,6 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { realpathSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -136,10 +137,27 @@ test('readDocument: 拒绝绝对路径逃逸', async () => {
   assert.equal(r.ok, false)
 })
 
-test('readDocument: 拒绝非 Markdown', async () => {
+test('readDocument: 拒绝不可预览的类型（媒体 / 第一批范围外的源码后缀）', async () => {
+  // v0.19：这条断言以前叫「拒绝非 Markdown」，判据是 `.md$` 正则。
+  // 现在由分类层回答「能不能预览」—— 图片不能（走 /api/raw），
+  // `.go` 也不能（**明确不在第一批范围内**，需求 §5）。
+  const image = await readDocument(PROJECT_ROOT, 'assets/shot.png')
+  assert.equal(image.ok, false)
+  assert.equal(image.code, ERROR_CODES.notPreviewable)
+
+  const go = await readDocument(PROJECT_ROOT, 'main.go')
+  assert.equal(go.ok, false)
+  assert.equal(go.code, ERROR_CODES.notPreviewable)
+})
+
+test('readDocument: v0.19 起代码文件可读，并带上分类结论', async () => {
   const r = await readDocument(PROJECT_ROOT, 'package.json')
-  assert.equal(r.ok, false)
-  assert.equal(r.code, ERROR_CODES.markdownOnly)
+  assert.equal(r.ok, true)
+  assert.equal(r.kind, 'code')
+  assert.equal(r.language, 'json')
+  // 代码的标题是文件名本身 —— 不拿 `parseMarkdown` 去猜（`#` 在 shell / yaml 里是注释）
+  assert.equal(r.title, 'package.json')
+  assert.match(r.text, /"name"/)
 })
 
 /* ── 相关性引擎 ─────────────────────────────────────── */
@@ -603,4 +621,46 @@ test('mediaInfo: 文件不存在回 notFound', async () => {
     assert.equal(r.ok, false)
     assert.equal(r.code, ERROR_CODES.notFound)
   })
+})
+
+/* ── 符号链接工作区：交给宿主打开的路径必须是 realpath（v0.19 修订） ──
+   现象：工作区根是一条符号链接时（实测 `DSH_Skill_Trace -> 10_DSH_Skill_Trace`），
+   客户端「打开 / 定位」一律报 `Path has no verified Host path`；真实目录（08_Knit）没事。
+   判据在 DSH 自己那里：`verifyDesktopPath()` 要求
+   `fs.processPath(await fs.resolve(fs.processPathFromHostPath(p))) === p`，
+   而 `dsh-fs-local` 的 targetKey 落的是 `realpath()` ⇒ **含未展开链接的路径必然过不了**。
+   ⇒ 宿主下发的 `hostRoot` 与每条记录的 `path` 都要先展开。 */
+
+test('路径：工作区根是符号链接时，hostRoot 与每条 path 都已展开', async () => {
+  const linkDir = await mkdtemp(join(tmpdir(), 'knit-link-'))
+  const link = join(linkDir, 'ws')
+  symlinkSync(PROJECT_ROOT, link)
+  try {
+    const payload = await scan(link, 10, { sessionId: 's', sort: 'time' })
+    assert.notEqual(realpathSync(link), link, '前提：夹具里 link 确实是一条符号链接')
+    assert.equal(payload.root, link, 'root 仍是会话自己那条（界面显示用）')
+    assert.equal(payload.hostRoot, realpathSync(link), 'hostRoot 是展开后的 canonical 路径')
+
+    const docs = Array.isArray(payload.docs) ? payload.docs : []
+    assert.ok(docs.length > 0, '夹具里应当扫到内容')
+    for (const doc of docs) {
+      assert.equal(realpathSync(doc.path), doc.path,
+        `${doc.rel} 下发的 path 必须是 realpath —— DSH 的校验就是这一条`)
+      assert.equal(doc.path.startsWith(payload.hostRoot), true, 'path 落在 canonical 根下')
+    }
+
+    // 相对路径一字不变：展开链接不该改变 rel（检索 / 上下文 / 生命周期全靠它）
+    const direct = await scan(PROJECT_ROOT, 10, { sessionId: 's', sort: 'time' })
+    assert.deepEqual(docs.map((d) => d.rel).sort(), (direct.docs || []).map((d) => d.rel).sort(),
+      'root 换成符号链接后 rel 集合必须完全一致')
+
+    // `/api/doc` 那条路给客户端的 path 也要展开 —— 它是「正文到手后校正」的依据
+    const doc = await readDocument(link, docs[0].rel)
+    assert.equal(doc.ok, true)
+    assert.equal(realpathSync(doc.path), doc.path, '/api/doc 给的 path 必须是 realpath')
+    assert.equal(doc.rel, docs[0].rel)
+  } finally {
+    unlinkSync(link)
+    await rm(linkDir, { recursive: true, force: true })
+  }
 })
