@@ -248,6 +248,11 @@ embedding / 向量数据库 / LLM / 网络 / LSP / Tree-sitter / AST 依赖图 /
 
 - **宿主不热加载** ⇒ 升级后要重启 DSH 才会生效（客户端 bundle 随页面刷新）。
 
+> ✅ **2026-10-08 已发布**：轻量 tag `v0.20.0` = 发布提交 `2be278486299c721daa21ee127fd26bbe21af284`；npm `latest = 0.20.0`、`gitHead` = 同一个提交、共 **17 个**版本；registry 真包 **51 文件 / 565 078 B tarball / 1 662 961 B 解包 / shasum `7be584a08529379dba7d255028d59a2853624094`**；OIDC 可信发布 + provenance（workflow run `37730146187`，22 s）；GitHub Release 正文取自本节（前置「更新后必须重启 DSH」与「已知问题」两条），`publishedAt 2026-10-08T05:08:35Z`。
+> ⚠️ 本地 `npm pack --dry-run` 报 51 文件 / 557.0 kB / shasum `deb8bfe6…` —— **本地字节与 registry 历来对不上**（v0.18 / v0.19.x 都这样），差的只是 tar/gzip 框架元数据，解包后清单与内容逐字一致。
+> ⚠️ **发布后才发现的一条包装缺陷**：`test/deep-scale.test.mjs` 从 `../tools/deep-benchmark.mjs` 取语料工厂，而 `tools/` 不随包发布 ⇒ **解包目录里 `npm test` = 638 pass / 1 fail**（`ERR_MODULE_NOT_FOUND`）。**插件本体不受影响**（`src/` 不引用 `tools/`）。仓库完整套件仍是 641/641；已在 **v0.20.1** 修（把语料工厂搬进 `test/`）。
+> ⚠️ **这一行不在已发布的 tarball 里** —— 它在 publish 成功之后才写进来（下次 `npm view` 看到的是这份仓库里的文件）。
+
 ## [0.19.1] - 2026-10-07
 
 > **定位重构（只改对外叙事，一行代码没动）**。产品已经从 v0.12 时代的「更聪明的最近文件列表」
