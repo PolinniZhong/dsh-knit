@@ -363,6 +363,10 @@ export function buildContext(input = {}) {
       terms: terms.map((t) => t.term),
       // 逐词的字段位图，原样留着给 `explainContext()` 用（合并后的 `fields` 只服务分层判断）
       termFields: terms.map((t) => ({ term: t.term, fields: t.fields || {} })),
+      // v0.20（D5）：逐词的「单窗口内最大字频」，由宿主（`passage.js` 的
+      // `passageTfOf()`）算好带进来。**只在函数内部用来判 `isDocHit`**，不出现在
+      // 任何返回值里；缺失（合成夹具、老的调用方）时 `isDocHit` 退回整篇字频。
+      passageTf: doc.passageTf && typeof doc.passageTf === 'object' ? doc.passageTf : null,
       fields,
       raw,
       // 相关度带宽（占本批最高 raw 的比例）。**只在函数内部用来判 Primary 的强度下限**，
@@ -406,19 +410,43 @@ export function buildContext(input = {}) {
    * 没有它，那篇长文会出现在每一条任务的 Supporting 里。
    *
    * 用的是**正文字频**（不是 BM25 分数），不进对外输出，只决定资格。
+   *
+   * ⚠️ v0.20（D5）改了「字频」的口径：优先用**单窗口内最大字频**
+   * （`record.passageTf`，由 `passage.js` 的 `windowTf()` 算），只有在没有这份
+   * 数据时才退回整篇字频。原因是整篇字频**不是长度无关的**：v0.19 里正文只取
+   * 前 2500 字，这个缺陷被窗口意外掩盖；v0.20 打开窗口后，29000 字的 CHANGELOG
+   * 里一个词出现 3 次就会压过真正聚焦的短文，于是它对**每个**任务都满足闸门 ——
+   * 正是这段注释开头说的那个要防的场景（需求 §9）。
    */
+  const passageTfIn = (record, term) => {
+    const tf = record.passageTf
+    if (!tf || typeof tf !== 'object') return null
+    const v = tf[term]
+    return Number.isFinite(v) ? v : null
+  }
+
   const maxBodyTf = new Map()
+  const maxPassageTf = new Map()
   for (const record of records) {
     for (const entry of record.termFields) {
       const f = entry.fields || {}
       if (!f.body) continue
+      const tf = f.bodyTf || 0
       const best = maxBodyTf.get(entry.term) || 0
-      if ((f.bodyTf || 0) > best) maxBodyTf.set(entry.term, f.bodyTf || 0)
+      if (tf > best) maxBodyTf.set(entry.term, tf)
+      const pt = passageTfIn(record, entry.term)
+      if (pt != null) {
+        const bestPt = maxPassageTf.get(entry.term) || 0
+        if (pt > bestPt) maxPassageTf.set(entry.term, pt)
+      }
     }
   }
   const isDocHit = (record) => record.termFields.some((entry) => {
     const f = entry.fields || {}
     if (!f.body) return false
+    // v0.20：有片段数据就按「单窗口内最大字频」比，没有就退回整篇字频（v0.19 口径）。
+    const pt = passageTfIn(record, entry.term)
+    if (pt != null) return pt >= STRONG_BODY_TF && pt >= (maxPassageTf.get(entry.term) || 0)
     const tf = f.bodyTf || 0
     return tf >= STRONG_BODY_TF && tf >= (maxBodyTf.get(entry.term) || 0)
   })

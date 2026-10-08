@@ -1192,20 +1192,32 @@ test('样式：这一轮的「去线 / 去描边」都不许回潮（2026-09-30 
   assert.match(source, /'filter\.placeholder': 'Filter docs'/)
 })
 
-test('样式：悬停 / 选中的灰底各降一档（悬停 −60% / 选中 −40%），两个主题都给了值', async () => {
+test('样式：灰底三档从 DSH 官方交互令牌按固定比例推，两个主题各一套，且不引用 DSH 没有的令牌', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
   const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
   const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
 
-  // 两个令牌都要定义：浅色一套 + 暗色主题覆盖一套
-  assert.match(css, /--knit-hover-bg:rgba\(38,49,72,\.024\)/, '浅色悬停 = DSH 的 40%')
-  assert.match(css, /--knit-active-bg:rgba\(38,49,72,\.061\)/, '浅色选中 = DSH 的 60%')
+  // 三个令牌都要定义：浅色一套 + 暗色主题覆盖一套
+  // 官方值：interactive-bg-hover 浅 5.88% / 暗 7.84%，interactive-bg-active 浅 10.20% / 暗 14.12%
+  assert.match(css, /--knit-hover-bg:rgba\(38,49,72,\.024\)/, '浅色悬停 = 官方 5.88% × 0.41')
+  assert.match(css, /--knit-active-bg:rgba\(38,49,72,\.061\)/, '浅色选中 = 官方 10.20% × 0.60')
+  assert.match(css, /--knit-chip-bg:rgba\(38,49,72,\.092\)/, '浅色命中段 = 官方 10.20% × 0.90')
   const dark = css.match(/body\[data-ds-dark-theme\] \.knit-root\{([^}]*)\}/)
-  assert.ok(dark, '暗色主题必须也覆盖这两个令牌，否则暗色下不跟着降')
-  assert.match(dark[1], /--knit-hover-bg:rgba\(255,255,255,\.031\)/)
-  assert.match(dark[1], /--knit-active-bg:rgba\(255,255,255,\.085\)/)
+  assert.ok(dark, '暗色主题必须也覆盖这三个令牌，否则暗色下不跟着降')
+  // 2026-10-07 用户：暗色下最高那一档（命中段）原来是纯白 13%，白得犯晕 ⇒ 三个值一起降 10%
+  assert.match(dark[1], /--knit-hover-bg:rgba\(255,255,255,\.028\)/, '暗色悬停 = 官方 7.84% × 浅色比例 0.41 × 0.9')
+  assert.match(dark[1], /--knit-active-bg:rgba\(255,255,255,\.076\)/, '暗色选中 = 官方 14.12% × 浅色比例 0.60 × 0.9')
+  assert.match(dark[1], /--knit-chip-bg:rgba\(255,255,255,\.114\)/, '暗色命中段 = 官方 14.12% × 浅色比例 0.90 × 0.9')
+  // 命中段必须比「行选中」再深一档，否则它在被选中 / 悬停的行里会消失（千分比数值更大 = 更亮）
+  const chip = Number(dark[1].match(/--knit-chip-bg:rgba\(255,255,255,\.(\d+)\)/)[1])
+  const active = Number(dark[1].match(/--knit-active-bg:rgba\(255,255,255,\.(\d+)\)/)[1])
+  assert.ok(chip > active, '命中段的底必须比行选中更深')
+  // 暗色三档一律**低于**官方 active（14.12% = 141）—— 超过它就是我们自己造了一套更亮的值
+  assert.ok(chip < 141, '暗色命中段不得亮过 DSH 官方 active（14.12%）')
+  // DSH 里根本没有 --dsw-alias-text-* 这一族（已核实：全库零定义）⇒ 引用它会静默失效
+  assert.ok(!/--dsw-alias-text-/.test(css), '不许引用 DSH 里不存在的令牌：--dsw-alias-text-* 未定义')
 
   // 列表行是用户点名要改的两处
   assert.match(css, /\.knit-doc:hover\{background:var\(--knit-hover-bg/)
@@ -1825,8 +1837,8 @@ test('上下文：每一条都带「为什么在这里」，且理由来自宿�
   const { nodes } = await mountWithPayload(contextPayload())
   const why = byClass(nodes, 'knit-why').map(textOf)
   assert.equal(why.length, 4, 'Context Pack 的四个条目各一行；「其他」区那篇没有理由')
-  assert.match(why[0], /标题命中：排序/)
-  assert.match(why[1], /正文命中：bm25/)
+  assert.match(why[0], /标题命中 排序/)
+  assert.match(why[1], /正文命中 bm25/)
   assert.match(why[2], /引用了主要上下文/)
   assert.match(why[3], /与当前任务相关/)
   // ⚠️ 不许出现任何无法验证的话术
@@ -2785,6 +2797,10 @@ test('v0.18 Coverage：三层各自的「已读 ÷ 本层总数」，点它定�
   assert.equal(flashed[0].props['data-knit-tier'], 'supporting', '点的哪一层就亮哪一层')
 
   // 高亮只是一下提示，自己会收掉（不靠 hover、不靠点别处）
+  // ⚠️ 先 flush 一轮把 effect 跑起来：收掉它的那个定时器是**本次 render 的 effect** 排的。
+  //（v0.20 性能治理顺手补的：以前这步靠上一个用例漏下来的定时器写空槽位；`harness.reset()`
+  //  现在会清定时器，漏不过来了 —— 于是这个用例得自己把 effect 跑起来，断言一个字没改。）
+  await harness.flush()
   harness.tick()
   assert.equal(
     byClass(render(), 'knit-tier').filter((n) => String(n.props.className).includes('flash')).length,
@@ -3305,8 +3321,15 @@ test('v0.17 动效：FLIP 真的接在提交之后 —— 跳过进 / 出、落�
     '进 / 出补间在飞的那几百毫秒留一个「别量」的窗口（量到的是中间态）')
   assert.match(code, /const settled = motionOn[\s\S]*?store\.view === motionView/,
     '换屏（视图签名变了）/ 补间还在飞 / 没有行的时候，一个都不量 —— 换屏照补就是「整屏一起飞」')
-  assert.match(code, /store\.positions = settled \? applyRowFlips\(listRef\.current, store\.positions, skip\) : new Map\(\)/,
-    '量的是真列表容器，位置表跨帧传递；不量时清空 —— 别拿上一帧的旧坐标去比')
+  assert.match(code, /store\.positions = settled && rowSig !== store\.sig[\s\S]*?applyRowFlips\(listRef\.current, store\.positions, skip\)/,
+    '量的是真列表容器，位置表跨帧传递；**行签名没变就一行都不量**（v0.20 性能治理：轮询 / 悬停 / 选中都会走到这里）')
+  assert.match(code, /: \(settled \? store\.positions : new Map\(\)\)/,
+    '不量分两种：同签名沿用旧表，换屏 / 补间中清空 —— 别拿上一帧的旧坐标去比')
+  assert.match(code, /store\.sig = rowSig/, '签名要落盘，下一帧拿它比对')
+  // 签名必须盖住「会让行高变」的字段：少了任何一个，行真挪了位置我们却以为没变，
+  // 那一次补间就会拿旧基准去比（既不动，也可能错位）。
+  assert.match(code, /row\.rel[\s\S]*?row\.tierKey[\s\S]*?row\.doc\.matches[\s\S]*?mtimeMs \|\| row\.doc\.mtime \|\| row\.doc\.size/,
+    '签名里要有 rel / 层级 / 命中片段数 / 内容时间戳')
 })
 
 test('v0.17 交互审：列表只在光标真的换了（且焦点在列表上）时跟手滚 —— 刷新不许动列表', async () => {
@@ -3357,6 +3380,13 @@ function codePayload(overrides = {}) {
     ],
     ...overrides,
   }
+}
+
+/** 带一处命中段的代码载荷（v0.20 语法高亮只在命中段那一带上色，见 CODE_HL_PAD）。 */
+function codeWithMatch(range = [{ startLine: 1, endLine: 2 }]) {
+  const list = codePayload()
+  list.docs[0] = { ...list.docs[0], matches: range }
+  return list
 }
 
 test('v0.19 代码：「代码」档请求 kind=code，代码行带语言徽章而文档行不带', async () => {
@@ -3423,11 +3453,257 @@ test('v0.19 代码：点代码行就地渲染行号 + 正文，绝不落到 Mark
   assert.equal(byExactClass(nodes, 'knit-codepane').length, 1, '代码走 CodePane')
   assert.equal(byExactClass(nodes, 'knit-code-gutter').length, 1, '有独立行号列')
   assert.equal(byExactClass(nodes, 'knit-code-src').length, 1, '有正文列')
-  // 行号与正文各是**一个**文本节点（靠 white-space:pre 换行）—— 不做逐行 DOM。
+  // 行号仍是**一个**文本节点（靠 white-space:pre 换行）—— 不做逐行 DOM。
+  // 正文自 v0.20 起是逐 token 的片段（语法高亮），但**行间只隔一个 '\n'**，所以
+  // textOf() 的拼接结果与「一整串」完全相同 —— 这条断言正是那个不变量的守卫。
   assert.equal(textOf(byExactClass(nodes, 'knit-code-gutter')[0]), '1\n2')
   assert.equal(textOf(byExactClass(nodes, 'knit-code-src')[0]), '# not a heading\nexport class A {}')
   // 落到 Markdown 渲染的判据：降级分支那个 `pre.knit-raw` 一个都不许有
   assert.equal(byExactClass(nodes, 'knit-raw').length, 0, '代码不许走纯文本降级那条路')
+})
+
+test('v0.20 语法高亮：逐 token 上色走 DSH 官方高亮器，颜色只来自 --shiki-*', async () => {
+  const { calls } = installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      return {
+        ok: true, rel: 'src/context-manager.ts', kind: 'code', language: 'typescript',
+        title: 'context-manager.ts',
+        text: 'export const a = 1\nconst b = 2\n',
+        truncated: false,
+      }
+    }
+    return codeWithMatch()
+  })
+  const { exports: mod, highlightCalls } = loadClientModule()
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  // 正文是异步取回的：逐轮「跑 effect + 重渲染」推进，直到正文列出现。
+  for (let i = 0; i < 5 && byExactClass(nodes, 'knit-code-src').length === 0; i += 1) {
+    await harness.flush()
+    nodes = render()
+  }
+  assert.equal(byExactClass(nodes, 'knit-code-src').length, 1, '选中代码行必须读到正文')
+
+  assert.ok(calls.some((u) => u.includes('/api/doc')), '选中代码行必须读正文')
+  // ① 语言提示**只认宿主给的那个**：客户端自己去看扩展名就会在这里露馅
+  //    （`.ts` → 'typescript' 这张表在宿主分类层，客户端不该有第二份）
+  assert.ok(highlightCalls.includes('typescript'),
+    '必须把宿主给的 language 原样交给官方高亮器（客户端不许自己判扩展名）')
+  // ② 逐 token 上色：正文列里出现带 style 的 <span>，且颜色**只能是** --shiki-*
+  //    （自己发明一套配色、或在某个主题下写死白色，都会被这条挡住 —— 那正是
+  //    2026-10-07 暗色治理踩过的坑）
+  const src = byExactClass(nodes, 'knit-code-src')[0]
+  const spans = nodes.filter((n) => n.type === 'span' && n.props && n.props.style)
+  assert.ok(spans.length >= 4, '逐 token 上色 —— 词与空白各算一个片段')
+  for (const span of spans) {
+    assert.match(String(span.props.style.color), /^var\(--shiki-[a-z-]+\)$/,
+      'token 颜色必须引用主题包的自定义属性，不许写死色值')
+  }
+  // ③ 上色**不改文本**：拼接结果与原来那个文本节点一字不差（行间仍是 '\n'）
+  assert.equal(textOf(src), 'export const a = 1\nconst b = 2')
+  // ④ 行号栏不受影响：仍是**一个**文本节点
+  assert.equal(byExactClass(nodes, 'knit-code-gutter').length, 1)
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-gutter')[0]), '1\n2')
+})
+
+test('v0.20 语法高亮：宿主没导出高亮器时静默回落纯文本（旧版 DSH / 缺包）', async () => {
+  installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      return {
+        ok: true, rel: 'src/context-manager.ts', kind: 'code', language: 'typescript',
+        title: 'context-manager.ts',
+        text: 'export const a = 1\nconst b = 2\n',
+        truncated: false,
+      }
+    }
+    return codeWithMatch()
+  })
+  const { exports: mod, highlightCalls } = loadClientModule({ noHighlighter: true })
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  for (let i = 0; i < 5 && byExactClass(nodes, 'knit-code-src').length === 0; i += 1) {
+    await harness.flush()
+    nodes = render()
+  }
+
+  assert.equal(highlightCalls.length, 0, '包在、但没导出高亮器 —— 一个调用都不该有')
+  assert.equal(byExactClass(nodes, 'knit-code-src').length, 1, '预览照旧（只是没有颜色）')
+  assert.equal(nodes.filter((n) => n.type === 'span' && n.props && n.props.style).length, 0,
+    '纯文本兜底：一个上色片段都没有')
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-src')[0]), 'export const a = 1\nconst b = 2',
+    '正文一字不差')
+})
+
+test('v0.20 语法高亮：没有命中段就一个 token 都不上色（其余行保持默认正文色）', async () => {
+  installFetch((url) => (url.includes('/api/doc')
+    ? {
+      ok: true, rel: 'src/context-manager.ts', kind: 'code', language: 'typescript',
+      title: 'context-manager.ts', text: 'const a = 1\nconst b = 2\n', truncated: false,
+    }
+    : codePayload()))
+  const { exports: mod, highlightCodes } = loadClientModule()
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  for (let i = 0; i < 5 && byExactClass(nodes, 'knit-code-src').length === 0; i += 1) {
+    await harness.flush()
+    nodes = render()
+  }
+
+  const src = byExactClass(nodes, 'knit-code-src')[0]
+  // 2026-10-07 用户第二次裁决：代码区**只有命中段那一带**有 token 颜色，其余行用默认正文色
+  // （浅色黑 / 暗色白，跟主题令牌走）。载荷里这份 `codePayload()` 没有 `matches` ⇒ 没有锚点
+  // ⇒ 一行都不许交给高亮器（这正是「不许再整篇上色」的守卫）。
+  assert.equal(highlightCodes.length, 0, '没有命中段：一个 token 都不上色')
+  assert.equal(textOf(src), 'const a = 1\nconst b = 2', '正文照常一字不差')
+})
+
+test('v0.20 语法高亮：只给命中段前后各 CODE_HL_PAD 行上色，且窗口不超过 CODE_HL_MAX_LINES', async () => {
+  const lines = []
+  for (let i = 1; i <= 2100; i += 1) lines.push(`const v${i} = ${i}`)
+  const text = `${lines.join('\n')}\n`
+  // 命中段 100–1600（1501 行，本身比窗口上限长）：窗口从第 100 行往上取 60 行 = 第 40 行起，
+  // 再被 CODE_HL_MAX_LINES = 800 截住（否则要着色 1561 行 —— 那正是「加载还是慢」的来源）。
+  const list = codeWithMatch([{ startLine: 100, endLine: 1600 }])
+  installFetch((url) => (url.includes('/api/doc')
+    ? {
+      ok: true, rel: 'src/context-manager.ts', kind: 'code', language: 'typescript',
+      title: 'context-manager.ts', text, truncated: false,
+    }
+    : list))
+  const { exports: mod, highlightCodes } = loadClientModule()
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  for (let i = 0; i < 5 && byExactClass(nodes, 'knit-code-src').length === 0; i += 1) {
+    await harness.flush()
+    nodes = render()
+  }
+
+  const src = byExactClass(nodes, 'knit-code-src')[0]
+  assert.equal(highlightCodes.length, 1, '正文只上色一次（useMemo 记忆化）')
+  assert.equal(highlightCodes[0].split('\n').length, 800,
+    '窗口：命中段前 60 行起，被 CODE_HL_MAX_LINES 截到 800 行（不许按命中段长度膨胀）')
+  // 窗口之上是**一个**纯文本节点（第 1–39 行），窗口之下也是**一个**（第 840 行到尾）——
+  // 只为「颜色」付出 DOM，其余行保持默认正文色的最小代价。
+  const body = src.children
+  assert.ok(Array.isArray(body), '有颜色时正文树是片段数组')
+  assert.equal(typeof body[0], 'string', '窗口之前是纯文本')
+  assert.ok(String(body[0]).endsWith('const v39 = 39'), '窗口上边界 = 命中段首行 - CODE_HL_PAD')
+  assert.equal(typeof body[body.length - 1], 'string', '窗口之后是纯文本')
+  assert.ok(String(body[body.length - 1]).startsWith('const v840 = 840'), '窗口下边界 = 上边界 + 800 行')
+  assert.ok(String(body[body.length - 1]).endsWith('const v2100 = 2100'), '最后一行仍在')
+  assert.equal(textOf(src), lines.join('\n'), '正文一字不差（变的只是颜色）')
+})
+
+test('v0.20 性能：同一篇代码收起再打开不再重新分词（按文件缓存）', async () => {
+  installFetch((url) => (url.includes('/api/doc')
+    ? {
+      ok: true, rel: 'src/a.ts', kind: 'code', language: 'typescript', title: 'a.ts',
+      text: 'const a = 1\nconst b = 2\n', truncated: false,
+    }
+    : codeWithMatch()))
+  const { exports: mod, highlightCodes } = loadClientModule()
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time', 'code'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const open = async () => {
+    byToken(nodes, 'knit-doc')[0].props.onClick()
+    await harness.flush()
+    for (let i = 0; i < 5 && byExactClass(nodes, 'knit-code-src').length === 0; i += 1) {
+      nodes = render()
+      await harness.flush()
+    }
+  }
+
+  await open()
+  assert.equal(byExactClass(nodes, 'knit-code-src').length, 1, '选中代码行必须读到正文')
+  assert.equal(highlightCodes.length, 1, '第一次打开要分词一次')
+
+  // 点同一条收起、再点开：正文一个字都没变 ⇒ 结果缓存必须命中，一次都不该再分词。
+  // （用户来回点同一篇是高频动作；缓存前每次都要重付 0.7–1.4 s —— 4× 节流下实测 3459 ms）
+  byToken(nodes, 'knit-doc')[0].props.onClick()
+  await harness.flush()
+  nodes = render()
+  await open()
+  assert.equal(highlightCodes.length, 1,
+    '同一篇重开必须走缓存 —— 别再让「收起再点开」重付一次分词')
+})
+
+test('v0.20 性能：载荷一字没变时，轮询不再落状态（不整屏重渲染）', async () => {
+  // 载荷**只造一次**、每次轮询都回同一份（`listPayload()` 里的 mtimeMs 取 Date.now()，
+  // 现造一份就不是「一字没变」了 —— 那测不到去重）
+  const frozen = listPayload()
+  const { calls } = installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: '技术方案.md', title: '技术方案', text: '# 技术方案\n\n正文。', truncated: false }
+    : frozen))
+  const { exports: mod, markdownCalls } = loadClientModule()
+  const { KnitBody } = mod.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  // 点开是异步的：逐轮「重渲染 → 跑 effect」推进（先 render 再 flush —— effect 是那次
+  // render 才登记的，顺序反了就是跑上一轮留下的那批）
+  for (let i = 0; i < 5 && markdownCalls.length === 0; i += 1) {
+    nodes = render()
+    await harness.flush()
+  }
+  nodes = render()
+  assert.ok(markdownCalls.length >= 1, '先打开一篇 Markdown 预览')
+  assert.ok(calls.filter((url) => url.includes('/api/recent')).length >= 1, '列表已取过一轮')
+
+  const writes = harness.stateWrites()
+  for (let i = 0; i < 2; i += 1) {
+    // ⚠️ 只等轮询那一次 setState 落地，**不跑 effect**（`flush()` 会把每个 effect 都重跑
+    // 一遍，替身没有依赖比较 —— 那些 effect 自己的写入会盖住我们要看的这一笔）
+    assert.ok(harness.tick() > 0, '轮询定时器必须一轮一轮地续上')
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(harness.stateWrites(), writes,
+    '同样的载荷一次状态都不该写（旧代码每 5 s 落一个新对象 ⇒ 整屏重渲染 + 一轮 FLIP 强制布局）')
 })
 
 test('v0.19 代码：同名 source map 才给「Source map」入口，没有就不给', async () => {
@@ -3703,4 +3979,509 @@ test('v0.19 代码：样式守卫 —— 行号/正文各归各的滚动，语�
       assert.ok(token.includes(','), `DSH 令牌必须带回落值：${token}`)
     }
   }
+})
+
+/* ── v0.20 Deep Context Retrieval：命中片段（需求 §12 / §13 / §26）──────── */
+
+/** 一份带命中片段的相关序载荷：README 有片段，notes.md 没有。 */
+function passagePayload(overrides = {}) {
+  const now = Date.now()
+  return {
+    ok: true, root: '/p', total: 2, mode: 'relevance', topic: 'sidebar', kind: 'doc',
+    docs: [
+      {
+        path: '/p/README.md', rel: 'README.md', name: 'README.md',
+        title: 'README', kind: 'md', summary: '侧栏说明', size: 4200,
+        mtimeMs: now - 30000, score: 1.2,
+        matches: [
+          { startLine: 147, endLine: 163, startOffset: 4000, endOffset: 4400, terms: ['sidebar'], snippet: '侧栏渲染在这里' },
+          { startLine: 900, endLine: 912, startOffset: 30000, endOffset: 30400, terms: ['sidebar'], snippet: '第二段' },
+        ],
+      },
+      {
+        path: '/p/docs/notes.md', rel: 'docs/notes.md', name: 'notes.md',
+        title: '随手记', kind: 'md', summary: '杂记', size: 800,
+        mtimeMs: now - 60000, score: 0.4,
+      },
+    ],
+    ...overrides,
+  }
+}
+
+test('v0.20 命中片段：行号区间是纯算术（fmtRange / firstMatchOf）', () => {
+  const { fmtRange, firstMatchOf } = loadClientModule().exports.__test
+  assert.equal(fmtRange({ startLine: 147, endLine: 163 }), '147–163', '区间用 en dash 连起来')
+  assert.equal(fmtRange({ startLine: 147, endLine: 147 }), '147', '单行不写成 147–147')
+  assert.equal(fmtRange({ startLine: 147 }), '147', '没有 endLine 时按单行算')
+  assert.equal(fmtRange(null), '', '拿不到行号就返回空串 —— 不编造一个行号')
+  assert.equal(fmtRange({}), '')
+  // 行号可以是小数 / 0：夹到 >= 1 的整数（宿主给的是整数，但这里不信任输入）
+  assert.equal(fmtRange({ startLine: 0, endLine: 3 }), '1–3', '0 夹到第一行，不是返回空串')
+  assert.equal(fmtRange({ startLine: 2.7, endLine: 1 }), '2', 'endLine 小于 startLine 时按单行')
+
+  assert.equal(firstMatchOf({ matches: [{ startLine: 3 }, { startLine: 9 }] }).startLine, 3, '只认第一段')
+  assert.equal(firstMatchOf({ matches: [] }), null)
+  assert.equal(firstMatchOf({}), null)
+  assert.equal(firstMatchOf(null), null)
+})
+
+test('v0.20 命中片段：代码行锚点的几何（anchorBandFor）', () => {
+  const { anchorBandFor } = loadClientModule().exports.__test
+  const layout = { total: 4000, lineHeight: 18.4, offsetTop: 0 }
+  const box = anchorBandFor({ startLine: 147, endLine: 163 }, layout)
+  assert.equal(box.top, 146 * 18.4, '第 147 行在第 146 行之后')
+  assert.equal(box.height, 17 * 18.4, '17 行高（含首尾）')
+  assert.equal(box.scrollTop, 146 * 18.4 - 18.4 * 2, '上方留两行')
+
+  // 边界：超出文件末尾 ⇒ 不画（不猜）；endLine 越界 ⇒ 夹到末尾
+  assert.equal(anchorBandFor({ startLine: 4001 }, layout), null, '文件里没有第 4001 行')
+  assert.equal(anchorBandFor({ startLine: 4000, endLine: 9999 }, layout).height, 18.4, '夹到末尾那一行')
+  assert.equal(anchorBandFor(null, layout), null, '没有锚点 ⇒ 不高亮')
+  assert.equal(anchorBandFor({ startLine: 10 }, { total: 100, lineHeight: 0 }), null, '量不到行高 ⇒ 什么都不做')
+  assert.equal(anchorBandFor({ startLine: 1 }, layout).scrollTop, 0, '第一行不滚（不留负值）')
+  assert.equal(anchorBandFor({ startLine: 3, endLine: 2 }, layout).height, 18.4, 'endLine 反了按单行')
+  assert.equal(anchorBandFor({ startLine: 9 }, { total: 0, lineHeight: 18.4 }), null, '空文件')
+})
+
+test('v0.20 命中片段：带片段的行渲染「命中段 147–163」，没有的不渲染', async () => {
+  installFetch((url) => {
+    if (url.includes('/api/doc')) return { ok: true, rel: 'README.md', title: 'README', text: '# README\n', truncated: false }
+    return passagePayload()
+  })
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const hits = byExactClass(nodes, 'knit-hit')
+  assert.equal(hits.length, 1, '只有带片段的那一行有这个按钮')
+  // 只显示第一段（§12 只加一行；§16 不许多给）
+  assert.equal(textOf(hits[0]), '命中段 147–163')
+  assert.ok(!/900/.test(textOf(hits[0])), '第二段不在列表里显示')
+  // 没有片段的条目**不渲染占位** —— 不编造「命中片段：—」
+  assert.ok(!/命中片段/.test(textOf(byToken(nodes, 'knit-doc')[1])), '没有片段就没有那一行')
+  // 也不许出现任何分数 / 百分比（§26）
+  assert.ok(!/分|%|score/i.test(textOf(hits[0])), `命中片段行里不许有分数：${textOf(hits[0])}`)
+})
+
+test('v0.20 命中片段：三层（Primary/Supporting/Related）的行也要有片段行', async () => {
+  /* 回归（2026-10-07 真机截图发现）：宿主给三层的投影只有
+     `rel/title/summary/mtimeMs/kind/source/reason` —— **没有 `matches`**，
+     而片段行读的是 `doc.matches`。所以最初只有「其他相关文档」区有片段行，
+     恰恰最该给片段的 Primary/Supporting/Related 三行一个都没有。
+     修法是客户端按 `rel` 从同一批 `docs` 里取回 `matches`（不加任何载荷）。 */
+  const now = Date.now()
+  const payload = passagePayload({
+    context: {
+      primary: [{
+        rel: 'README.md', title: 'README', summary: '侧栏说明', mtimeMs: now - 30000,
+        kind: 'md', source: 'md', reason: { code: 'bodyMatch', terms: ['sidebar'], fields: 1, term: 'sidebar' },
+      }],
+      supporting: [], related: [],
+    },
+  })
+  installFetch((url) => {
+    if (url.includes('/api/doc')) return { ok: true, rel: 'README.md', title: 'README', text: '# README\n', truncated: false }
+    return payload
+  })
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const rows = byToken(nodes, 'knit-doc')
+  const primary = rows.find((r) => /README/.test(textOf(r)))
+  assert.ok(primary, 'Primary 那一行在屏幕上')
+  const hits = byExactClass(nodes, 'knit-hit')
+  assert.equal(hits.length, 1, 'README 在三层里，也必须有片段行')
+  assert.equal(textOf(hits[0]), '命中段 147–163', '片段来自 docs 里同一篇的 matches')
+  assert.ok(textOf(primary).includes('命中段 147–163'), '而且挂在 Primary 那一行上')
+})
+
+test('v0.20 命中片段：点它就地预览并带锚点；同一篇已打开时只换锚点、不重拉', async () => {
+  const { calls } = installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      // 一份 100 行的代码：锚点落在 60–62
+      const text = Array.from({ length: 100 }, (_, i) => `const line${i + 1} = ${i + 1}`).join('\n')
+      return { ok: true, rel: 'src/app.ts', kind: 'code', language: 'typescript', title: 'app.ts', text, truncated: false }
+    }
+    return passagePayload({
+      docs: [{
+        path: '/p/src/app.ts', rel: 'src/app.ts', name: 'app.ts', title: 'app.ts',
+        kind: 'code', summary: 'src/', size: 2400, mtimeMs: Date.now() - 30000, score: 2,
+        matches: [{ startLine: 60, endLine: 62, startOffset: 100, endOffset: 200, terms: ['sidebar'], snippet: '命中' }],
+      }],
+    })
+  })
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byExactClass(nodes, 'knit-hit')[0].props.onClick({ stopPropagation() {} })
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const docCalls = calls.filter((u) => u.includes('/api/doc'))
+  assert.equal(docCalls.length, 1, `点片段要打开预览读一次正文：${calls.join(' ')}`)
+  assert.equal(byExactClass(nodes, 'knit-codepane').length, 1, '走的是既有的代码预览，不是新预览')
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-gutter')[0]).split('\n').length, 100, '行号仍在')
+
+  // 再点一次：已经打开且 ready ⇒ **不重拉正文**（只换锚点，避免闪一下「加载中」）
+  byExactClass(nodes, 'knit-hit')[0].props.onClick({ stopPropagation() {} })
+  await harness.flush()
+  nodes = render()
+  assert.equal(calls.filter((u) => u.includes('/api/doc')).length, 1, '已打开时再点片段不许重拉')
+  assert.equal(byExactClass(nodes, 'knit-codepane').length, 1, '预览仍然开着（没被切成关闭）')
+})
+
+test('v0.20 命中段：与「直接命中」合成一条 metadata 行（命中段在前，中间竖线）', async () => {
+  /* 2026-10-07 用户裁决：两条 metadata 分两行会让每一行都变高；合成一条 ——
+     命中段在左（本版最该被看见的那一格），中间一条 1px 中性竖线。 */
+  const now = Date.now()
+  const payload = passagePayload({
+    context: {
+      primary: [{
+        rel: 'README.md', title: 'README', summary: '侧栏说明', mtimeMs: now - 30000,
+        kind: 'md', source: 'md', reason: { code: 'bodyMatch', terms: ['sidebar'], fields: 1, term: 'sidebar' },
+      }],
+      supporting: [], related: [],
+    },
+  })
+  installFetch((url) => (url.includes('/api/doc')
+    ? { ok: true, rel: 'README.md', title: 'README', text: '# README\n', truncated: false }
+    : payload))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.equal(byExactClass(nodes, 'knit-subrow').length, 1, '两条 metadata 共用一个行容器')
+  const row = byToken(nodes, 'knit-doc').find((r) => /README/.test(textOf(r)))
+  const txt = textOf(row)
+  assert.ok(txt.includes('正文命中 sidebar'), `理由仍然在：${txt}`)
+  assert.ok(txt.indexOf('命中段') < txt.indexOf('正文命中'), `命中段在理由前面：${txt}`)
+  assert.ok(txt.includes('命中段 147–163'), `命中段要渲染出来：${txt}`)
+  // reason.code = bodyMatch ⇒ 渲染成「正文命中 sidebar」（why.bodyMatch；2026-10-07 起中文不用全角冒号）
+  assert.equal(byExactClass(nodes, 'knit-subrow-sep').length, 1, '两者都在时：有且只有一条竖线分隔')
+})
+
+test('v0.20 命中段：点整行（不是只点那行字）也要直接定位到这一段', async () => {
+  /* 用户原话：「我在点击这个文档或者是代码块的时候，就进入一个预览，那能不能直接定位到
+     这几段呢？这样的交互非常丝滑」—— 于是行点击与「点那行字」走同一条锚点路径。
+     ⚠️ 测试替身没有真实布局（harness 从不给 ref 赋值），横带本身量不到行高；所以这里
+     断言「预览开了 + 走既有代码预览」，并**另用源码守卫**钉住 `firstMatchOf` 真的被传进去。 */
+  const { calls } = installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      const text = Array.from({ length: 100 }, (_, i) => `const line${i + 1} = ${i + 1}`).join('\n')
+      return { ok: true, rel: 'src/app.ts', kind: 'code', language: 'typescript', title: 'app.ts', text, truncated: false }
+    }
+    return passagePayload({
+      docs: [{
+        path: '/p/src/app.ts', rel: 'src/app.ts', name: 'app.ts', title: 'app.ts',
+        kind: 'code', summary: 'src/', size: 2400, mtimeMs: Date.now() - 30000, score: 2,
+        matches: [{ startLine: 60, endLine: 62, startOffset: 100, endOffset: 200, terms: ['sidebar'], snippet: '命中' }],
+      }],
+    })
+  })
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const openBlock = source.slice(source.indexOf('const openPreview = React.useCallback'), source.indexOf('const togglePreview = React.useCallback'))
+  const toggleBlock = source.slice(source.indexOf('const togglePreview = React.useCallback'), source.indexOf('const closePreview = React.useCallback'))
+  assert.match(openBlock, /previewFor\(doc, firstMatchOf\(doc\)\)/, '方向键 / glyph 打开预览时也要带第一段命中')
+  assert.match(toggleBlock, /previewFor\(doc, firstMatchOf\(doc\)\)/, '点整行（togglePreview）必须带第一段命中')
+
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  byToken(nodes, 'knit-doc')[0].props.onClick({})
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  assert.equal(calls.filter((u) => u.includes('/api/doc')).length, 1, '点整行要打开预览（读一次正文）')
+  assert.equal(byExactClass(nodes, 'knit-codepane').length, 1, '走的是既有的代码预览')
+  assert.equal(textOf(byExactClass(nodes, 'knit-code-gutter')[0]).split('\n').length, 100, '整篇正文都在，锚点只是滚动位置')
+})
+
+test('v0.20 命中片段：样式纪律 —— 中性灰横带、可点但不像按钮、不用品牌色', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // ① 高亮横带：定位、不吃点击、中性令牌（--knit-active-bg 是灰阶，不是品牌色）
+  const hit = css.match(/\.knit-code-hit\{([^}]*)\}/)[1]
+  assert.match(hit, /position:absolute/, '横带是叠上去的一层，不改 DOM 结构')
+  assert.match(hit, /pointer-events:none/, '横带不许挡选择 / 滚动 / 点击')
+  assert.match(hit, /--knit-active-bg/, '用既有中性灰令牌 —— 不用品牌色，也不是荧光笔')
+  assert.ok(!/#|rgb|hsl/.test(hit.replace(/var\([^)]*\)/g, '')), `不许写死颜色：${hit}`)
+
+  // ② 命中段那一格：长得像文字（无底色、无边框），但点得动
+  const row = css.match(/\.knit-hit\{([^}]*)\}/)[1]
+  // ⚠️ 2026-10-07 用户裁决：「叫它寻一个背景就行了，寻灰背景就行了，不需要在背景填充
+  //    外面再加一个白色的描边」—— 灰底用中性令牌，且仍然不许有描边 / 环。
+  //    同一天第二轮：「圆角能不能改成一个胶囊……只是说圆角再增加 2 倍」⇒ 3px → 6px。
+  assert.match(row, /background:var\(--knit-chip-bg/, '灰底走中性令牌（--knit-chip-bg）')
+  assert.match(css.match(/\.knit-root\{([^}]*)\}/)[1], /--knit-chip-bg:/, '令牌必须先在 .knit-root 里定义')
+  assert.match(css.match(/body\[data-ds-dark-theme\] \.knit-root\{([^}]*)\}/)[1], /--knit-chip-bg:/, '暗色主题也要有一套值')
+  assert.match(row, /cursor:pointer/, '可点这件事仍然要说出来')
+  assert.match(row, /border-radius:6px/, '圆角 6px —— 用户要的胶囊感（原话「圆角再增加 2 倍」，盒子高 17px）')
+  assert.ok(!/color:var\(--dsw-alias-brand|--knit-brand/.test(row), '不用品牌色强调')
+  assert.match(row, /outline:none/, '选中 / 聚焦都不许画环（白描边）')
+  assert.ok(!/border:(?!0)/.test(row), '这一格不许有描边（border:0 除外）')
+  assert.match(css.match(/\.knit-hit:hover,\.knit-hit:focus-visible\{([^}]*)\}/)[1], /text-decoration:underline/,
+    '键盘焦点靠下划线表达，不再靠环')
+  // 高亮横带再浅一半（2026-10-07 用户裁决）
+  assert.match(hit, /opacity:\.5/, '横带背景降到一半强度')
+  // 两条 metadata 合成一条行：命中段在前，中间一条 1px 竖线（不是虚线、不加底色）
+  const sep = css.match(/\.knit-subrow-sep\{([^}]*)\}/)[1]
+  assert.match(sep, /width:1px/, '分隔线是 1px')
+  assert.ok(!/dashed|linear-gradient/.test(sep), '不是虚线 / 渐变的分隔带')
+  const sub = css.match(/\.knit-subrow\{([^}]*)\}/)[1]
+  assert.match(sub, /display:flex/, '两条 metadata 共用一个 flex 行')
+  assert.match(sub, /flex-wrap:nowrap/, '不许折行 —— 一行就是一行（用户 2026-10-07 明确要求）')
+
+  // ③ 文字必须在横带之上（横带是定位元素，会盖住静态兄弟）
+  assert.match(css.match(/\.knit-code-src\{([^}]*)\}/)[1], /z-index:1/, '正文在横带之上')
+})
+
+test('v0.20 命中片段：i18n 两种语言都有 {range} 占位', async () => {
+  // ZH 的**运行时**行为已经由上一条用例钉住（渲染出来的是「命中段 147–163」）。
+  // EN 没有第二条渲染入口（右栏同一份组件、只换注入的 locale），所以这里守**词条本身**：
+  // 两种语言都要有 `row.passages`，且都必须带 `{range}` 占位符 —— 少一个占位符，
+  // 用户看到的就是一句没有行号的「Passages:」。
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const hits = source.match(/'row\.passages':\s*'[^']*'/g) || []
+  assert.equal(hits.length, 2, `row.passages 必须在 ZH / EN 各出现一次：${hits.join(' | ')}`)
+  for (const entry of hits) {
+    assert.match(entry, /\{range\}/, `词条必须带行号占位符：${entry}`)
+  }
+  assert.ok(hits.some((h) => h.includes('命中段')), '有中文词条')
+  // ⚠️ 2026-10-07 用户裁决：中文从「命中片段」缩到「命中段」（少一个字就少一分干扰），
+  //    英文跟着从 Passages: 收到 Passage: —— 两个词条仍然各带 {range} 占位符。
+  assert.ok(hits.some((h) => h.includes('Passage:')), '有英文词条')
+})
+
+test('v0.20 命中段：中文这一行不用全角冒号，英文保留 ASCII 冒号（2026-10-07 用户裁决）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  // 左边那格（命中段）与右边那格（6 个理由标签）是**同一个槽位**：只去掉「直接命中」
+  // 那一处的冒号，代码文件的行就会变回「文件名命中：…」—— 标点会随理由类型跳来跳去。
+  for (const literal of ['命中：', '命中段：']) {
+    assert.ok(!source.includes(literal), `中文这一行不留全角冒号：${literal}`)
+  }
+  // 英文保留：ASCII 冒号只占半个字宽，而且它把标签和值绑在一起（去掉就成了
+  // 「direct match knit」——读起来像在说 match 这个词）
+  assert.ok(source.includes("'why.direct': 'direct match: {term}'"), '英文理由仍是 direct match: {term}')
+  assert.ok(source.includes("'row.passages': 'Passage: {range}'"), '英文命中段仍是 Passage: {range}')
+})
+
+test('v0.20 命中片段：媒体行不渲染片段行（媒体没有可检索正文）', async () => {
+  installFetch((url) => {
+    if (url.includes('/api/doc')) {
+      return { ok: true, rel: 'a.png', title: 'a', text: '', truncated: false }
+    }
+    if (url.includes('kind=media')) {
+      // 故意给媒体条目**塞上** matches（宿主永远不给），客户端也必须不渲染 ——
+      // 这道守卫防的是「顺手把所有 rows 都接上片段行」这种回归。
+      const base = mediaPayload()
+      return {
+        ...base,
+        docs: base.docs.map((d) => (d.kind === 'image'
+          ? { ...d, matches: [{ startLine: 1, endLine: 2, startOffset: 0, endOffset: 4, terms: ['x'], snippet: 'x' }] }
+          : d)),
+      }
+    }
+    return mixedPayload()
+  })
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.ok(byExactClass(nodes, 'knit-media-card').length >= 1, '媒体卡片在')
+  assert.equal(byExactClass(nodes, 'knit-hit').length, 0, '媒体卡片不带命中片段')
+})
+
+/* ── v0.20：Markdown 预览的**文本锚点**（2026-10-07 用户裁决）─────────────────
+   原话：「代码模块命中段……点进去查看文档详情，已经进入了指定的段落。但是文档没有
+   进入指定段落，文档这边也参考代码块一样，选中文档以后进入详情，要指定到段落」。
+   代码那边能按行高算（`anchorBandFor`），Markdown 那边**算不了** —— 正文是 DSH 的
+   `MarkdownText` 渲染出来的富文本，DOM 里没有行号、也没有字符偏移。所以改成
+   「从片段原文里取一根针，再到渲染结果里找那根针」。这一组用例守的就是这根针：
+   怎么归一化、怎么挑、取不到时**必须什么都不做**。 */
+
+test('v0.20 文档锚点：Markdown 原文归一化成「渲染后 DOM 里那串文字」', () => {
+  const { docNeedleText } = loadClientModule().exports.__test
+  // 行首语法符在 DOM 里根本不存在（标题是标签、列表符号是伪元素、引用是缩进）
+  assert.equal(docNeedleText('## 2.2 本版改动与取舍'), '2.2 本版改动与取舍')
+  assert.equal(docNeedleText('> 引用里的一句话'), '引用里的一句话')
+  assert.equal(docNeedleText('1. 有序列表的一项'), '有序列表的一项')
+  // 行内标记符会被渲染成元素 ⇒ 去掉标记、留下文字
+  assert.equal(docNeedleText('- **加粗** 与 `代码` 与 ~~删除~~'), '加粗 与 代码 与 删除')
+  // 链接只留文字
+  assert.equal(docNeedleText('见 [设计文档](https://x/y.md) 第三节'), '见 设计文档 第三节')
+  // 空白折叠（DOM 那一侧也这么折，见 docAnchorHit）
+  assert.equal(docNeedleText('  - [x]  多余   空白 '), '[x] 多余 空白')
+  // ⚠️ 下划线只在**成对强调**处删：snake_case 里的下划线是正文的一部分，删了反而对不上
+  assert.equal(docNeedleText('snake_case 与 _斜体_ 对比'), 'snake_case 与 斜体 对比')
+})
+
+test('v0.20 文档锚点：从片段原文取针 —— 跳太短的行、去重、有上限', () => {
+  const { docAnchorNeedles, DOC_NEEDLE_CHARS, DOC_NEEDLE_MIN, DOC_NEEDLE_MAX } = loadClientModule().exports.__test
+  const lines = [
+    '# 一',                                    // 归一化后太短 ⇒ 不是针
+    '',
+    '## 2.2 本版改动与取舍是什么',             // ①
+    '- 短',                                    // 太短
+    '这一行足够长所以会被当成一根针来用',      // ②
+    '## 2.2 本版改动与取舍是什么',             // 与 ① 重复 ⇒ 去掉
+    '第三根针也足够长可以拿来当锚点用',        // ③
+    '第四根针也足够长可以拿来当锚点用',        // ④
+    '第五根针不该出现因为最多只要四根针',      // 超出上限
+  ]
+  const body = lines.join('\n')
+  const from = body.indexOf('## 2.2')
+  const needles = docAnchorNeedles(body, { startOffset: from, endOffset: body.length })
+  assert.equal(needles.length, DOC_NEEDLE_MAX, `最多 ${DOC_NEEDLE_MAX} 根：${needles.join(' | ')}`)
+  assert.equal(needles[0], '2.2 本版改动与取舍是什么', '第一根针是片段里第一个够长的行')
+  assert.equal(new Set(needles).size, needles.length, '针不许重复')
+  for (const needle of needles) {
+    assert.ok(needle.length >= DOC_NEEDLE_MIN, `针不能太短（>=${DOC_NEEDLE_MIN}）：${needle}`)
+    assert.ok(needle.length <= DOC_NEEDLE_CHARS, `针不能太长（<=${DOC_NEEDLE_CHARS}）：${needle}`)
+    assert.ok(body.includes(needle), `针必须真的出现在正文里：${needle}`)
+  }
+  assert.ok(!needles.includes('一'), '太短的行不许当针（否则正文里到处命中）')
+  assert.ok(!needles.some((n) => n.includes('第五根')), '超上限的行不进候选')
+
+  // 偏移量对不上（正文被截断过 / 宿主换了口径）⇒ 退回 snippet，仍然只当线索用
+  assert.deepEqual(docAnchorNeedles('', { snippet: '## 一句话锚点足够长到能当针用' }), ['一句话锚点足够长到能当针用'],
+    '偏移量对不上时退回 snippet（仍然要够长才当针）')
+  // 什么都没有 ⇒ 空数组：调用方**不许猜**，空数组就是「什么都不做」
+  assert.deepEqual(docAnchorNeedles('正文在这里', null), [])
+  assert.deepEqual(docAnchorNeedles('短正文', { startOffset: 999, endOffset: 1200 }), [],
+    '偏移量越界且没有 snippet ⇒ 不许闭眼切一段出来滚过去')
+})
+
+test('v0.20 文档锚点：同一根针出现多次时，挑「最接近锚点的那一次」而不是全篇最早那次', () => {
+  const { docPickOffset } = loadClientModule().exports.__test
+  // 正文拼出来 3000 个字，`knit_docs` 在第 20 / 1500 / 2920 三个位置各出现一次；
+  // 锚点在原文 50% 处 ⇒ 必须挑中间那一次。
+  const hay = 'x'.repeat(20) + 'knit_docs' + 'y'.repeat(1471) + 'knit_docs' + 'z'.repeat(1411) + 'knit_docs'
+  assert.equal(docPickOffset(['knit_docs'], hay, 0.5), 1500, '重复的针按位置比例挑最近的')
+  assert.equal(docPickOffset(['knit_docs'], hay, 0), 20, '锚点在开头 ⇒ 挑最早那次')
+  assert.equal(docPickOffset(['knit_docs'], hay, 0.999), 2920, '锚点在结尾 ⇒ 挑最后一次')
+  assert.equal(docPickOffset(['独一无二的一句很长的话'], hay, 0.5), -1, '找不到就是 -1')
+  assert.equal(docPickOffset(['knit_docs'], '', 0.5), -1, '空正文不许闭眼返回 0')
+  assert.equal(docPickOffset([], hay, 0.5), -1)
+})
+
+test('v0.20 文档锚点：独特的针优先于「离锚点更近但重复」的针', () => {
+  const { docPickOffset } = loadClientModule().exports.__test
+  // `常见词` 出现两次（第 10 / 100 位，其中第 100 位正好压在锚点上），
+  // `只出现一次的句子` 在很后面 —— 独特的针仍然赢：它出现一次，落哪就是哪。
+  const hay = 'x'.repeat(10) + '常见词' + 'y'.repeat(84) + '常见词' + 'z'.repeat(200) + '只出现一次的句子'
+  assert.equal(docPickOffset(['常见词', '只出现一次的句子'], hay, 100 / hay.length),
+    hay.indexOf('只出现一次的句子'), '独特的针优先')
+})
+
+test('v0.20 文档锚点：DocPane 只包一层，渲染仍是 MarkdownText（替身没有 DOM 也不许抛）', async () => {
+  const { DocPane } = loadClientModule().exports.__test
+  harness.reset()
+  const tree = harness.render(h(DocPane, {
+    text: '正文里的一行足够长的锚点文字',
+    anchor: { startOffset: 0, endOffset: 6, snippet: '正文里的一行' },
+    anchorSeq: 2,
+    // ⚠️ 正文走**显式 prop**（`body`），与产品接线一致 —— 见渲染点那条注释：
+    //    替身展开函数组件时只传 props，走 children 的话 MarkdownText 会凭空消失。
+    body: h('span', { className: 'inner' }, 'x'),
+  }))
+  assert.equal(byExactClass(tree, 'knit-md-body').length, 1, 'MarkdownText 必须包在 .knit-md-body 里（DocPane 只负责滚）')
+  assert.equal(byClass(tree, 'inner').length, 1, '正文原样透传 —— 这里不许自己渲染 Markdown')
+  // ⚠️ 替身没有 document：layout effect 会在 harness.flush() 里真的跑一次，
+  //    这里不抛异常就说明那条守卫在（否则整个面板在无 DOM 环境下会崩）。
+  await harness.flush()
+})
+
+test('v0.20 文档锚点：接线守卫 —— Markdown 走 DocPane，代码走 CodePane，两边都带 anchorSeq', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+
+  // Markdown 分支：DocPane 包着 MarkdownText（**不许**自己造第二套渲染器）
+  assert.match(source,
+    /h\(DocPane, \{[\s\S]*?text: preview\.text,[\s\S]*?anchor: preview\.anchor,[\s\S]*?anchorSeq: preview\.anchorSeq,[\s\S]*?body: h\(MarkdownText, \{[\s\S]*?pathImages: pathImages \|\| undefined,\s*\}\),/,
+    'Markdown 预览 = DocPane(锚点) + MarkdownText(渲染)')
+  // 代码分支同样带上序号：重复点同一段也要再滚一次；语言提示也必须**原样**带过去
+  // （v0.20 语法高亮要用它，见下一条用例 —— 客户端不许自己看扩展名）
+  assert.match(source,
+    /h\(CodePane, \{[\s\S]*?text: preview\.text,[\s\S]*?language: preview\.language,[\s\S]*?anchor: preview\.anchor,[\s\S]*?anchorSeq: preview\.anchorSeq,/)
+  // 序号只在「同一篇已打开、只换锚点」那条路径上递增 —— 别的入口都是新开，天然会重跑
+  assert.match(source, /anchor: match \|\| null, anchorSeq: \(Number\(current\.anchorSeq\) \|\| 0\) \+ 1/,
+    '重复点同一段也要 +1，否则第二次点没反应')
+  // 无 DOM（测试替身 / 老宿主）必须**静默**返回，不是抛异常
+  assert.match(source, /typeof document === 'undefined' \|\| typeof document\.createTreeWalker !== 'function'/)
+  // 找不到就什么都不做 —— 不猜、不兜底滚到开头
+  assert.match(source, /const hit = docAnchorHit\(box, needles, ratio\)\s*\n\s*if \(!hit \|\| typeof hit\.getBoundingClientRect !== 'function'\) return false/)
+  // 真机实测（2026-10-07）：DSH 的**行内 code** 是 inline-block ⇒ 淡底必须往上走到段落，
+  // 而不是画在「`matches: [...]`」那一个小片片上
+  assert.match(source, /'inline-block': 1/, 'DOC_INLINE_DISPLAY 必须把 inline-block 当行内')
+  // 重复出现的针按**位置比例**挑，不能闭眼取 indexOf 的第一次（长文档里同一个词出现几十次）
+  assert.match(source, /docPickOffset\(needles, text, Number\.isFinite\(ratio\) \? ratio : -1\)/)
+  assert.match(source, /scrollToDocAnchor\(boxRef\.current, docAnchorNeedles\(text, anchor\), ratio\)/,
+    'DocPane 要把位置比例一路传下去')
+  assert.match(source, /Math\.min\(1, Math\.max\(0, startOffset \/ text\.length\)\)/)
+  // 滚的是正文那个既有滚动容器（不开第二个纵向滚动条）
+  assert.match(source, /box\.closest\('\.knit-preview-body'\)/)
+  // 淡底只活 1.2s，然后自己收掉（不留状态）
+  assert.match(source, /setTimeout\(\(\) => \{ hit\.classList\.remove\('knit-doc-hit'\) \}, FLASH_MS\)/)
+})
+
+test('v0.20 文档锚点：样式纪律 —— transition 在基础选择器上、时长 == FLASH_MS、不画边框', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const { FLASH_MS } = loadClientModule().exports.__test
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  assert.equal(FLASH_MS, 1200, '淡底时长就是既有那个 FLASH_MS')
+  // transition 必须在**基础**选择器上：写进 .knit-doc-hit 的话，类一移除背景会「啪」地消失
+  const base = css.match(/\.knit-md-body :is\(([^)]*)\)\{([^}]*)\}/)
+  assert.ok(base, '基础选择器必须存在')
+  assert.match(base[2], /transition:background 1\.2s ease/, 'CSS 时长必须与 FLASH_MS 一致（1.2s）')
+  assert.match(base[2], /border-radius:6px/)
+  assert.ok(!/\.knit-doc-hit\{[^}]*transition/.test(css), 'transition 不许写在 .knit-doc-hit 自己身上')
+  const hit = css.match(/\.knit-md-body \.knit-doc-hit\{([^}]*)\}/)
+  assert.ok(hit, '.knit-doc-hit 规则必须存在')
+  assert.match(hit[1], /background:var\(--knit-active-bg/, '用既有中性令牌，不新增变量')
+  assert.ok(!/border/.test(hit[1]), '不许画边框（与代码那边的横带同一个纪律）')
+  assert.ok(!/transform|position:/.test(hit[1]), '不许位移')
 })

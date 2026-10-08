@@ -51,21 +51,27 @@ const SUMMARY_CHARS = 90
 const SNIPPET_CHARS = 200
 
 /**
- * 只在原文的**前 2500 字**里找命中段落。
+ * 单文件参与检索的上限（KB）。
  *
- * 必须与 `index.js` 的 `HAYSTACK_CHARS` 一致 —— 评分只看这个窗口，
- * 若在这里找窗口外的内容，会出现「排上来了、但段落里没有命中词」的自相矛盾。
+ * **必须与 `index.js` 的 `MAX_BODY_BYTES`（256 KB）一致** —— 下面那句真话要如实
+ * 说出边界，而这个边界归宿主所有。这是 10.4「镜像表」里的一项（v0.20 之前这里
+ * 镜像的是 `HAYSTACK_CHARS = 2500`）。
  */
-const SNIPPET_WINDOW = 2500
+const MAX_INDEXED_KB = 256
 
 /**
  * 「工作区里有文档，但当前话题一个词都没命中」时补的那句真话。
  *
- * 拼自 `SNIPPET_WINDOW` 而不是再抄一遍 2500 —— 这个窗口在本仓库已经有两份
- * （`index.js` 的 `HAYSTACK_CHARS` 和这里的 `SNIPPET_WINDOW`），不要有第三份。
+ * ⚠️ v0.20 改写了这句话。v0.19 及以前它说的是「只在每篇前 2500 字里找，更深的
+ * 用 grep」—— 那是当时评分窗口的真实限制。v0.20 取消了这个窗口（需求 §3），
+ * 那句话**从今往后是假的**，留着还会让模型为一件不存在的事去做多余的 `grep`。
+ *
+ * 现在真正的边界只剩两条，都要如实说出来：单文件大小上限（`MAX_INDEXED_KB`）
+ * 与媒体没有正文（需求 §17）。
  */
-const HAYSTACK_NOTE =
-  `Matches come from the first ${SNIPPET_WINDOW} characters of each file; use grep for anything deeper.`
+const FULLTEXT_NOTE =
+  `Every document and code file was searched in full (files over ${MAX_INDEXED_KB} KB are `
+  + 'indexed only up to that size); images and videos have no searchable text.'
 
 /**
  * 模型面向的描述。**必须短** —— 它会进每一次请求的系统提示词。
@@ -86,10 +92,11 @@ const HAYSTACK_NOTE =
  * 与**不依赖文件名**。最后一句是行为引导 —— 直说「别自己来」。
  */
 const DESCRIPTION = 'Project context for the current task, from the workspace documents and code: '
-  + 'primary (read first) / supporting (evidence, implementation) / related. '
-  + 'Ranked by IDF-weighted relevance to the conversation (or an explicit query), then split '
-  + 'by deterministic local rules — prefer it to globbing filenames or counting keyword hits. '
-  + 'Reads the workspace only; stores nothing, calls no model.'
+  + 'primary (read first) / supporting (evidence, implementation) / related, each with its '
+  + 'matched passages (line range + snippet). '
+  + 'Ranked by IDF-weighted relevance (or explicit query), then split '
+  + 'by deterministic rules — prefer it to globbing or counting keyword hits. '
+  + 'Reads the workspace; stores nothing, calls no model.'
 
 /**
  * 参数 schema。与 `defineTool` 的编译产物逐字一致
@@ -173,6 +180,32 @@ const ITEM_SCHEMA = {
     // 时间序模式没有命中词，抽不出来就不带这个字段，
     // 而不是给个空串假装有。
     snippet: { type: 'string' },
+    // v0.20：命中**内容片段**（需求 §11）。文件仍是这个工具的基本实体，
+    // `matches` 是附加在它上面的一层：最多 `PASSAGE_MAX_PER_FILE`（2）段，
+    // 按行号升序，每段自带行号与偏移量 —— 拿到它就能直接去读那一小段，
+    // 不必把整篇大文件塞进上下文（需求 §15/§16）。
+    // **可选**：没有片段（零命中、媒体、窗口外、`bodyTf` 不足）时这个键不出现，
+    // 而不是给个空数组假装搜过。
+    matches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          // 1-based，闭区间 —— 与编辑器里看到的一致。
+          startLine: { type: 'integer' },
+          endLine: { type: 'integer' },
+          // 0-based 字符偏移，`text.slice(startOffset, endOffset)` 恒等于这段原文。
+          startOffset: { type: 'integer' },
+          endOffset: { type: 'integer' },
+          // 这一段里真实命中的话题词（来自 `rankByRelevance` 的 `matchedTerms`）。
+          terms: { type: 'array', items: { type: 'string' } },
+          // 这一段里**最相关**的那 200 字（不是整段）。
+          snippet: { type: 'string' },
+        },
+        required: ['startLine', 'endLine', 'startOffset', 'endOffset', 'terms', 'snippet'],
+      },
+    },
   },
   // `kind` 也是 required：`buildContext()` 每条都给了（取不到时回落 `'md'`）。
   // 声明成可选就等于允许「有的条目有 kind、有的没有」这种形状漂移。
@@ -298,7 +331,10 @@ function oneLine(text) {
  * 1. **在原文上切，不在 `haystack` 上切。** `haystack.body` 是 `.toLowerCase()` 过的
  *    （`index.js:240`），在它上面切会把 `BM25` 变成 `bm25` ——
  *    与「标签是你自己打的字，大小写原样保留」这条既有承诺直接冲突。
- * 2. **只看前 `SNIPPET_WINDOW` 字**，与评分窗口一致，避免「排上来但段落里没命中词」。
+ * 2. **全文分块**（v0.20）。以前只看每篇前 2500 字，是为了与评分窗口对齐
+ *    （否则会出现「排上来但段落里没命中词」）。窗口取消后评分看全文，这里也看全文 ——
+ *    不过正常路径上命中片段已由 `passage.js` 在评分时算好（`doc.matches`），
+ *    这个函数现在是「没有片段数据时的兜底」。
  * 3. **块太长时以命中词为中心截**，不是从头截 —— 否则命中那句话可能正好被截掉，
  *    段落就白给了。
  * 4. **跳过与标题重复的块。** 拿真实工作区试跑时发现的：一篇文档的 H1 标题里含全部命中词，
@@ -324,10 +360,8 @@ export function pickSnippet(text, terms, options = {}) {
   const norm = (s) => String(s).replace(/[#*|`>\s]+/g, ' ').trim().toLowerCase()
   const titleNorm = norm(options.title || '')
 
-  const window = source.slice(0, SNIPPET_WINDOW)
-
   // 按空行切块 —— 纯字符串运算，不解析 Markdown 结构
-  const blocks = window.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean)
+  const blocks = source.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean)
   if (blocks.length === 0) return ''
 
   // 选**命中词种数最多**的那块；并列取靠前的（不给后面的块不该有的优势）
@@ -419,21 +453,52 @@ export function renderToolText(value, readSnippet) {
     if (total === 0) return EMPTY
     // 文档在、但一个词都没命中 —— **不许说成「工作区里没有文档」**：
     // 那是一句假话，而且会把 agent 推向一个错的结论（「这个项目里没有相关材料」）。
-    // 真机实测：问「路径越界怎么防」时 49 篇一篇都没命中，因为文档侧只看每篇
-    // **前 2500 字**（`index.js` 的 HAYSTACK_CHARS），而这个词在 5 篇 .md 里
-    // 全部出现在 2500 字之后。说实话 + 给下一步，比一句错的空结果有用。
+    // 真机实测（v0.19 的时代）：问「路径越界怎么防」时 49 篇一篇都没命中，因为文档侧
+    // 只看每篇**前 2500 字**，而这个词在 5 篇 .md 里全部出现在 2500 字之后。
+    // **v0.20 取消了这个窗口**，所以「0 命中」现在是句更强的话；
+    // 但仍要把真实边界（单文件大小上限、媒体无正文）说出来，见 `FULLTEXT_NOTE`。
     return [
       `No document or code file matched the current topic — 0 of ${files(total)} contain the query terms.`,
-      HAYSTACK_NOTE,
+      FULLTEXT_NOTE,
     ].join('\n')
   }
 
-  /** 层内每一项：一行路径 + 标题、一行摘要、一行 `Why:`、可选的 `match:` 段落。 */
+  /**
+   * 一项的命中片段（v0.20）。
+   *
+   * 正常路径上片段是 `passage.js` 在评分时算好的（`item.matches`，带行号）；
+   * `readSnippet` 是不带片段数据时的兜底（老调用方、窗口外的文档）。
+   * 两者都没有就不渲染 `match:` 那一行 —— 不编造。
+   *
+   * 行号只在 `matches` 存在时才有，所以旧的 `readSnippet` 返回值一字不改。
+   */
+  const matchLine = (item) => {
+    const matches = item && Array.isArray(item.matches) ? item.matches : []
+    const first = matches.find((m) => m && typeof m.snippet === 'string' && m.snippet)
+    if (first) {
+      const range = Number.isInteger(first.startLine) && Number.isInteger(first.endLine)
+        ? `lines ${first.startLine}–${first.endLine} — ` : ''
+      return `${range}${flatten(first.snippet, SNIPPET_CHARS)}`
+    }
+    const raw = typeof readSnippet === 'function' ? readSnippet(item) : ''
+    return raw ? flatten(raw, SNIPPET_CHARS) : ''
+  }
+
+  /**
+   * **只渲染一段**（`match:`）。第二段（`also:`）在 v0.20 实测后被砍掉 ——
+   * 保留这段注释，免得下一个人又把它加回来。
+   *
+   * 需求 §16 的预算是「工具输出不得因为片段而膨胀」。实测（30 篇全命中的压力
+   * 语料、5 条结果、比较渲染后的文本而不是结构化 value）：v0.19 基线 2702 字符，
+   * 带 `match:` + `also:` 两段时 4614 字符 = **1.71×**，超过实现说明 §7 R2 定的
+   * 1.4× ⇒ 按那条规则把**工具侧**降到一段（砍后 1.35×）。面板侧仍是每文件 ≤2 段：
+   * 它走本地 HTTP、不进模型上下文，需求 §11 的「可带多段」在那里成立。
+   * 这也正对需求 §15 的措辞：给的是「**最相关片段**」（单数）+ 文件 + 理由。
+   */
   const lines = (items) => items.map((item, index) => {
     const summary = oneLine(item.summary)
     const why = whyText(item.reason)
-    const raw = typeof readSnippet === 'function' ? readSnippet(item) : ''
-    const snippet = raw ? flatten(raw, SNIPPET_CHARS) : ''
+    const snippet = matchLine(item)
     return `${index + 1}. ${item.rel} — ${item.title}`
       + `${summary ? `\n   ${summary}` : ''}`
       + `${why ? `\n   Why: ${why}` : ''}`
@@ -658,9 +723,25 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
         mtimeMs: Number.isFinite(item.mtimeMs) ? Math.trunc(item.mtimeMs) : 0,
       })
 
+      // v0.20：命中片段**在 `scan()` 里就算好了**（`payload.ranked[].matches`，带行号），
+      // 键是 `rel`。有片段就不再读盘 —— 这是顺带拿到的性能收益：v0.19 为了抽 200 字，
+      // 每一条都要把整篇文件再读一遍（`readDocument` → `pickSnippet`）。
+      const matchesByRel = new Map()
+      for (const doc of (Array.isArray(payload.ranked) ? payload.ranked : [])) {
+        if (Array.isArray(doc.matches) && doc.matches.length > 0) {
+          matchesByRel.set(String(doc.rel || ''), doc.matches)
+        }
+      }
+
       // 逐个抽命中段落 —— **只对真正要返回的条目做 I/O**，不在全量名次上读盘。
       const withSnippets = async (items) => Promise.all(items.map(async (raw) => {
         const item = project(raw)
+        const matches = matchesByRel.get(String(item.rel || ''))
+        if (matches) {
+          // 单段也照旧填 `snippet` —— 渲染与老调用方都只认它。
+          const first = matches.find((m) => m && typeof m.snippet === 'string' && m.snippet)
+          return first ? { ...item, matches, snippet: first.snippet } : { ...item, matches }
+        }
         const snippet = await snippetOf(item)
         return snippet ? { ...item, snippet } : item
       }))

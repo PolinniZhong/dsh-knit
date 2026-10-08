@@ -24,9 +24,6 @@
  * 检索评测集只需要小写 haystack，不带原文 —— 它的被测对象是打分器，不需要引用图。
  */
 
-/** 与宿主一致的正文截断长度（`HAYSTACK_CHARS`）。 */
-const HAYSTACK_CHARS = 2500
-
 /** 固定的「现在」，让评测完全确定。 */
 export const NOW = 1_760_000_000_000
 
@@ -37,7 +34,7 @@ const SHARED_MTIME = NOW - 60_000
  * 造一条文档记录。
  *
  * haystack 口径严格照抄宿主（`src/host/index.js` 的 `readDoc`）：
- * **先截前 2500 字，再转小写**。
+ * **整篇正文转小写**（v0.20 起不再截前 2500 字）。
  *
  * @param {string} rel - 工作区相对路径
  * @param {{title: string, summary?: string, body?: string}} doc - 三段文本
@@ -56,7 +53,7 @@ function make(rel, { title, summary = '', body = '' }) {
     haystack: {
       title: title.toLowerCase(),
       summary: summary.toLowerCase(),
-      body: body.slice(0, HAYSTACK_CHARS).toLowerCase(),
+      body: body.toLowerCase(),
     },
   }
 }

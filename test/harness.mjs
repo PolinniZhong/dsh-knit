@@ -14,11 +14,15 @@ const CLIENT_PATH = fileURLToPath(new URL('../src/client/client.js', import.meta
 /**
  * 装一个假 window + 假 React，并把客户端模块的工厂函数取出来。
  *
- * @param {{primitives?: boolean}} options - `primitives: false` 用来测降级路径
- * @returns {{factory: Function, markdownCalls: object[]}} 工厂与 MarkdownText 调用记录
+ * @param {{primitives?: boolean, noHighlighter?: boolean}} options - `primitives: false`
+ *   用来测「包整个不可用」的降级路径；`noHighlighter: true` 用来测「包在、但没导出
+ *   高亮器」的降级路径（旧版 DSH）
+ * @returns {{factory: Function, markdownCalls: object[], highlightCalls: string[]}} 工厂、
+ *   MarkdownText 调用记录、高亮器收到的语言标识
  */
 export function loadClientModule(options = {}) {
   const usePrimitives = options.primitives !== false
+  const useHighlighter = usePrimitives && options.noHighlighter !== true
 
   let captured = null
   globalThis.window = {
@@ -38,6 +42,8 @@ export function loadClientModule(options = {}) {
   }
 
   const markdownCalls = []
+  const highlightCalls = []
+  const highlightCodes = []
   const primitives = {
     // ⚠️ 真身是 React.memo(...) 的产物 —— 一个**对象**，不是函数。
     // 测试替身必须照抄这个形态，否则「typeof === 'function'」这类守卫的 bug 测不出来。
@@ -45,6 +51,27 @@ export function loadClientModule(options = {}) {
       markdownCalls.push(props)
       return { type: 'MarkdownText', props, children: [] }
     }),
+  }
+  if (useHighlighter) {
+    // 形态照抄官方：hook 收**语言标识**、返回 `(code) => HighlightSpan[][]`。
+    // 逐行按空白切成若干 run、交替给两个 `--shiki-*` 颜色 —— 既能验证「逐 token 渲染」，
+    // 又能验证拼接后文本一字不差（`textOf` 会替我们比）。
+    primitives.useCodeHighlighter = function useCodeHighlighter(language) {
+      highlightCalls.push(language)
+      return (code) => {
+        // 记下**被上色的那截正文**（不是全部正文）：封顶用例要断言「只把前 N 行交给
+        // 高亮器」，而这个差别在渲染结果上表现为「尾巴是纯文本」，从 span 数量看不出来。
+        highlightCodes.push(String(code))
+        return String(code).split('\n').map((line) => (
+          line === ''
+            ? []
+            : line.split(/(\s+)/).filter((part) => part !== '').map((text, i) => ({
+              text,
+              style: { color: i % 2 === 0 ? 'var(--shiki-token-keyword)' : 'var(--shiki-token-plain)' },
+            }))
+        ))
+      }
+    }
   }
 
   const requireStub = (spec) => {
@@ -66,6 +93,13 @@ export function loadClientModule(options = {}) {
         + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
         + 'nextIndexFor, docOptionId, planRowMotion, mergeGhostRows, motionAllowed, motionShift, '
         + 'rowLayoutPoint, applyRowFlips, '
+        // v0.20 Deep Context Retrieval：命中片段的行号区间与代码行锚点的几何。
+        + 'fmtRange, firstMatchOf, anchorBandFor, '
+        // v0.20（2026-10-07 用户裁决）：Markdown 预览的**文本锚点** —— 纯函数那半
+        // （归一化 + 取针）在这里；DOM 那半（`docAnchorHit` / `docBlockElement`）
+        // 需要真 document，走真机验证，不进这个替身。
+        + 'docNeedleText, docAnchorNeedles, docPickOffset, scrollToDocAnchor, DocPane, '
+        + 'DOC_NEEDLE_CHARS, DOC_NEEDLE_MIN, DOC_NEEDLE_MAX, '
         + 'MOTION_ENTER_MS, MOTION_EXIT_MS, MOTION_STAGGER_MS, MOTION_STAGGER_MAX, MOTION_EASE, '
         + 'MOTION_MOVE_MS, MOTION_MOVE_EPS, '
         // ⚠️ 右栏那套名字（clampPackW / clampFloatPos / nearRightEdge / PACK_*）已随
@@ -86,6 +120,8 @@ export function loadClientModule(options = {}) {
     factory: captured.factory,
     registration: captured,
     markdownCalls,
+    highlightCalls,
+    highlightCodes,
     exports: captured.factory(requireStub),
   }
 }
@@ -99,6 +135,8 @@ export function createHarness() {
   let hookStates = []
   let hookIdx = 0
   let pendingEffects = []
+  // 「状态真的被写了几次」—— 与渲染次数无关的语义级观测量（见 useState 里的说明）。
+  let stateWrites = 0
 
   const React = {
     // ⚠️ children 必须**递归摊平**（真实 React 也会摊平数组）。
@@ -117,7 +155,16 @@ export function createHarness() {
     useState(init) {
       const i = hookIdx++
       if (!(i in hookStates)) hookStates[i] = typeof init === 'function' ? init() : init
-      return [hookStates[i], (v) => { hookStates[i] = typeof v === 'function' ? v(hookStates[i]) : v }]
+      // ⚠️ 真 React 对 setState 的值先比一次 `Object.is`：**原样返回同一个对象 ⇒ 整棵子树
+      // 不重渲染**（v0.20 轮询去重就靠这条）。替身因此只在「值真的换了」时才写槽位，并把
+      // 写入次数记下来 —— 让「同样的载荷不该落状态」这类守卫**可证伪**（旧代码每 5 s 落一个
+      // 新对象，计数必然增长）。
+      return [hookStates[i], (v) => {
+        const next = typeof v === 'function' ? v(hookStates[i]) : v
+        if (Object.is(next, hookStates[i])) return
+        stateWrites += 1
+        hookStates[i] = next
+      }]
     },
     useCallback: (fn) => fn,
     useEffect: (fn) => { pendingEffects.push(fn) },
@@ -147,7 +194,19 @@ export function createHarness() {
 
   return {
     /** 重置 hook 槽位，供每个用例独立开始。 */
-    reset() { hookStates = []; hookIdx = 0; pendingEffects = [] },
+    reset() {
+      hookStates = []
+      hookIdx = 0
+      pendingEffects = []
+      stateWrites = 0
+      // ⚠️ 定时器也要清：轮询链会自己续命（`setTimeout` 排下一轮），而替身从不跑 effect
+      // 的 cleanup —— 上一个用例留下的链会在下一个用例的 `tick()` 里醒来，把它那份旧载荷
+      // 写进**共用**的 hook 槽位（换掉别人的 state）。真机不会这样：每个实例有自己的
+      // state，卸载即停表。
+      timers.clear()
+    },
+    /** 状态真被写了几次（同一个对象原样返回不算）。 */
+    stateWrites() { return stateWrites },
     /** 预置 useState 的初值（按 hook 调用顺序）。 */
     seed(values) { hookStates = values.slice() },
     /**

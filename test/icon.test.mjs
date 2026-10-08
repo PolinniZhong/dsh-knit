@@ -82,18 +82,21 @@ test('图标：内联的 path 与 assets 里的源文件逐字一致', () => {
   )
 })
 
-/* ── 配色（用户明确要求：浅色纯黑、暗色纯白）─────────── */
+/* ── 配色（2026-10-07 用户改口：不再自己写死黑白，**走 DSH 官方主文本色令牌**）── */
 
-test('配色：浅色模式纯黑、暗色模式纯白（锁死这条要求）', () => {
+test('配色：跟随 DSH 主文本色令牌，不写死 #000 / #fff', () => {
   assert.match(
     CLIENT_SOURCE,
-    /\.knit-icon\s*\{\s*color:\s*#000\s*\}/,
-    '缺少浅色模式的纯黑规则',
+    /\.knit-icon\s*\{\s*color:\s*var\(--dsw-alias-label-primary,\s*#0f1115\)\s*\}/,
+    '图标配色必须走 DSH 的主文本色令牌（浅 #0f1115 / 暗 #f9fafb 由令牌自己切）',
   )
-  assert.match(
-    CLIENT_SOURCE,
-    /body\[data-ds-dark-theme\]\s+\.knit-icon\s*\{\s*color:\s*#fff\s*\}/,
-    '缺少暗色模式的纯白规则（DSH 的暗色信号挂在 body 上）',
+  assert.ok(
+    !/data-ds-dark-theme[^{]*\.knit-icon/.test(CLIENT_SOURCE),
+    '不该再有暗色覆盖规则：令牌已经随主题切，多写一条就是自己造的一套',
+  )
+  assert.ok(
+    !/\.knit-icon\s*\{\s*color:\s*#(?:000|fff)\s*\}/.test(CLIENT_SOURCE),
+    '不许写死 #000 / #fff（暗色的 #fff 比官方 #f9fafb 还亮）',
   )
 })
 

@@ -60,7 +60,7 @@ const NOISE = [
  * @param {string} rel - 相对路径
  * @param {string} title - 标题
  * @param {string} body - 正文
- * @returns {object} 文档记录（haystack 口径与宿主一致：先截 2500 再小写）
+ * @returns {object} 文档记录（haystack 口径与宿主一致：整篇正文转小写）
  */
 function doc(rel, title, body) {
   return {
@@ -69,7 +69,7 @@ function doc(rel, title, body) {
     haystack: {
       title: title.toLowerCase(),
       summary: '',
-      body: body.slice(0, 2500).toLowerCase(),
+      body: body.toLowerCase(),
     },
   }
 }
@@ -95,7 +95,7 @@ export function buildCorpus(n) {
     haystack: {
       title: title.toLowerCase(),
       summary: '',
-      body: body.slice(0, 2500).toLowerCase(),
+      body: body.toLowerCase(),
     },
   })
 

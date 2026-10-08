@@ -247,7 +247,7 @@ test('rankByRelevance: 没有关键词时全部 0 分且不打乱顺序', () => 
 
 /* ── v0.6：BM25 的三条新行为 ─────────────────────────── */
 
-/** 造一条文档：haystack 口径与宿主一致（先截 2500 再小写）。 */
+/** 造一条文档：haystack 口径与宿主一致（v0.20：整篇正文转小写，不再截窗口）。 */
 function bm25Doc(rel, { title = '', summary = '', body = '' }, mtimeMs) {
   return {
     rel,
@@ -255,7 +255,7 @@ function bm25Doc(rel, { title = '', summary = '', body = '' }, mtimeMs) {
     haystack: {
       title: title.toLowerCase(),
       summary: summary.toLowerCase(),
-      body: body.slice(0, 2500).toLowerCase(),
+      body: body.toLowerCase(),
     },
   }
 }

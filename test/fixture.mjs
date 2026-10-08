@@ -48,6 +48,26 @@ export function makeWorkspace(extra = []) {
     const t = (base + i * 1000) / 1000
     utimesSync(abs, t, t)
   })
-  process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+  trackForCleanup(dir)
   return dir
+}
+
+/**
+ * 退出时统一清理（**一个 `exit` 监听器**，不是每个工作区一个）。
+ *
+ * 以前每个工作区都挂一个监听器：单文件里造十几个工作区就会触发
+ * `MaxListenersExceededWarning`（v0.20 的 deep-eval 一次要造 6 个、
+ * 还要跑两遍确定性 → 当场撞上）。一个 `Set` + 一个监听器行为完全等价。
+ */
+const LIVE_DIRS = new Set()
+let cleanupHooked = false
+
+function trackForCleanup(dir) {
+  LIVE_DIRS.add(dir)
+  if (cleanupHooked) return
+  cleanupHooked = true
+  process.on('exit', () => {
+    for (const d of LIVE_DIRS) rmSync(d, { recursive: true, force: true })
+    LIVE_DIRS.clear()
+  })
 }

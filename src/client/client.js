@@ -141,22 +141,31 @@ window.__ModuleLoader__.load({
       // 理由码 → 文案。宿主只给码（AGENTS.md §4.5），翻译在这里。
       // ⚠️ 2026-09-29 用户要求把这行压得更克制：原来是「直接命中当前话题：…」，
       // 读起来像调试信息。现在它是**标签 + 值**，词之间用「 · 」分隔。
-      'why.direct': '直接命中：{term}',
-      'why.titleMatch': '标题命中：{term}',
+      // ⚠️ 2026-10-07 用户裁决（去掉中文全角冒号）：这一族标签原来是
+      // 「直接命中」「标题命中」后面跟一个全角冒号。全角冒号在中文里占**一个整字宽**
+      // 且强制一个停顿 —— 这一行是 metadata，两个标签并排时显得很重；去掉后
+      // 「命中在前、值紧随」，也正是用户要的阅读顺序。**冒号只在「引出列表」时保留**
+      // （正文里的句子照旧，见 `list.failed` 这类），**英文保留 ASCII 冒号**：
+      // 它只占半个字宽，而且英文靠它把标签和值绑在一起。
+      'why.direct': '直接命中 {term}',
+      'why.titleMatch': '标题命中 {term}',
       // v0.19：代码占的是 `title` / `summary` 两个槽位（文件名、所在目录），
       // 但**不能**对 `.ts` 文件说「标题命中」—— 判据一样，称谓必须分开。
       // 这两个码由宿主直接给出（`context.js` 的 `explainContext()`），
       // 客户端不做 kind → key 的重映射：宿主给什么码就翻什么码。
-      'why.filenameMatch': '文件名命中：{term}',
-      'why.pathMatch': '路径命中：{term}',
-      'why.summaryMatch': '摘要命中：{term}',
-      'why.bodyMatch': '正文命中：{term}',
+      'why.filenameMatch': '文件名命中 {term}',
+      'why.pathMatch': '路径命中 {term}',
+      'why.summaryMatch': '摘要命中 {term}',
+      'why.bodyMatch': '正文命中 {term}',
       'why.bodyMatchPlain': '正文命中',
       'why.linkTarget': '被主要上下文引用',
       'why.linkSource': '引用了主要上下文',
       'why.related': '与当前任务相关',
 
       'row.tooltip': '{path}\n单击就地预览 · 双击在新标签页打开',
+      /* v0.20：命中片段（需求 §12）。**纯 metadata**：行号区间，不是分数、不是评分、
+         不是「相关度 92%」。点击＝就地预览并跳到那一段（代码可跳，Markdown 见已知限制）。 */
+      'row.passages': '命中段 {range}',
       'summary.empty': '（没有正文摘要）',
 
       'list.scanning': '正在扫描工作区…',
@@ -370,6 +379,8 @@ window.__ModuleLoader__.load({
       'why.related': 'related to the current task',
 
       'row.tooltip': '{path}\nClick to preview here · double-click to open in a new tab',
+      /* v0.20：matched passage range (requirement §12) — metadata only, never a score. */
+      'row.passages': 'Passage: {range}',
       'summary.empty': '(no summary)',
 
       'list.scanning': 'Scanning the workspace…',
@@ -518,6 +529,53 @@ window.__ModuleLoader__.load({
       else console.warn('[knit] ui-primitives does not export MarkdownText — preview falls back to plain text')
     } catch (error) {
       console.warn('[knit] could not load ui-primitives.MarkdownText — preview falls back to plain text', error)
+    }
+
+    /* ── 官方语法高亮器（v0.20，2026-10-07 用户新增需求）────────────────────
+       代码预览原本是**单色**（浅色黑 / 暗色白），用户的原话是「对于一个阅读代码
+       用户来说，可读性太低了」，并给了 DSH 自己那份带行号的代码视图当参照。
+
+       这里用的是**同一个包**里的 `useCodeHighlighter(language) → (code) =>
+       HighlightSpan[][]`。它的 `style.color` 一律是 `var(--shiki-*)`，而那张
+       调色板定义在 DSH 主题包里（浅色一套、`body[data-ds-dark-theme]` 一套）——
+       所以**我们一行颜色都不写**：既不会自己发明一套配色，也不会在某个主题下
+       悄悄写死白色（那正是上一轮暗色治理踩过的坑）。
+
+       ⚠️ 它是个 **hook**：必须**无条件**调用。所以缺包/缺导出时用下面这个同形状的
+       假 hook 顶上（返回的 highlighter 一律 `undefined` = 纯文本兜底），而不是在
+       组件里写「如果有就调用」—— 条件调用 hook 是 React 的硬错误。语法是**懒加载**
+       的（TypeScript / shell / JSON 启动即在，python、html、css、yaml 首次用到才
+       装载）：那一帧回落纯文本，hook 自己订阅了装载事件并会重渲染，我们不必插手。 */
+    let useCodeHighlighter = null
+    try {
+      const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
+      const candidate = primitives && primitives.useCodeHighlighter
+      if (typeof candidate === 'function') useCodeHighlighter = candidate
+      else console.warn('[knit] ui-primitives does not export useCodeHighlighter — code preview falls back to plain text')
+    } catch (error) {
+      console.warn('[knit] could not load ui-primitives.useCodeHighlighter — code preview falls back to plain text', error)
+    }
+
+    /** 没有官方高亮器时 `(code) => undefined` —— 与官方同形状，调用方不必分叉。 */
+    const PLAIN_CODE_HIGHLIGHTER = () => undefined
+    /** 假 hook：恒等返回上面那个函数（引用稳定，可以安全当 memo 依赖）。 */
+    function usePlainCodeHighlighter() { return PLAIN_CODE_HIGHLIGHTER }
+    /** 真 hook 或假 hook，二选一 —— **在组件里永远是无条件调用**（见上）。 */
+    const useCodeSpans = useCodeHighlighter || usePlainCodeHighlighter
+
+    /* 高亮结果**按文件缓存**（v0.20 性能治理，2026-10-07）。官方高亮器实测 170–560 ms /
+       千行，而「关掉再点开同一篇」「切标签再回来」都会重新挂载 `CodePane` —— 不缓存就每次
+       从头再分词一遍。键 = `rel#行数`，命中时还比一次原文（原文变了就重算）；上限 8 篇，
+       够覆盖「来回点几篇」，又不会把整库正文吊在内存里（真机量到：点开 4000 行的文件
+       3459 ms、其中 1259 ms 就是分词；重开同一篇从 2155 ms 降到几十毫秒）。 */
+    const CODE_HL_CACHE = new Map()
+    function cachedCodeSpans(key, text, run) {
+      const hit = CODE_HL_CACHE.get(key)
+      if (hit && hit.text === text) { CODE_HL_CACHE.delete(key); CODE_HL_CACHE.set(key, hit); return hit.spans }
+      const spans = run()
+      CODE_HL_CACHE.set(key, { text, spans })
+      while (CODE_HL_CACHE.size > 8) CODE_HL_CACHE.delete(CODE_HL_CACHE.keys().next().value)
+      return spans
     }
 
     /* ── 常量 ───────────────────────────────────────── */
@@ -718,18 +776,32 @@ window.__ModuleLoader__.load({
      填充改用 DSH 选中态的半透明令牌，不自己混色 —— color-mix 在旧内核上
      会让整条声明失效（invalid at computed-value time），不是渐进增强。 */
   --knit-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#4176e6);
-  /* 悬停 / 选中的灰底：在 DSH 两个令牌的**透明度上各降一档**
-     （悬停 −60% → 保留 40%；选中 −40% → 保留 60%）。
-     起因是用户觉得默认那档「太灰了」，读文档时对比度被吃掉。
-     两个主题各给一套显式值，所以这不违反「不要硬编码不跟主题」这条：
-     浅色是 rgba(38,49,72,α)（即 DSH 的 #263148），暗色是白色低透明度。 */
-  --knit-hover-bg:rgba(38,49,72,.024);   /* DSH .0588 × 0.4 */
-  --knit-active-bg:rgba(38,49,72,.061);  /* DSH .1020 × 0.6 */
+  /* 悬停 / 选中 / 命中段的灰底：**一律从 DSH 官方那两个交互令牌推**，不自己发明色。
+     官方值在 dsh-client-ui-theme/lib/client.js 里，浅色在前、暗色在后：
+       --dsw-alias-interactive-bg-hover   浅 #2631480f = 5.88%   暗 #ffffff14 = 7.84%
+       --dsw-alias-interactive-bg-active  浅 #2631481a = 10.20%  暗 #ffffff24 = 14.12%
+     Knit 的行比 DSH 的控件更小更密，所以取官方透明度的**一个固定比例**，
+     而不是把官方值原样搬过来（起因：用户觉得 DSH 默认那档「太灰了」，对比度被吃掉）。
+     浅色比例：悬停 ×0.41、选中 ×0.60、命中段 ×0.90；**暗色是浅色这组再 ×0.9**
+     （2026-10-07 用户：「暗色下最高那一档白得犯晕……再降一下，降 10%」）。
+     命中段是三档里最高的一档，必须比「行选中」再深一点，否则它在被选中 / 悬停的行里会消失。 */
+  --knit-hover-bg:rgba(38,49,72,.024);   /* 官方 5.88% × 0.41 */
+  --knit-active-bg:rgba(38,49,72,.061);  /* 官方 10.20% × 0.60 */
+  /* 「命中段」那一格要一个**灰底**而不是白描边（2026-10-07 用户裁决，原话是
+     「叫它寻一个背景就行了，寻灰背景就行了，不需要在背景填充外面再加一个白色的描边」）。 */
+  --knit-chip-bg:rgba(38,49,72,.092);    /* 官方 10.20% × 0.90 */
   display:flex;flex-direction:column;height:100%;min-height:0;
   color:var(--dsw-alias-label-primary,#e8eaed);font-size:13px}
 body[data-ds-dark-theme] .knit-root{
-  --knit-hover-bg:rgba(255,255,255,.031);  /* DSH .0784 × 0.4 */
-  --knit-active-bg:rgba(255,255,255,.085); /* DSH .1412 × 0.6 */
+  /* 2026-10-07 用户：暗色下列表里最高那一档「白得犯晕」—— 命中段的底原本是**纯白 13%**，
+     确实是我们自己拍的数（官方 active 只有 14.12%）。现在三档一律「官方值 × 浅色比例 × 0.9」：
+       悬停 7.84% × 0.41 × 0.9 ≈ .028（原 .031）
+       选中 14.12% × 0.60 × 0.9 ≈ .076（原 .085）
+       命中 14.12% × 0.90 × 0.9 ≈ .114（原 .13 —— 降幅最多，因为那个数本来就是自己拍的）
+     α 只保留三位小数，所以是「≈」；三档相对深浅的关系没变。 */
+  --knit-hover-bg:rgba(255,255,255,.028);
+  --knit-active-bg:rgba(255,255,255,.076);
+  --knit-chip-bg:rgba(255,255,255,.114);
 }
 .knit-head{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;flex:none}
 .knit-head .knit-root-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
@@ -967,18 +1039,42 @@ body[data-ds-dark-theme] .knit-root{
 /* ⚠️ 组与组之间**不再画线**（2026-09-29）：以前是 margin-top:2px + 一条 border-top，
    读起来像表格。现在只有 16px 空间 —— 分组靠间距与组名建立，不靠横线。 */
 .knit-tierline{display:flex;align-items:baseline;gap:6px;padding:0 12px 6px;
-  font-size:10px;line-height:1.3;color:var(--dsw-alias-text-tertiary)}
+  font-size:10px;line-height:1.3;color:var(--dsw-alias-label-tertiary,#81858c)}
 /* Design §14：层名走「大写 + 字距」这套页签式排版，中文 hint 退到 muted 那一档。
    ⚠️ uppercase 对中文是空操作，所以中文形态仍然是「主要上下文」——
    不为了对齐英文形态去改词典：界面语言该由 i18n 决定，不该由 CSS 决定。
    Design §14 里那个「可选的 5~6px 灰点」**不做** —— Primary 已经有一颗黑点了，
    再加一颗同形状的点会让「层标记」和「主上下文标记」看起来是一回事。 */
 .knit-tiername{font-weight:600;font-size:12px;letter-spacing:.01em;
-  text-transform:uppercase;color:var(--dsw-alias-text-secondary)}
+  text-transform:uppercase;color:var(--dsw-alias-label-secondary,#61666b)}
 .knit-tierhint{font-weight:400}
-/* 「为什么在这里」：比摘要更弱的一行，只在 Context Pack 的条目上出现。
-   11px 而不是 10px，因为它承担的是**信息**（可核验的理由），不是装饰标注。 */
-.knit-why{padding-top:2px;font-size:11px;line-height:17px;color:var(--dsw-alias-text-tertiary)}
+/* 「为什么在这里」＋「命中段」：**同一条 metadata 行**（2026-10-07 用户裁决）。
+   两条都是「这一行为什么在这里」，分两行会让每一行都变高；用户的原话是
+   「这样就会减少文档列表的高度」。命中段在左（本版最该被看见的那一格），
+   中间一条 1px 中性竖线分隔 —— 不是虚线、不是分隔带、不加底色。
+   ⚠️ 仍然**独占一行**，不并到标题行右侧：那里的省略号会把它截成
+   「标题命中当前…」，恰好把要传达的东西吃掉（Design §11 的字段顺序不变）。 */
+.knit-subrow{display:flex;flex-wrap:nowrap;align-items:baseline;gap:8px;min-width:0;padding-top:2px}
+.knit-subrow-sep{flex:none;align-self:stretch;width:1px;margin:2px 0;
+  background:var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+/* 11px 而不是 10px，因为它承担的是**信息**（可核验的理由），不是装饰标注。 */
+.knit-why{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary,#81858c)}
+/* v0.20 命中段（需求 §12）：metadata 行里**靠左**那一格，只有行号区间。
+   它是个真 button（可 Tab、可回车、可读屏），但**不像按钮**：没有图标、没有描边
+   （border:0 + outline:none，选中 / 聚焦都不画环）、没有品牌色 —— §26「只展示可验证信息」，
+   行号是事实，不是分数，也不是 AI 判断。
+   2026-10-07 用户裁决：**要一个灰底**（"叫它寻一个背景就行了，寻灰背景就行了，不需要在
+   背景填充外面再加一个白色的描边"）—— 底用 --knit-chip-bg（比行选中那档深一点，
+   免得它在被选中的行里消失），内边距 1px 6px。
+   2026-10-07 同一天第二轮：圆角 **6px**（原话「圆角能不能改成一个胶囊……只是说圆角再增加 2 倍」，
+   3px 那档「有点硬」；行高 15px + 上下各 1px ⇒ 盒子高 17px，6px 已接近半高，就是胶囊）。
+   **描边仍然一根都没有**。
+   键盘焦点靠与 hover 同款的下划线提示。 */
+.knit-hit{display:block;flex:none;text-align:left;margin:0;padding:1px 6px;border:0;outline:none;
+  border-radius:6px;background:var(--knit-chip-bg,rgba(255,255,255,.12));font:inherit;
+  font-size:11px;line-height:15px;cursor:pointer;color:var(--dsw-alias-label-secondary,#61666b)}
+.knit-hit:hover,.knit-hit:focus-visible{color:var(--dsw-alias-label-primary,#0f1115);text-decoration:underline}
 /* 滚动条**不要自己画**：DSH 主题里已有全局样式
    （::-webkit-scrollbar 宽 8px ＋ --dsh-scrollbar-thumb，见 dsh-client-ui-theme）。
    曾经在这里写死 6px 宽 ＋ rgba(255,255,255,.14) 的滑块 —— 白色 14% 在白底上完全隐形，
@@ -1071,7 +1167,7 @@ body[data-ds-dark-theme] .knit-root{
    min-content 撑的，不写它标题的省略号和摘要的两行截断就不生效（会把行撑宽）。 */
 .knit-body{grid-column:2;min-width:0}
 .knit-dot{flex:none;width:5px;height:5px;border-radius:50%;
-  background:var(--dsw-alias-text-primary,var(--dsw-alias-label-primary,#242426))}
+  background:var(--dsw-alias-label-primary,#0f1115)}
 /* 时间**在标题右边的行尾**（2026-09-29 用户要求「时间放在右边」）。
    ⚠️ 这条推翻了同一天早先的写法（那时候时间跟在点后面左对齐，理由是
    「元信息行读起来像一句话」）—— 时间现在和标题同一行，左对齐会把标题夹在中间。
@@ -1185,12 +1281,37 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    横向滚动只发生在正文那一格（overflow-x:auto + min-width:0），
    行号栏 flex:none 留在左边；纵向滚动仍由外面的 .knit-preview-body 负责，
    所以这里**不开第二个纵向滚动容器**（两个纵向滚动条会互相打架）。 */
-.knit-codepane{display:flex;align-items:stretch;min-height:100%;
+.knit-codepane{position:relative;display:flex;align-items:stretch;min-height:100%;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.6}
+/* v0.20 命中区域（需求 §13）：一层**中性灰**横带（不是品牌色、不是荧光笔 —— §6.3
+   「用灰阶建立层级」）。绝对定位在代码正文之上、pointer-events:none ⇒ 它不参与
+   点击、不参与选中、也不改 DOM 结构（正文仍是**一个**文本节点）。 */
+/* v0.20 命中段的高亮横带。2026-10-07 用户裁决：**再浅一半**（原话「背景太深了，
+   再减少一半的，这样就让它显点，不用这么明显」）—— 用 opacity:.5 而不是换一个更浅的
+   写死色：令牌仍然是同一个中性灰（.knit-doc.active 那块），两个主题自动一致，
+   而且不引入新的 --knit-* 变量。 */
+.knit-code-hit{position:absolute;left:0;right:0;pointer-events:none;z-index:0;opacity:.5;
+  background:var(--knit-active-bg,rgba(255,255,255,.085))}
+/* v0.20：Markdown 预览跳到命中段之后，那一块**短暂**亮一下（2026-10-07 用户裁决：
+   「文档这边也参考代码块一样……要指定到段落」）。与代码那边是同一个意思、同一档灰，
+   只是形状不同：代码是一整条横带，Markdown 只能是「命中的那个块」。
+   ⚠️ transition 写在**基础选择器**上（不是 .knit-doc-hit 上）：写进 hit 类的话，
+   类一移除 transition 也跟着没了 —— 背景会「啪」地消失（Coverage 那层踩过同一个坑）。
+   ⚠️ 时长必须 == FLASH_MS（1200），否则会出现「高亮已取消但底色还在慢慢褪」的错帧。
+   这一块**不画边框、不位移、不留状态**，也不进任何列表数据。 */
+.knit-md-body :is(p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,table,td,th,dt,dd,summary,figcaption){
+  transition:background 1.2s ease;border-radius:6px}
+.knit-md-body .knit-doc-hit{background:var(--knit-active-bg,rgba(38,49,72,.061))}
+/* ⚠️ 文字必须在横带**之上**：横带是定位元素（z-index:0），会盖住静态兄弟节点。
+   所以 position:relative;z-index:1 写进下面两条既有规则里 —— **不新增选择器**：
+   test/client.test.mjs 用 .knit-code-src\\{([^}]*)\\} 抓这两条规则，多一条同后缀的
+   规则会让它抓到错的那条（真的踩过：守卫报的是 z-index 里没有 overflow-x）。 */
 .knit-code-gutter{flex:none;white-space:pre;text-align:right;user-select:none;
+  position:relative;z-index:1;
   padding:0 8px 0 2px;color:var(--dsw-alias-label-caption,#80868b);
   border-right:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08))}
 .knit-code-src{flex:1 1 auto;min-width:0;margin:0;padding:0 0 0 10px;
+  position:relative;z-index:1;
   white-space:pre;overflow-x:auto;color:var(--dsw-alias-label-primary,#e8eaed)}
 
 /* ── 引用条（v0.12）────────────────────────────────────
@@ -1319,10 +1440,11 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 .knit-preview-media{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px}
 video.knit-preview-media{width:100%;background:#000}
 
-/* Knit 图标：不跟随文本色，浅色模式纯黑、暗色模式纯白。
-   DSH 的暗色信号是 body[data-ds-dark-theme]（官方 CSS 用的就是这个）。 */
-.knit-icon{color:#000}
-body[data-ds-dark-theme] .knit-icon{color:#fff}
+/* Knit 图标：走 DSH 的**主文本色令牌**（浅 #0f1115 / 暗 #f9fafb），
+   不写死 #000 / #fff —— 令牌自己随主题切，所以**不需要**一条暗色覆盖规则。
+   ⚠️ 2026-10-07：暗色那一版原来是写死的 #fff，比 DSH 自己的主文本色还亮
+   （官方暗色 #f9fafb），属于「自己创造一套」，已删。 */
+.knit-icon{color:var(--dsw-alias-label-primary,#0f1115)}
 
 /* 入口按钮：挂在会话头部右侧与输入框工具行两处 list 座位上 */
 /* 悬停偷看浮层：自己画的，不碰框架（所以不会推开右侧栏） */
@@ -1365,6 +1487,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
 .knit-root.fullscreen .knit-preview{flex:1 1 auto;max-height:none;
   border-top:none;border-radius:0;box-shadow:none}
 `
+
 
     /**
      * 把样式表插进文档一次。
@@ -1618,6 +1741,37 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       return !!doc && (doc.kind === 'image' || doc.kind === 'video')
     }
 
+    /**
+     * 命中片段的**行号区间**文本（v0.20，需求 §11 / §12）。
+     *
+     * 只用 en dash 连起来 —— 不加 `L` 前缀、不加「行」字（i18n 的整句已经有「命中片段：」），
+     * 也**不加**任何分数/百分比：行号是事实，可核验（拿行号去文件里数就是那一段）。
+     *
+     * @param {{startLine?:number, endLine?:number}|null} match - `doc.matches[]` 的一项
+     * @returns {string} 例如 `147–163`；拿不到行号时返回空串
+     */
+    function fmtRange(match) {
+      const a = match && Number.isFinite(match.startLine) ? Math.max(1, Math.floor(match.startLine)) : 0
+      if (!a) return ''
+      const b = match && Number.isFinite(match.endLine) ? Math.max(a, Math.floor(match.endLine)) : a
+      return a === b ? String(a) : `${a}–${b}`
+    }
+
+    /**
+     * 一行里要点亮/滚动过去的片段：**只认第一个**（v0.20，需求 §12）。
+     *
+     * 需求给列表行只留了一行「命中片段：147–163」；宿主最多给 2 段（`PASSAGE_MAX_PER_FILE`），
+     * 第二段在列表里**不显示**（§16「不许多给」），但滚动区间仍取第一段的完整范围。
+     *
+     * @param {object} doc - 条目
+     * @returns {object|null} 第一段命中，或 null
+     */
+    function firstMatchOf(doc) {
+      const list = doc && Array.isArray(doc.matches) ? doc.matches : null
+      if (!list || list.length === 0) return null
+      return list[0] || null
+    }
+
     /* ── 组件 ───────────────────────────────────────── */
 
     /**
@@ -1701,7 +1855,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
       const terms = Array.isArray(reason.terms) ? reason.terms.filter(Boolean) : []
       // 最多列两个词：理由行是**一行**，列多了会把列表读成段落。
       // 分隔符用「 · 」而不是「、」（2026-09-29 用户要求把这条理由压得更克制：
-      // 「直接命中：knit · client」）—— 它读起来是**标签 + 值**，不是一句话。
+      // 「直接命中」后面跟一个「knit · client」）—— 它读起来是**标签 + 值**，不是一句话。
       const shown = terms.slice(0, 2).join(' · ')
       const key = `why.${reason.code}`
       // 词典里没有这个码就把码本身显示出来 —— 宿主加了新码而客户端还没跟上时，
@@ -2038,7 +2192,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     }
 
     function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, life,
-      glyph, onGlyph, onSelect, onOpenTab, optionId, entering, leaving }) {
+      glyph, onGlyph, onSelect, onOpenTab, passage, onPassage, optionId, entering, leaving }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       const rowRef = React.useRef(null)
       /* v0.19：只有**代码行**带语言徽章。
@@ -2051,6 +2205,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
          行，那正是用户抱怨的那一下。没有 DOM 时 `motionAllowed()` 直接挡掉。 */
       React.useLayoutEffect(() => {
         if (!motionAllowed()) return
+        /* 只有**真的要补间**时才量行高：`getBoundingClientRect()` 会强制整棵树重排，而这一屏里
+           可能正挂着一个几千行、上万个 token span 的代码预览 —— 白量一次 ≈ 0.25s（4× 节流实测）。
+           这个 effect 没有依赖数组（每次提交都跑），所以这行早退就是「别白量」的全部。 */
+        if (!leaving && (entering === null || entering === undefined)) return
         const el = rowRef.current
         if (!el || typeof el.getBoundingClientRect !== 'function') return
         const box = el.getBoundingClientRect()
@@ -2070,7 +2228,6 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           if (anim && anim.finished && typeof anim.finished.catch === 'function') anim.finished.catch(() => {})
           return
         }
-        if (entering === null || entering === undefined) return
         // 进入：先把高度收成 0 再补间到自然高度 —— 下面的行是被**挤**下去的，不是跳下去的
         // （原型里踩过的坑：不先量自然高度，插入瞬间会把下面那行蹬一下）。
         el.style.overflow = 'hidden'
@@ -2175,11 +2332,30 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         //    行的定位不走可见路径：`data-knit-rel` 仍在（键盘 / 预览映射靠它）。
         // v0.14：为什么这一篇在这个层里。只有 Context Pack 的条目才有 ——
         // 时间序 / 平铺列表里不渲染这一行（不编造理由）。
-        // ⚠️ 这一行**故意独占一行**，不并到上面的标题行（Design §11 的 ASCII 把它画在
-        //    标题右侧）：它是本版新增的那条信息，右侧对齐 + 省略号会把它截成
-        //    「标题命中当前…」，恰好把要传达的东西吃掉。Design §11 的字段顺序
-        //    （number / title / summary / path / why）在这里是满足的。
-        why ? h('div', { className: 'knit-why', title: `${t('context.why')}：${why}` }, why) : null))
+        // v0.20（2026-10-07 用户裁决）：**命中段在前、理由在后，同一条 metadata 行**，
+        //    中间一条 1px 中性竖线。理由：两条说的都是「这一行为什么在这里」，
+        //    分两行等于每行都变高；合一行列表就矮回来一格。
+        // ⚠️ 这一行**仍然独占一行**，不并进标题行：标题右侧的省略号会把它截成
+        //    「标题命中当前…」，恰好把要传达的东西吃掉（Design §11 字段顺序不变）。
+        (passage || why) ? h('div', { className: 'knit-subrow' },
+          /* ── 命中段（需求 §12）─────────────────────────────────────────
+             只有一个行号区间 —— 这是「文件 → 相关内容片段」升级在列表里唯一露出的
+             那一格。它**不是**：分数、百分比、置信度、AI 摘要、高亮预览卡片
+             （§26 明令禁止那一类展示）。
+             ⚠️ 它是真 `button`（Tab 得到、回车能开、读屏读得出），并且
+             `stopPropagation` —— 否则点它会顺带触发行的 onSelect（预览开/关切换），
+             于是「点片段」在同一行上点第二次会把预览关掉。 */
+          passage ? h('button', {
+            className: 'knit-hit',
+            type: 'button',
+            title: t('row.passages', { range: fmtRange(passage) }),
+            onClick: (event) => {
+              if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+              onPassage(doc, passage)
+            },
+          }, t('row.passages', { range: fmtRange(passage) })) : null,
+          (passage && why) ? h('span', { className: 'knit-subrow-sep', 'aria-hidden': 'true' }) : null,
+          why ? h('div', { className: 'knit-why', title: `${t('context.why')}：${why}` }, why) : null) : null))
     }
 
     /**
@@ -2326,29 +2502,425 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
     const CODE_LINES_MAX = 4000
 
     /**
+     * 语法高亮：**只有命中段那一带**有 token 颜色（2026-10-07 用户第二次裁决）。
+     *
+     * 演进：先是「整篇（前 2000 行）着色」，同日收到「前 800 行」—— 用户实测仍嫌慢。
+     * 根因是官方高亮器（shiki 的 JS 引擎，**同步**跑）的成本 ∝ 被着色的行数：
+     * 实测约 170–560 ms / 千行，4000 行文件首开 1.3–2.5 s。
+     * 所以现在只给命中段前后各 `CODE_HL_PAD` 行上色，其余保持默认正文色
+     * （跟随主题令牌：浅色黑、暗色白，与代码块正文同色）。窗口通常百余行 ⇒
+     * 分词约 50–100 ms，DOM 从 1.3 万个 span 降到几百个。
+     *
+     * 已知代价（明说，不装作没有）：窗口若从半截注释 / 字符串中间开始，高亮器缺上文，
+     * 那一段可能**错色**（整篇从第一行开始分词才没这个问题）。命中横带
+     * （`.knit-code-hit`）仍然精确标出命中行 —— 它是纯算术定位，不依赖颜色。
+     * 没有命中段（载荷里没有 `matches`）的文件：一个 token 都不上色。
+     */
+    const CODE_HL_PAD = 60
+
+    /** 命中窗口的硬上限：命中段本身可能很长（几百行），不许把整篇拖进来。 */
+    const CODE_HL_MAX_LINES = 800
+
+    /**
+     * 命中片段在代码预览里的几何（v0.20，需求 §13）—— **纯算术**，不碰 DOM。
+     *
+     * 抽出来是为了可测：真实渲染要真 DOM 才量得到行高，而这段算术（行号 → 像素、
+     * 滚动位置、边界夹取）才是会算错的地方。DOM 那一侧只剩「量行高、写 scrollTop」。
+     *
+     * 规则：
+     *  - 行号 1 起算；`endLine` 缺省等于 `startLine`（单行命中）；
+     *  - `endLine` 超出文件末尾时**夹到末尾**（不画到文件外面去）；
+     *  - `startLine` 超出文件末尾 ⇒ `null`（这一篇没有那一行 —— 不猜、不画）；
+     *  - 滚动位置在横带上方留 2 行：命中片段不是屏幕第一行时才看得出它为什么被命中。
+     *
+     * @param {{startLine?:number, endLine?:number}|null} anchor - 行区间
+     * @param {{total:number, lineHeight:number, offsetTop?:number}} layout - 实测布局
+     * @returns {{top:number, height:number, scrollTop:number}|null} 几何，或 null
+     */
+    function anchorBandFor(anchor, layout) {
+      const total = layout && Number.isFinite(layout.total) ? Math.floor(layout.total) : 0
+      const lineHeight = layout && Number.isFinite(layout.lineHeight) ? layout.lineHeight : 0
+      const offsetTop = layout && Number.isFinite(layout.offsetTop) ? layout.offsetTop : 0
+      const startLine = anchor && Number.isFinite(anchor.startLine)
+        ? Math.max(1, Math.floor(anchor.startLine)) : 0
+      if (!startLine || total <= 0 || startLine > total || !(lineHeight > 0)) return null
+      const endLine = anchor && Number.isFinite(anchor.endLine)
+        ? Math.max(startLine, Math.floor(anchor.endLine)) : startLine
+      const last = Math.min(endLine, total)
+      const top = offsetTop + (startLine - 1) * lineHeight
+      return {
+        top,
+        height: (last - startLine + 1) * lineHeight,
+        scrollTop: Math.max(0, top - lineHeight * 2),
+      }
+    }
+
+    /* ── v0.20：Markdown 预览的行锚点（2026-10-07 用户裁决）───────────────────
+       原话：「文档没有进入指定段落，文档这边也参考代码块一样，选中文档以后进入详情，
+       要指定到段落」。代码那边靠行高算（`anchorBandFor`），**Markdown 这边算不了**：
+       正文是 DSH 的 `MarkdownText` 渲染出来的富文本，DOM 里既没有行号也没有字符偏移
+       ⇒「行号 → 像素」这条路根本不存在。
+
+       于是换成**文本锚点**：宿主给的片段本身就带 `[startOffset, endOffset)`，而且
+       `body.slice(startOffset, endOffset)` 就是那段原文，所以能从原文里取一根够长的
+       「针」，再到**渲染结果**里找第一根针 —— 找到就滚过去（并淡一下底），找不到就
+       **什么都不做**。宁可不动，也不能假装动了：滚到一段不相干的文字比不滚更糟
+       （§26 只展示可验证信息）。
+
+       为什么一根针对应**一行**而不是整段：片段是 24 行的窗口，整段常常跨好几个
+       `p` / `li`，渲染后根本不在同一个元素里；而片段两端本来就按空行裁过
+       （`passage.js`：首尾空行不算内容），所以**首行通常就是某个元素的开始**。
+       逐行给针、命中即用。 */
+
+    /** 针的最大长度：够独特，又不至于跨元素。 */
+    const DOC_NEEDLE_CHARS = 40
+    /** 针的最短长度：太短的（`## 2.2`、`- 是`）在正文里到处命中，等于乱滚。 */
+    const DOC_NEEDLE_MIN = 12
+    /** 最多试几根针（片段的前 4 个够长的行）。 */
+    const DOC_NEEDLE_MAX = 4
+
+    /**
+     * 一行 Markdown 原文 → 渲染后 DOM 里那串文字的「归一化形态」。
+     *
+     * 富文本渲染会吃掉语法符、把行内强调拆成多个文本节点，所以两边要先归一到同一套口径：
+     *  - 行首的 `#` / `-` / `1.` / `>` 在 DOM 里不存在（列表符号是伪元素）⇒ 去掉；
+     *  - `*x*` / `**x**` / 反引号 / `~~x~~` 渲染成元素 ⇒ 去掉标记符、保留文字；
+     *  - `[文字](地址)` 只留文字；
+     *  - 空白一律折叠成一个空格（DOM 那一侧也这么折，见 `docAnchorHit`）。
+     *
+     * ⚠️ `_` 只在**成对的强调**位置上删（`_斜体_`），不做全局删除 ——
+     *    `snake_case` 这类标识符里的下划线是正文的一部分，删了反而对不上。
+     *
+     * @param {string} value - 原文（一行或整段）
+     * @returns {string} 归一化文本
+     */
+    function docNeedleText(value) {
+      return String(value == null ? '' : value)
+        .replace(/^\s{0,3}(?:#{1,6}\s*|>\s?|(?:[-*+]|\d{1,3}[.)])\s+)/, '')
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/(^|[\s(（])_([^_\n]+)_(?=[\s)）.,:;!?，。：；！？]|$)/g, '$1$2')
+        .replace(/[*~`]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+
+    /**
+     * 从片段原文里取「针」。
+     *
+     * @param {string} text - 预览正文（`/api/doc` 给的那一份）
+     * @param {{startOffset?:number, endOffset?:number, snippet?:string}|null} anchor - 片段
+     * @returns {string[]} 候选针（去重、按可靠性排序）；取不到就是空数组 ⇒ 调用方什么都不做
+     */
+    function docAnchorNeedles(text, anchor) {
+      const out = []
+      const body = typeof text === 'string' ? text : ''
+      let raw = ''
+      if (anchor && Number.isFinite(anchor.startOffset) && Number.isFinite(anchor.endOffset)
+        && anchor.endOffset > anchor.startOffset && body) {
+        const from = Math.max(0, Math.floor(anchor.startOffset))
+        const to = Math.min(body.length, Math.floor(anchor.endOffset))
+        if (to > from) raw = body.slice(from, to)
+      }
+      // 偏移量对不上（正文被截断过、宿主改过口径）时退回 `snippet` —— 它仍然只是**线索**。
+      if (!raw && anchor && typeof anchor.snippet === 'string') raw = anchor.snippet
+      if (!raw) return out
+      for (const line of raw.split('\n')) {
+        if (out.length >= DOC_NEEDLE_MAX) break
+        const needle = docNeedleText(line).slice(0, DOC_NEEDLE_CHARS)
+        if (needle.length < DOC_NEEDLE_MIN) continue
+        if (out.indexOf(needle) < 0) out.push(needle)
+      }
+      return out
+    }
+
+    /** 计算样式里这些 `display` 不算「块」—— 命中它们就继续往上找。 */
+    // ⚠️ 2026-10-07 真机实测：DSH 的行内 `code` 是 **inline-block** —— 不把它算作行内，
+    // 淡底就会画在「`matches: [...]`」那一个小片片上，而不是它所在的那一段。
+    const DOC_INLINE_DISPLAY = {
+      inline: 1, contents: 1, 'inline-block': 1, 'inline-flex': 1, 'inline-grid': 1, ruby: 1,
+    }
+
+    /**
+     * 命中的文本节点 → 该滚过去的那个元素（段落 / 列表项 / 标题 / 代码块自己）。
+     *
+     * 判据是**计算样式**而不是标签名：标签猜不准（`<div>` 既可能是包住全文的容器、
+     * 也可能是排版块），而 `display` 直接说明它是不是一块。取不到计算样式（老宿主 /
+     * 测试替身）时就近返回，绝不因此崩掉一次预览。
+     *
+     * @param {Text} node - 命中针所在的文本节点
+     * @param {HTMLElement} box - 正文容器（上界，不返回它自己）
+     * @returns {HTMLElement|null} 目标元素
+     */
+    function docBlockElement(node, box) {
+      let el = node && node.parentElement ? node.parentElement : null
+      while (el && el !== box) {
+        let display = ''
+        try {
+          const win = el.ownerDocument && el.ownerDocument.defaultView
+          display = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el).display : ''
+        } catch (error) {
+          display = ''
+        }
+        if (!display) return el
+        if (!DOC_INLINE_DISPLAY[display]) return el
+        el = el.parentElement
+      }
+      return null
+    }
+
+    /**
+     * 在拼接好的正文里挑一次命中（**纯函数**，可单测）。
+     *
+     * 两条判据，缺一不可：
+     *  - **独特的那根针优先**：一根针整篇只出现一次，它落在哪就是哪；
+     *  - 同档再比**离锚点最近**：用 `startOffset / 正文长度` 估个位置比例，重复出现的
+     *    针挑最接近的那一次 —— 否则 `indexOf` 会永远返回**全篇最早的**那次，跳去一个
+     *    跟这段无关的地方（同一个词在长文档里出现几十次是常态）。
+     *
+     * @param {string[]} needles - 候选针
+     * @param {string} haystack - 正文拼接串
+     * @param {number} ratio - 锚点在原文里的位置比例（0–1；拿不到时传负数）
+     * @returns {number} 命中的下标，找不到为 -1
+     */
+    function docPickOffset(needles, haystack, ratio) {
+      if (!Array.isArray(needles) || !haystack) return -1
+      let best = -1
+      let bestScore = Infinity
+      for (const needle of needles) {
+        if (!needle) continue
+        let at = haystack.indexOf(needle)
+        let count = 0
+        let localAt = -1
+        let localCost = Infinity
+        while (at >= 0) {
+          count += 1
+          const cost = ratio >= 0 && haystack.length
+            ? Math.abs(at / haystack.length - ratio)
+            : 0
+          if (cost < localCost) { localCost = cost; localAt = at }
+          at = haystack.indexOf(needle, at + 1)
+        }
+        if (localAt < 0) continue
+        const score = (count === 1 ? 0 : 1) + localCost
+        if (score < bestScore) { bestScore = score; best = localAt }
+      }
+      return best
+    }
+
+    /**
+     * 正文里第一个包含某根针的元素。
+     *
+     * 走 `TreeWalker` 把正文的文本节点接成一根**带下标映射**的字符串（每个文本节点记
+     * `[start, end)`），`indexOf` 命中后反查是哪个节点，再交给 `docBlockElement` 往上找块。
+     * **不在节点之间补空格** —— 渲染会把 `**粗**字` 拆成两个文本节点，补空格反而对不上，
+     * 而原文里真有空格时那个空格本来就在某个文本节点里。
+     *
+     * @param {HTMLElement} box - 正文容器
+     * @param {string[]} needles - 候选针
+     * @param {number} [ratio] - 锚点在原文里的位置比例（挑重复词的哪一次）
+     * @returns {HTMLElement|null} 命中的元素
+     */
+    function docAnchorHit(box, needles, ratio) {
+      const spans = []
+      let text = ''
+      const walker = document.createTreeWalker(box, 4) // 4 = SHOW_TEXT
+      let node = walker.nextNode()
+      while (node) {
+        const normalized = String(node.nodeValue || '').replace(/\s+/g, ' ')
+        if (normalized) {
+          spans.push({ node, start: text.length, end: text.length + normalized.length })
+          text += normalized
+        }
+        node = walker.nextNode()
+      }
+      const at = docPickOffset(needles, text, Number.isFinite(ratio) ? ratio : -1)
+      if (at < 0) return null
+      const span = spans.find((s) => at >= s.start && at < s.end)
+      if (!span) return null
+      return docBlockElement(span.node, box)
+    }
+
+    /**
+     * 把 Markdown 预览滚到命中段，并给那一块一次 1.2s 的淡底。
+     *
+     * 三个刻意的选择：
+     *  - **滚的是 `.knit-preview-body`**（正文那个滚动容器），不是这里新开一个 ——
+     *    两个纵向滚动条会互相打架（v0.19 代码预览踩过同一个坑）。
+     *  - 淡底时长就是 `FLASH_MS`（与「点 Coverage → 那一层亮一下」同一档灰、同一个时长）。
+     *  - 只做**空间定位**的提示：不画边框、不位移、不留状态，也不改任何列表数据。
+     *
+     * @param {HTMLElement|null} box - 正文容器
+     * @param {string[]} needles - `docAnchorNeedles()` 的产物
+     * @param {number} [ratio] - 锚点在原文里的位置比例
+     * @returns {boolean} 是否真的滚了（false = 没找到，什么都没动）
+     */
+    function scrollToDocAnchor(box, needles, ratio) {
+      if (!box || !Array.isArray(needles) || !needles.length) return false
+      if (typeof document === 'undefined' || typeof document.createTreeWalker !== 'function') return false
+      const hit = docAnchorHit(box, needles, ratio)
+      if (!hit || typeof hit.getBoundingClientRect !== 'function') return false
+      const scroller = typeof box.closest === 'function' ? box.closest('.knit-preview-body') : null
+      const view = scroller || box
+      if (view && Number.isFinite(view.scrollTop) && typeof view.getBoundingClientRect === 'function') {
+        const delta = hit.getBoundingClientRect().top - view.getBoundingClientRect().top
+        view.scrollTop = Math.max(0, Math.round(view.scrollTop + delta) - 8)
+      }
+      hit.classList.add('knit-doc-hit')
+      setTimeout(() => { hit.classList.remove('knit-doc-hit') }, FLASH_MS)
+      return true
+    }
+
+    /**
+     * Markdown 预览：在 `MarkdownText` 外面包一层，只为把「跳到你点的那一段」接上。
+     *
+     * 刻意**不自己渲染 Markdown**（那会变成第二套渲染器，与 DSH 的主题、代码块复制、
+     * 相对图片解析全部脱钩）：这一层只做一件事 —— 渲染完成后把锚点滚过去。
+     *
+     * @param {{text:string, anchor?:object|null, anchorSeq?:number, body?:any}} props -
+     *   `anchorSeq` 每次点片段都 +1，**重复点同一段也要再滚一次**（只比 startOffset 的话
+     *   第二次点会没反应）；`body` = 渲染好的正文（**显式 prop**，理由见渲染点那条注释）。
+     * @returns {import('react').ReactElement} 元素
+     */
+    function DocPane({ text, anchor, anchorSeq, body }) {
+      const boxRef = React.useRef(null)
+      const startOffset = anchor && Number.isFinite(anchor.startOffset) ? anchor.startOffset : -1
+      const endOffset = anchor && Number.isFinite(anchor.endOffset) ? anchor.endOffset : -1
+      React.useLayoutEffect(() => {
+        // 测试替身没有 DOM：这里必须是**静默**的 no-op，不是异常（`scrollToDocAnchor` 里那层守卫）。
+        // 位置比例 = 原文里锚点在哪（0–1）；重复出现的针靠它挑「最接近的那一次」，
+        // 否则 `indexOf` 永远返回全篇最早那次（长文档里同一个词出现几十次是常态）。
+        const ratio = Number.isFinite(startOffset) && text
+          ? Math.min(1, Math.max(0, startOffset / text.length))
+          : -1
+        scrollToDocAnchor(boxRef.current, docAnchorNeedles(text, anchor), ratio)
+      }, [anchorSeq, startOffset, endOffset, text])
+      return h('div', { className: 'knit-md-body', ref: boxRef }, body)
+    }
+
+    /**
      * 轻量代码预览：行号栏 + 代码正文。
      *
      * 刻意的取舍（需求 §8 §25 §26）：
-     *  - **不做语法高亮、不做折叠、不做 minimap、不做 AST / symbol outline**，
-     *    不引入 Monaco / CodeMirror。Knit 不是编辑器。
-     *  - 行号与正文**各是一个文本节点**（靠 `white-space: pre` 换行），不是每行一个
-     *    元素 —— 4000 行代码因此只有两个节点，横向滚动交给 CSS 的 `overflow-x:auto`。
-     *  - 字体、配色全部走既有 `--knit-*` / `--dsw-alias-*` 变量，随 light/dark 主题走。
+     *  - **不做折叠、不做 minimap、不做 AST / symbol outline**，不引入 Monaco /
+     *    CodeMirror。Knit 不是编辑器。
+     *  - ⚠️ v0.19 原本连**语法高亮**也不做（正文单色）。v0.20 期间用户改主意了
+     *    （2026-10-07：「对于一个阅读代码用户来说，可读性太低了」，并给了 DSH
+     *    自己那份带行号的代码视图当参照），于是接上**官方高亮器** —— 颜色全部来自
+     *    主题包的 `--shiki-*`，见上面 `useCodeSpans` 那段注释与 `Knit-决策记录.md`。
+     *    高亮是**同步**算完再渲染的（`React.useMemo`，带按文件的缓存）；让帧方案实测更慢，
+     *    已否决，理由见 `Knit-决策记录.md`。
+     *  - 行号仍是**一个**文本节点（靠 `white-space: pre` 换行）；正文是逐 token 的
+     *    片段，但**行与行之间只隔一个 '\n' 文本节点**、不新增逐行元素 —— 于是
+     *    行高几何（`pre.scrollHeight / 行数`）、横向滚动、命中横带全部照旧。
+     *  - 字体、配色全部走既有 `--knit-*` / `--dsw-alias-*` / `--shiki-*` 变量，
+     *    随 light/dark 主题走。
      *
-     * @param {{text: string}} props - `preview.text` 原文
+     * @param {{rel?: string, text: string, language?: string|null, anchor?: {startLine?:number, endLine?:number}|null,
+     *   anchorSeq?:number}} props -
+     *   `preview.text` 原文；`language` = **宿主分类层给的**语言标识（客户端不许自己看
+     *   扩展名，见渲染点那条注释），原样喂给官方高亮器；`anchor`（v0.20）= 要点亮并
+     *   滚动过去的行区间（`doc.matches[0]`）；`anchorSeq` 每次点片段 +1（重复点同一段
+     *   也要再滚一次）
      * @returns {import('react').ReactElement} 元素
      */
-    function CodePane({ text }) {
+    function CodePane({ rel, text, language, anchor, anchorSeq }) {
       const lines = String(text == null ? '' : text).split('\n')
       // 末尾换行会切出一个空尾行 —— 显示它会让行数比编辑器里多一行。
       if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
       const clipped = lines.length > CODE_LINES_MAX
       const shown = clipped ? lines.slice(0, CODE_LINES_MAX) : lines
+      const shownLines = shown.length
+      const shownText = shown.join('\n')
+
+      /* 命中行锚点（需求 §13）：几何那半段在下面。 */
+      const anchorStart = anchor && Number.isFinite(anchor.startLine) ? anchor.startLine : 0
+      const anchorEnd = anchor && Number.isFinite(anchor.endLine) ? anchor.endLine : 0
+
+      /* ── v0.20 语法高亮（2026-10-07 用户新增需求；同日两次收窄，见常量注释）────
+         只给**命中段那一带**上色（前后各 `CODE_HL_PAD` 行，窗口硬上限
+         `CODE_HL_MAX_LINES`）。没有命中段就一个 token 都不上色 —— 其余行是默认正文色。
+         `useMemo` 记忆化（键 = 高亮器引用 + 被上色的那截正文），滚动 / 悬停 / 5 s 轮询
+         引起的重渲染不重算。高亮器返回的**行数对不上正文**时一律退回纯文本 ——
+         宁可没颜色，也不能错位（错位意味着颜色落在错误的代码上，比单色更难读）。
+         拿不到官方高亮器时 `useCodeSpans` 返回的假 hook 给的就是 `undefined`。 */
+      const hlFrom = anchorEnd > 0 ? Math.max(0, anchorStart - 1 - CODE_HL_PAD) : 0
+      const hlTo = anchorEnd > 0
+        ? Math.min(shownLines, anchorEnd + CODE_HL_PAD, hlFrom + CODE_HL_MAX_LINES)
+        : 0
+      const hlLines = Math.max(0, hlTo - hlFrom)
+      const hlText = hlLines > 0 ? shown.slice(hlFrom, hlTo).join('\n') : ''
+      const highlighter = useCodeSpans(language)
+      const spans = React.useMemo(() => {
+        if (typeof highlighter !== 'function' || hlLines === 0) return null
+        // 先查按文件的结果缓存（重开同一篇 = 直接命中），未命中才算、算完存回去。
+        return cachedCodeSpans(`${rel || ''}#${hlFrom}-${hlTo}`, hlText, () => {
+          try {
+            const out = highlighter(hlText)
+            return Array.isArray(out) && out.length === hlLines ? out : null
+          } catch (error) { return null }
+        })
+      }, [rel, highlighter, hlText, hlLines])
+
+      /* 上色后的正文树 = `[头纯文本, …token, '\n', …token, 尾纯文本]`：行内是 token
+         片段，行间是**一个**换行文本节点（不包逐行元素，理由见 doc 注释）；窗口之外的
+         头、尾各是**一个**纯文本节点（不上色，但一字不少）。没颜色时就是原来的整串。
+         `useMemo` 记忆化（键 = 上文那份 spans + 正文 + 窗口）：5 s 轮询 / 悬停 / 选中引起的
+         重渲染不再重建这几百个元素。 */
+      const body = React.useMemo(() => {
+        if (!spans || hlLines === 0) return shownText
+        const nodes = []
+        if (hlFrom > 0) nodes.push(shown.slice(0, hlFrom).join('\n'), '\n')
+        for (let i = 0; i < spans.length; i += 1) {
+          if (i > 0) nodes.push('\n')
+          const runs = spans[i] || []
+          for (let j = 0; j < runs.length; j += 1) {
+            const run = runs[j]
+            if (!run || typeof run.text !== 'string' || run.text === '') continue
+            nodes.push(h('span', { key: i + '-' + j, style: run.style || null }, run.text))
+          }
+        }
+        // 窗口之后的行**照常显示，只是不上色**：整段作为**一个**纯文本节点接在末尾。
+        if (hlTo < shownLines) nodes.push('\n', shown.slice(hlTo).join('\n'))
+        return nodes
+      }, [spans, shownText, shownLines, hlFrom, hlTo, hlLines])
+
       let gutter = ''
       for (let i = 1; i <= shown.length; i += 1) gutter += (i === 1 ? '' : '\n') + i
-      return h('div', { className: 'knit-codepane' },
+      const paneRef = React.useRef(null)
+      const srcRef = React.useRef(null)
+      /* ── v0.20 行锚点（需求 §13）──────────────────────────────────────────
+         刻意**不动 DOM 结构**：行号栏与正文各是一个文本节点（4000 行也只有两个），
+         所以定位靠算（`anchorBandFor`）。行高从**实测**拿（`pre.scrollHeight / 行数`）
+         —— `white-space:pre` 不换行、每行等高，量出来的比值就是行高；不依赖
+         `getComputedStyle` 的字符串解析（那要处理 `normal` / 单位 / 继承，容易在某些
+         主题下崩成 NaN）。拿不到布局（测试替身没有真 DOM）就什么都不做 —— 不猜、不写死行高。 */
+      const [band, setBand] = React.useState(null)
+      React.useLayoutEffect(() => {
+        const pre = srcRef.current
+        if (!pre || typeof pre.getBoundingClientRect !== 'function') {
+          setBand(null)
+          return
+        }
+        const total = shown.length
+        const lineHeight = total > 0 && typeof pre.scrollHeight === 'number' && pre.scrollHeight > 0
+          ? pre.scrollHeight / total : 0
+        const box = anchorBandFor(anchor, { total, lineHeight, offsetTop: Number(pre.offsetTop) || 0 })
+        setBand(box ? { top: box.top, height: box.height } : null)
+        if (!box) return
+        // 只滚**正文所在的**那个滚动容器（`.knit-preview-body`）；这里不开第二个
+        // 纵向滚动容器（见上面 CSS 注释：两个纵向滚动条会互相打架）。
+        const scroller = typeof pre.closest === 'function' ? pre.closest('.knit-preview-body') : null
+        if (scroller && Number.isFinite(scroller.scrollTop)) scroller.scrollTop = box.scrollTop
+      }, [anchorStart, anchorEnd, anchorSeq, text, shown.length])
+      return h('div', { className: 'knit-codepane', ref: paneRef },
+        // 横带在**文字之前**入树、且 pointer-events:none —— 它不挡选择、不挡滚动。
+        band ? h('div', {
+          className: 'knit-code-hit',
+          'aria-hidden': 'true',
+          style: { top: `${Math.round(band.top)}px`, height: `${Math.round(band.height)}px` },
+        }) : null,
         h('div', { className: 'knit-code-gutter', 'aria-hidden': 'true' }, gutter),
-        h('pre', { className: 'knit-code-src' }, shown.join('\n')),
+        h('pre', { className: 'knit-code-src', ref: srcRef }, body),
         clipped
           ? h('div', { className: 'knit-preview-note' },
             t('preview.codeTruncated', { n: CODE_LINES_MAX }))
@@ -2483,12 +3055,32 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
                   'aria-label': t('media.play'),
                 })
               : isCode
-                ? h(CodePane, { text: preview.text })
-                : MarkdownText
-                ? h(MarkdownText, {
+                ? h(CodePane, {
+                    // `rel` 只用来给高亮结果做**按文件的缓存键**（同一篇重开直接命中）。
+                    rel: preview.rel,
                     text: preview.text,
-                    labels: { code: { copyLabel: t('code.copy'), copiedLabel: t('code.copied') }, footnotes: '' },
-                    pathImages: pathImages || undefined,
+                    // 语言提示只认**宿主分类层给的** `language`（v0.19 的既有规矩：
+                    // 客户端不再自己看扩展名）。它同时是语言徽章与 `source map` 入口的
+                    // 判据，这里多接一根线到官方高亮器。取不到就是纯文本。
+                    language: preview.language,
+                    anchor: preview.anchor,
+                    anchorSeq: preview.anchorSeq,
+                  })
+                : MarkdownText
+                // v0.20：Markdown 也走「跳到你点的那一段」—— DocPane 只负责滚，渲染仍是
+                // DSH 那个 MarkdownText（见 DocPane 的注释：不自己造第二套渲染器）。
+                ? h(DocPane, {
+                    text: preview.text,
+                    anchor: preview.anchor,
+                    anchorSeq: preview.anchorSeq,
+                    // ⚠️ 渲染好的正文走**显式 prop**（`body`）而不是 children：
+                    //    组件测试替身展开函数组件时只把 props 传进去（children 留在节点上），
+                    //    走 children 的话 MarkdownText 会在替身里凭空消失、既渲染不出也数不到。
+                    body: h(MarkdownText, {
+                      text: preview.text,
+                      labels: { code: { copyLabel: t('code.copy'), copiedLabel: t('code.copied') }, footnotes: '' },
+                      pathImages: pathImages || undefined,
+                    }),
                   })
                 // 降级必须说出来 —— 静默退回纯文本会让人以为是渲染坏了（真实踩过的坑）
                 : h('div', null,
@@ -2612,9 +3204,15 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         // v0.15：这个会话的使用情况（只统计**事实**：读了几次、落在哪一层、上下文换过几次）。
         // 宿主只在用户显式打开「使用情况」之后才回传它。
         usage: null,
+        // v0.20 性能治理：这一份数据自己的签名 —— 轮询回来的载荷与它相同就不重渲染（见 `load`）。
+        sig: '',
       })
       const [preview, setPreview] = React.useState(null)
-      const [tick, setTick] = React.useState(() => Date.now())
+      /* v0.20 性能治理：**一分钟一次**的刷新信号。相对时间标签是按分钟变的，所以轮询只在
+         分钟数变了时落一次（其余时候返回同一个值 ⇒ React 直接跳过这次更新）。标签本身读的
+         是**渲染那一刻**的钟（`Date.now()`），所以不会因为「刷新间隔还没到」而显示成
+         「11 分钟前」—— 这个状态只负责「隔一会儿喊一嗓子」，不参与算时间。 */
+      const [, bumpTick] = React.useState(0)
       const [cursor, setCursor] = React.useState('')
       const [query, setQuery] = React.useState('')
       const [ratio, setRatio] = React.useState(readRatioPref)
@@ -2667,6 +3265,11 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
          还往宿主正在收起的那层 DOM 里插一帧重渲染。现在取数先问一句「还看得见吗」，看不见
          **连请求都不发**；请求在途时被折叠的那一次，回来也不落状态（`alive` 由轮询的
          cleanup 翻假）。重新可见时那个 effect 会重跑 ⇒ 立刻补一次，不必等下一个 5 秒。 */
+      /* 轮询去重（v0.20 性能治理，2026-10-07）：`load` 把**这次的载荷签名**跟当前状态比，
+         一字未变就返回同一个状态对象 —— React 直接跳过这次重渲染（`tick` 也只在分钟数变了
+         才 bump）。原先每 5 s 都无条件落一个新对象：整屏重渲染一遍 + 一轮 FLIP 强制布局 +
+         GC，用户体感就是「卡顿卡顿的」。签名存在状态自己身上，所以不需要新 hook
+         （前面那些 hook 的位置被测试按位预置，别插队）。 */
       const load = React.useCallback(async (alive) => {
         const live = () => typeof alive !== 'function' || alive()
         if (!live()) return
@@ -2682,7 +3285,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           const data = await res.json()
           if (!live()) return
           if (data && data.ok) {
-            setState({
+            // 载荷一字未变（`JSON.stringify` 一份 35–46 KB ≈ 1 ms，比整屏重渲染便宜两个数量级）
+            // ⇒ 原样返回**当前状态对象**，React 直接跳过这次更新（签名就存在状态自己身上）。
+            const sig = JSON.stringify(data)
+            setState((prev) => (prev.status === 'ready' && prev.sig === sig ? prev : {
               status: 'ready',
               docs: data.docs || [],
               root: data.root || '',
@@ -2696,8 +3302,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
               mode: data.mode || 'time',
               context: data.context || null,
               usage: data.usage || null,
-            })
-
+              sig,
+            }))
           } else {
             setState({ status: 'error', docs: [], root: '', total: 0, error: hostMessage(data), mode: 'time', context: null, usage: null })
           }
@@ -2705,7 +3311,10 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           if (!live()) return
           setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', context: null, usage: null })
         }
-        setTick(Date.now())
+        // 「读了多久」是按分钟变的相对时间：只有**分钟数**真的变了才落一次刷新信号（其余时候
+        // 返回同一个值，React 直接跳过这次更新）。标签读的是渲染时刻的钟，不受这里影响。
+        const now = Date.now()
+        bumpTick((prev) => (Math.floor(now / 60000) === Math.floor(prev / 60000) ? prev : now))
       }, [sessionId, sort, kind, usageOn])
 
       React.useEffect(() => {
@@ -2850,10 +3459,24 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           ['related', 'context.related', 'context.relatedHint'],
         ]
         const visible = new Set(visibleDocs.map((doc) => doc.rel))
+        /* v0.20 修正：宿主给三层条目的投影**只有 7 个键**（`context.js` 的
+           `rel/title/summary/mtimeMs/kind/source/reason`）—— 那里**没有 `matches`**，
+           而「命中片段」那一行读的是 `doc.matches`（下面的 `firstMatchOf`）。
+           于是最初的三层行（Primary/Supporting/Related，恰恰是最该给片段的那几行）
+           全都渲染不出片段行，只有「其他相关文档」区（取自 `visibleDocs`）有。
+           修法：三层条目按 `rel` 从**同一批 `visibleDocs`** 取回 `matches` ——
+           `docs` 里本来就有这份数据，**不额外增长任何载荷**；不改成让宿主补键，
+           是因为面板载荷已经吃掉 16 KB 预算的大部分（v0.20 R2：+14760 B）。 */
+        const hitByRel = new Map()
+        for (const doc of visibleDocs) {
+          if (Array.isArray(doc.matches) && doc.matches.length > 0) hitByRel.set(doc.rel, doc.matches)
+        }
+        const withHits = (item) => (item.matches ? item
+          : (hitByRel.has(item.rel) ? { ...item, matches: hitByRel.get(item.rel) } : item))
         const sections = []
         for (const [tierKey, titleKey, hintKey] of tiers) {
           const items = Array.isArray(pack[tierKey]) ? pack[tierKey] : []
-          const docs = items.filter((item) => visible.has(item.rel))
+          const docs = items.filter((item) => visible.has(item.rel)).map(withHits)
           if (docs.length > 0) sections.push({ key: tierKey, titleKey, hintKey, docs })
         }
         // 其余文档：宿主没放进任何一层的。补上它们，面板才仍然是「工作区的地图」，
@@ -2935,27 +3558,41 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
        * 排版（`#` 变标题、`*` 变列表、缩进被吃掉）。宿主已经在 `/api/doc` 的响应里
        * 给了分类结论，客户端照抄即可，不再自己看扩展名。
        */
-      const previewFor = React.useCallback((doc) => {
-        const base = { rel: doc.rel, title: doc.title || doc.name, path: doc.path || '', text: '', truncated: false }
+      const previewFor = React.useCallback((doc, anchor) => {
+        const base = {
+          rel: doc.rel, title: doc.title || doc.name, path: doc.path || '', text: '', truncated: false,
+          // `anchorSeq`：每**一次**打开都 +1，让「重复点同一段」也能再滚一次
+          // （CodePane / DocPane 的 effect 只看这一个计数，不看偏移量相等与否）。
+          anchor: anchor || null, anchorSeq: 0,
+        }
         if (isMedia(doc)) {
           return { ...base, kind: doc.kind, src: mediaUrl(sessionId, doc.rel), status: 'ready' }
         }
         return { ...base, kind: doc.kind || ARTIFACT_DOC, status: 'loading' }
       }, [sessionId])
 
-      /** 打开（不切换）某篇的预览。 */
+      /**
+       * 打开（不切换）某篇的预览。
+       *
+       * v0.20（2026-10-07 用户裁决）：**带上篇内第一段命中**（`firstMatchOf`）——
+       * 原话「我在点击这个文档或者是代码块的时候，就进入一个预览，那能不能直接定位到
+       * 这几段呢？这样的交互非常丝滑」。于是「点文档」＝「看这一篇里跟当前任务有关的那几行」，
+       * 不再先落在文件开头让用户自己找。v0.20 起**文档与代码一样会滚**：代码按行高算
+       * （`CodePane`），Markdown 按文本锚点找（`DocPane` + `docAnchorNeedles`）——
+       * 后者靠的是「片段原文里的那几行字符串在渲染结果里也一定在」。
+       */
       const openPreview = React.useCallback((doc) => {
         setNotice('')
-        setPreview(previewFor(doc))
+        setPreview(previewFor(doc, firstMatchOf(doc)))
       }, [previewFor])
 
-      /** 单击 / Enter：切换某篇的预览开与关。 */
+      /** 单击 / Enter：切换某篇的预览开与关（同样带上篇内第一段命中）。 */
       const togglePreview = React.useCallback((doc) => {
         setNotice('')
         setCursor(doc.rel)
         setPreview((current) => {
           if (current && current.rel === doc.rel && current.status !== 'error') return null
-          return previewFor(doc)
+          return previewFor(doc, firstMatchOf(doc))
         })
       }, [previewFor])
 
@@ -2964,6 +3601,28 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         setPreview(null)
         setFullscreen(false)
       }, [])
+
+      /**
+       * v0.20（需求 §13）：点列表行的「命中片段：147–163」——**就地预览 + 跳到那一段**。
+       *
+       * 三条刻意的选择：
+       *  - **不发明新的 preview**：仍是 `.knit-preview` 那一套（同一个拉正文的 effect、
+       *    同一个 CodePane），只是多带一个 `anchor`。
+       *  - **同一篇已经打开时不重拉正文**：只换 `anchor`，滚动由 CodePane 的 effect 做
+       *    （重拉会让预览闪一下「加载中」，那是用户抱怨过的「一点它就跳」）。
+       *  - `anchor` 谁都能读：代码给 `CodePane`（按行高算），Markdown 给 `DocPane`
+       *    （按文本锚点找）。两边都**找不到就不动**，绝不假装跳过。
+       */
+      const openPassage = React.useCallback((doc, match) => {
+        setNotice('')
+        setCursor(doc.rel)
+        setPreview((current) => {
+          if (current && current.rel === doc.rel && current.status === 'ready') {
+            return { ...current, anchor: match || null, anchorSeq: (Number(current.anchorSeq) || 0) + 1 }
+          }
+          return previewFor(doc, match)
+        })
+      }, [previewFor])
 
       /**
        * 键盘导航：↑↓ 逐项移动即预览，Enter 切换，Esc 收起。
@@ -3296,6 +3955,8 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         positions: new Map(),
         // 位置表是在**哪一屏**量下来的（视图签名）。换屏时必须整表作废：见下面 settled 那条。
         view: '',
+        // 上一次**量过**的那帧的行签名（v0.20 性能治理）：签名没变就一行都不量。
+        sig: '',
         // 进 / 出补间还在飞的截止时刻（毫秒时间戳）。那段时间里行高是中间态，量不得。
         tweenUntil: 0,
       })
@@ -3447,7 +4108,21 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
           && motion.entered.size === 0
           && motion.ghosts.size === 0
           && store.view === motionView
-        store.positions = settled ? applyRowFlips(listRef.current, store.positions, skip) : new Map()
+        /* v0.20 性能治理（2026-10-07）：**行集合 / 顺序 / 会影响行高的字段**都没变时，一行都
+           不量 —— 直接复用上一帧的位置表。FLIP 的量法本身就是一次强制布局
+           （`querySelectorAll` + 逐行 `offsetTop`），而 5 s 轮询 / 悬停 / 选中都会走到这里：
+           真机 4× CPU 节流下量到 90–350 ms / 次，用户体感就是「点一下卡一下」。
+           签名里带上窗口宽度（换宽 / 缩放会让行高变），行真挪了签名就变，照旧量。 */
+        const rowSig = settled
+          ? `${typeof window === 'undefined' ? '' : `${window.innerWidth}x${window.innerHeight}`}|${
+            motionRows.map((row) => `${row.rel}\u0000${row.tierKey}\u0000${
+              (row.doc && row.doc.matches && row.doc.matches.length) || 0}\u0000${
+              (row.doc && (row.doc.mtimeMs || row.doc.mtime || row.doc.size)) || ''}`).join('\u0001')}`
+          : ''
+        store.positions = settled && rowSig !== store.sig
+          ? applyRowFlips(listRef.current, store.positions, skip)
+          : (settled ? store.positions : new Map())
+        store.sig = rowSig
         store.view = motionView
       })
       React.useEffect(() => () => {
@@ -3465,12 +4140,16 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
         const common = {
           key: doc.path || doc.rel,
           doc,
-          now: tick,
+          now: Date.now(),
           active: Boolean(preview && preview.rel === doc.rel),
           cursor: doc.rel === cursor,
           optionId: docOptionId(doc),
           onSelect: togglePreview,
           onOpenTab,
+          // v0.20（需求 §12）：只有真的带命中片段的条目才渲染那一行 —— 没有就不渲染，
+          // 不编造一个「命中片段：—」的占位（§26：只展示可验证信息）。
+          passage: firstMatchOf(doc),
+          onPassage: openPassage,
         }
         if (isMedia(doc)) return h(MediaCard, { ...common, src: srcFor(doc) })
         // `whyText` 只认 Context Pack 条目上挂的 `reason` —— 平铺列表里没有这个字段，
@@ -3647,7 +4326,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
             onClick: () => openDocByRel(recent.rel),
           },
           h('span', { className: 'knit-read-rel' }, recent.rel),
-          h('span', { className: 'knit-read-time' }, relTime(recent.at, tick)),
+          h('span', { className: 'knit-read-time' }, relTime(recent.at, Date.now())),
           // 箭头是装饰（对读屏隐藏）；不要前导空格 —— 间距由 .knit-read-row 的 gap 给。
           h('span', { className: 'knit-read-go', 'aria-hidden': 'true' }, '›'))
           : h('div', { className: 'knit-lens-empty' }, t('lens.recentNone')))
@@ -4234,7 +4913,7 @@ body[data-ds-dark-theme] .knit-icon{color:#fff}
      * 源文件在 `assets/knit-icon-24-mono-4px.svg` —— **改图标时两处一起改**。
      *
      * 用 `stroke="currentColor"`，颜色由 `.knit-icon` 那条 CSS 定死：
-     * **浅色模式纯黑、暗色模式纯白**（暗色信号是 DSH 的 `body[data-ds-dark-theme]`）。
+     * **跟随 DSH 主文本色令牌**（浅 #0f1115 / 暗 #f9fafb，随主题自己切）。
      */
     const KNIT_ICON_PATH = 'M78.73 31.92L78.44 31.53L78.12 31.16L77.79 30.80L77.44 30.45L77.07 30.11L76.69 29.79L76.30 29.48L75.89 29.19L75.46 28.91L75.02 28.64L74.57 28.39L74.10 28.16L73.62 27.94L73.13 27.74L72.62 27.55L72.11 27.38L71.58 27.23L71.04 27.09L70.49 26.97L69.93 26.87L69.36 26.79L68.78 26.72L68.20 26.67L67.60 26.64L67.00 26.63L66.39 26.63L65.78 26.65L65.16 26.70L64.53 26.76L63.90 26.83L63.26 26.93L62.62 27.05L61.98 27.18L61.33 27.33L60.68 27.50L60.03 27.69L59.38 27.90L58.73 28.13L58.08 28.37L57.43 28.64L56.78 28.92L56.13 29.21L55.48 29.53L54.83 29.86L54.19 30.22L53.55 30.58L52.91 30.97L52.28 31.37L51.66 31.79L51.04 32.23L50.42 32.68L49.82 33.14L49.21 33.63L48.62 34.12L48.03 34.64L47.46 35.16L46.89 35.71L46.33 36.26L45.78 36.83L45.23 37.41L44.70 38.01L44.18 38.61L43.68 39.23L43.18 39.86L42.69 40.51M51.45 83.91L51.94 83.83L52.42 83.74L52.90 83.63L53.37 83.49L53.84 83.34L54.31 83.16L54.77 82.97L55.23 82.75L55.68 82.52L56.13 82.26L56.57 81.99L57.01 81.69L57.43 81.38L57.85 81.05L58.26 80.70L58.67 80.33L59.06 79.94L59.45 79.54L59.82 79.12L60.19 78.68L60.54 78.22L60.88 77.75L61.21 77.26L61.54 76.76L61.84 76.24L62.14 75.70L62.42 75.15L62.69 74.59L62.95 74.01L63.19 73.42L63.42 72.82L63.64 72.20L63.84 71.57L64.02 70.93L64.19 70.28L64.35 69.62L64.49 68.95L64.62 68.27L64.73 67.58L64.82 66.88L64.90 66.17L64.96 65.46L65.00 64.74L65.03 64.01L65.04 63.27L65.04 62.54L65.01 61.79L64.98 61.04L64.92 60.29L64.85 59.53L64.76 58.77L64.65 58.01L64.53 57.25L64.39 56.49L64.23 55.72L64.06 54.96L63.87 54.20L63.66 53.43L63.44 52.67L63.20 51.91L62.95 51.16L62.68 50.41L62.39 49.66L62.09 48.91L61.77 48.17M19.85 34.46L19.68 34.91L19.52 35.38L19.39 35.85L19.27 36.33L19.18 36.82L19.10 37.32L19.05 37.82L19.01 38.32L19.00 38.84L19.00 39.35L19.02 39.87L19.07 40.40L19.13 40.92L19.22 41.45L19.32 41.99L19.44 42.52L19.59 43.05L19.75 43.59L19.94 44.13L20.14 44.66L20.37 45.19L20.61 45.73L20.87 46.26L21.16 46.79L21.46 47.31L21.78 47.84L22.12 48.35L22.48 48.87L22.86 49.38L23.25 49.88L23.67 50.38L24.10 50.87L24.55 51.36L25.02 51.84L25.50 52.31L26.00 52.77L26.52 53.23L27.05 53.67L27.60 54.11L28.16 54.53L28.74 54.95L29.33 55.36L29.94 55.75L30.56 56.14L31.20 56.51L31.84 56.87L32.50 57.22L33.17 57.56L33.86 57.88L34.55 58.19L35.26 58.49L35.97 58.78L36.70 59.05L37.43 59.30L38.17 59.54L38.93 59.77L39.68 59.98L40.45 60.18L41.22 60.36L42.00 60.53L42.79 60.68L43.57 60.82L44.37 60.94L45.16 61.04'
 

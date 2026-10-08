@@ -37,29 +37,31 @@ network, no latency, nothing leaves the machine.
 > **which things in this project are worth looking at first for the task at hand — and what
 > happened to them after they were read.**
 
-![Screenshot from a real machine: the Knit sidebar left on the Code tab, ranking the workspace source files by relevance, with a code preview expanded in place](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
+![Screenshot from a real machine: the Knit sidebar left on the Code tab, each row showing its matched passage, with a code preview expanded in place and stopped on that passage](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot.png)
 
 *Screenshot from a real machine, not a mock-up: the same workspace, this one left on the **Code tab** —
 since v0.19 source files are first-class citizens, just like Markdown.*
-*The "why" line under each row says how it matched: a direct hit on the task text, a path hit, or a
-workspace hit.*
-*Click a row to expand the preview **in place**: here `knit/src/host/classification.js`, with line
-numbers; the preview header holds only the path and four actions (copy / full screen / open locally / close).*
+*The sub-row under each row says how it matched (a filename hit, a path hit, …) and **which passage**
+of that file matched this query (`命中段 24–38`).*
+*Click a row to expand the preview **in place**, stopped right on that passage: here
+`knit/src/host/passage.js`, line numbers plus syntax highlighting, with the matched lines under a grey
+band; the preview header holds only the path and four actions (copy / full screen / open locally / close).*
 *The header holds only the path, one count and two toggles; whether the list runs by
 relevance or by newest-first is decided by that pair of tabs on the left.*
 *Since v0.14 the list is always one column: the rank number sits in its own column on the far left
 (vertically centred on the title's first line), then Primary dot + title + relative time (time on the
 right), then the summary. **The path lives in the preview header only** — the directory collapses to a `…/` placeholder (hover the path for the full relative path); rows no longer repeat it.*
 
-![Order follows the conversation: send a message and the sidebar re-ranks the document list by it](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
+![Order follows the conversation: send a message and the sidebar re-ranks the list by it, each row showing its matched passage](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/demo-reorder.gif)
 
-*Order follows the conversation — same workspace, in a freshly opened session: before you have said
-anything, the list runs newest-first; ask "how is BM25 weighted for the ranking?" and the next poll
-swaps the top of the list, with the tier headings and the **continuous rank numbers across all
-three tiers** appearing alongside a one-line "why" under each row (what matched, and how).*
-*In this particular frame no document landed in the primary tier, so the groups start at "supporting".*
-*⚠️ The panel polls **every 5 seconds**, so the re-rank lands **0–5 s** after the message rather than
-instantly, and the GIF runs faster than real time.*
+*Order follows the conversation — same workspace, in a separate session: the conversation had been
+about a release checklist, so the top of the list was that family of documents; ask
+"how is BM25 weighted for the ranking?" and the list swaps over to the BM25 family, keeping the tier
+headings and the **continuous rank numbers across all tiers**, with a one-line "why" under each row
+(what matched, how, and which passage).*
+*⚠️ The panel polls **every 5 seconds**, so the re-rank is not instantaneous: in this take the top rows
+only swapped once that turn had moved along (the tens of seconds in between were cut out).
+The GIF runs faster than real time.*
 
 Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network
 
@@ -175,20 +177,21 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 ![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
 
 *Media: square thumbnails, with the **column count following the panel width continuously** —
-six columns at this width, cells about 110px. These are the workspace's real image and SVG files; this
-particular workspace happens to hold several screenshots, one demo GIF and one single-colour SVG icon
-(the solid black square is that icon, not a failed load). Videos get their first frame as a poster with
-a play glyph and a duration badge — this workspace simply has no video, so none shows here.*
+six columns at this width, cells about 110px. These are the workspace's real image and SVG files
+(18 of them in this take); this particular workspace holds several screenshots, a demo GIF and one
+single-colour SVG icon (the solid black square is that icon, not a failed load). Videos get their first
+frame as a poster with a play glyph and a duration badge — this workspace simply has no video, so none
+shows here.*
 
 ![Screenshot of the All tab: the documents section, the code section, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
 
 *All: the documents section shows at most 4, the **code section** shows at most 4 (each gets its own
-"View all →" when truncated — here "4 / 19" and "4 / 17"), and the media grid comes last.*
+"View all →" when truncated — here "4 / 21" and "4 / 8"), and the media grid (11 rows) comes last.*
 
 ⚠️ All three sections share the **same 40-item window** the host returns — a category that ranks past
 40th by relevance drops out of the All view entirely. This screenshot uses the **Newest** sort: in this
 workspace, under the default Relevance sort, media rank outside that window every time (at `limit=40`
-those 40 rows are 34 documents + 6 code files). The **Media** and **Code** tabs are unaffected — they
+those 40 rows are documents + code files). The **Media** and **Code** tabs are unaffected — they
 request their own kind. A known defect, with reproduction and the fix recorded in
 [`docs/README.md`](docs/README.md).*
 
@@ -305,6 +308,13 @@ Current task -> Workspace Retrieval -> Document + Code Candidates
   version, not recall.
 - **The type tabs become four**: `Docs / Code / Media / All`. The Code tab is **still driven by the
   current task** — it is not a file tree of the project.
+- **Syntax highlighting is DSH's own (v0.20)** — the client reuses
+  `useCodeHighlighter` from `@deepseek-ai/dsh-client-ui-primitives` and takes every colour from the
+  official `--shiki-*` tokens, so light and dark match DSH instead of inventing a palette. Only the
+  matched stretch is coloured (60 lines either side, window capped at 800) and the rest stays plain
+  text — a file with no match gets no colour at all (an un-capped 4k-line file
+  costs ~2 s); if the host does not export the hook (older DSH) or the line counts disagree, it falls
+  back to plain text silently.
 - **No second engine**: no second retrieval path, no second lifecycle, no second store, no new
   dependencies, no AST, no LSP, no embedding, no model call, no network, no IDE.
 
@@ -319,7 +329,8 @@ project are most relevant to what we're discussing?"* and get back **the same Co
 panel shows — the `primary` / `supporting` / `related` tiers, each item carrying its path, title,
 summary, a **structured reason** (`direct` / `titleMatch` / `summaryMatch` / `bodyMatch` /
 `linkTarget` / `linkSource` / `related`), its **project role** (`impl` / `test` / `config` /
-`design` / `doc`) and the matching snippet — then open one of them with its own `read` tool.
+`design` / `doc`) and the matching snippet **with its line range** (`match: lines 147–163 — …`) —
+then open one of them with its own `read` tool.
 
 **Why it helps**: to cite a document that already exists, an agent can only guess paths or glob
 and `read` them one by one. Knit has **already computed that ranking** every refresh; this tool
@@ -335,7 +346,12 @@ Three details:
 - **No relevance score in the result.** It is a *relative* score (something is always 100%, and it
   may be a different document on the next refresh); shown to a model it reads as absolute confidence.
   **The order is the relevance** — the same rule the panel follows.
-- **No document bodies.** The agent has its own `read` tool; Knit *finds*, it does not *carry*.
+- **The whole file is searched** (since v0.20). Every file is split into structural passages and each
+  passage is scored, so "the relevant part is past the first 2,500 characters" no longer means
+  "unfindable"; a file over 256 KB is indexed only up to that size, and media has no text — both
+  boundaries are stated in the output rather than hidden.
+- **No document bodies.** Only the matched passage (one per file at most, ≤200 characters) — the agent
+  has its own `read` tool; Knit *finds*, it does not *carry*.
 - **No workspace means an error, never a fallback.** The HTTP route falls back to the process cwd
   when a session can't be resolved (for older clients that send no session id); the tool has no such
   baggage — falling back would scan an unrelated project and return *its* documents.
@@ -537,7 +553,7 @@ Newer messages weigh more: 3 / 2 / 1 / 1 …
 ```
 IDF per term first: rarer in the corpus means more valuable
                     ln(1 + (N - df + 0.5) / (df + 0.5))
-then a weighted sum over fields: title ×4  +  summary ×2  +  first 2500 chars of body ×1
+then a weighted sum over fields: title ×4  +  summary ×2  +  the whole body ×1
 each field saturated and length-normalised (k1 = 1.2, b = 0.3 / 0.5 / 0.75)
 plus a 10% recency nudge (relevance still dominates)
 ```
@@ -674,7 +690,7 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 588 tests, zero dependencies, no npm install needed
+npm test          # 641 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -695,11 +711,12 @@ knit/
 │   ├── host/relevance.js # the relevance engine: BM25 + keyword extraction
 │   ├── host/links.js     # reference parsing (pure; never touches ranking)
 │   ├── host/classification.js # v0.19 file classification: kind / language / searchable / contextual
+│   ├── host/passage.js   # passage layer: chunking / passage scoring / line mapping (pure, zero I/O)
 │   ├── host/context.js   # context assembly: the three-tier Context Pack (pure, zero I/O)
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 588 tests
+└── test/                 # 641 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

@@ -7,6 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { makeWorkspace } from './fixture.mjs'
 import {
@@ -21,6 +22,7 @@ import {
   registerKnitDocsTool,
 } from '../src/host/tool.js'
 import { scan, apply, readDocument, buildContextFor, publicScanPayload } from '../src/host/index.js'
+import { SNIPPET_CHARS } from '../src/host/passage.js'
 // 校验器与真机探针**共用同一份** —— 两边各写一份必然漂移，
 // 而它锁的恰恰是「工具返回值 vs 它自己的 schema」这件最容易腐坏的事。
 import { validateAgainst } from '../tools/json-schema-subset.mjs'
@@ -72,14 +74,37 @@ function fakeExec(session) {
  *
  * @param {object} exec - 执行上下文
  * @param {object} args - 参数
- * @param {{read?: Function, contextFor?: Function, audit?: object}} [deps] - 覆盖注入的依赖
+ * @param {{read?: Function, scan?: Function, contextFor?: Function, audit?: object}} [deps] - 覆盖注入的依赖
  * @returns {Promise<object>} 工具结果
  */
 async function runTool(exec, args = {}, deps = {}) {
   const read = 'read' in deps ? deps.read : undefined
+  const scanFn = 'scan' in deps ? deps.scan : scan
   const contextFor = 'contextFor' in deps ? deps.contextFor : buildContextFor
   const audit = 'audit' in deps ? deps.audit : undefined
-  return knitDocsDefinition(scan, read, contextFor, audit).execute(args, exec)
+  return knitDocsDefinition(scanFn, read, contextFor, audit).execute(args, exec)
+}
+
+/**
+ * 包一层 `scan`：把 `ranked` 上的 `matches` 全部剥掉，模拟「没有片段数据」的路径
+ * （v0.20 里它意味着老宿主，或者命中名次落在 `PASSAGE_WINDOW` 之外）。
+ *
+ * 用它来守住那个仍存在的**兜底**分支：`read` + `pickSnippet`。
+ *
+ * @param {Function} scanImpl - 真的 `scan`
+ * @returns {Function} 剥掉 matches 的 `scan`
+ */
+function scanWithoutMatches(scanImpl) {
+  return async (root, limit, options) => {
+    const payload = await scanImpl(root, limit, options)
+    return {
+      ...payload,
+      ranked: (payload.ranked || []).map((doc) => {
+        const { matches, ...rest } = doc
+        return rest
+      }),
+    }
+  }
 }
 
 /**
@@ -366,6 +391,55 @@ test('limit: 只影响参与分层的候选池，不把 Context Pack 又切一�
   assert.ok(allItems(result).every((item) => typeof item.rel === 'string'))
 })
 
+test('集成: 同一条任务下，knit_docs 的命中段与面板载荷逐条一致（v0.20 §15）', async () => {
+  // 这条守的是「一个引擎、两个面」这件承诺：面板与工具各有一条补偿路径
+  // —— 面板靠客户端按 `rel` 从 `docs[]` 取回 `matches`（三层投影只有 7 个键），
+  // 工具靠 `tool.js` 的 `matchesByRel` 从 `payload.ranked` 取回。
+  // 两条补偿路径一旦漂移，用户看到的「命中段」和模型读到的行号就会不一样，
+  // 而单面的测试**各自都是绿的**。
+  const session = fakeSession([userMessage(1, '相关性排序与 BM25 的长度归一化')])
+
+  // ① 面板路径：客户端真正拿到的那份载荷
+  const payload = await scan(PROJECT_ROOT, 40, {
+    session, sessionId: 'sess-tool-test', sort: 'relevance', kind: 'doc',
+  })
+  const panel = publicScanPayload(payload)
+  const panelMatches = new Map(
+    (panel.docs || []).map((doc) => [doc.rel, Array.isArray(doc.matches) ? doc.matches : []]),
+  )
+  const panelWithHits = [...panelMatches].filter(([, list]) => list.length > 0)
+  assert.ok(panelWithHits.length > 0, '样本里至少该有一篇带命中段，否则这条是空测试')
+
+  // ② 工具路径：真实的 execute()
+  const value = await runTool(fakeExec(session), {}, { read: readDocument })
+  const items = allItems(value)
+  assert.ok(items.length > 0, '工具应当给出结果')
+
+  const ranges = (list) => list.map((m) => [m.startLine, m.endLine])
+  for (const [rel, list] of panelWithHits) {
+    const item = items.find((entry) => entry.rel === rel)
+    assert.ok(item, `面板给出了 ${rel} 的命中段，工具也必须给出这一篇`)
+    assert.ok(
+      Array.isArray(item.matches) && item.matches.length > 0,
+      `${rel} 在工具侧也必须有命中段`,
+    )
+    assert.deepEqual(
+      ranges(item.matches),
+      ranges(list),
+      `${rel} 的命中段行号：工具与面板必须是同一组（同一套判断的两种投影）`,
+    )
+  }
+
+  // ③ 反向：工具给了命中段的，面板也不能缺（不许「一边多一边少」）
+  for (const item of items) {
+    if (!Array.isArray(item.matches) || item.matches.length === 0) continue
+    assert.ok(
+      (panelMatches.get(item.rel) || []).length > 0,
+      `工具给出了 ${item.rel} 的命中段，面板载荷里也必须带`,
+    )
+  }
+})
+
 test('agentScope: 从 exec 里取出的三个字段都可用', () => {
   const session = fakeSession([])
   const scope = agentScope(fakeExec(session))
@@ -519,15 +593,20 @@ test('renderToolText: 三层都空时才说「没找到」', () => {
 })
 
 test('renderToolText: 工作区有文档或代码、但话题一个词都没命中 —— 不许说成「工作区里是空的」', () => {
-  // 真机实测的场景：问「路径越界怎么防」，49 篇一篇都没命中（文档侧只看每篇前 2500 字，
-  // 而这个词在 5 篇 .md 里全部出现在 2500 字之后）。原先这里打印的是
-  // "No Markdown documents found in the workspace." —— 工作区里明明有 49 篇。
+  // 真机实测的场景（v0.19 的时代）：问「路径越界怎么防」，49 篇一篇都没命中，因为文档侧
+  // 只看每篇前 2500 字，而这个词在 5 篇 .md 里全部出现在 2500 字之后。v0.20 取消了这个
+  // 窗口，所以「0 命中」现在是句更强的话 —— 但**边界仍要说实话**（单文件大小上限、媒体无正文）。
   const text = renderToolText(packOf({ total: 49 }))
   assert.ok(!text.includes('No documents or code files found'), '总数为 49 时不能说「一篇都没有」')
   assert.match(text, /No document or code file matched the current topic/)
   assert.match(text, /0 of 49 documents and code files/)
-  assert.match(text, /2500 characters/) // 窗口限制必须说出来
-  assert.match(text, /grep/) // 并给下一步
+  assert.match(text, /searched in full/) // v0.20：全文都搜过了
+  assert.match(text, /256 KB/) // 单文件上限（必须与 index.js 的 MAX_BODY_BYTES 一致）
+  assert.match(text, /images and videos have no searchable text/) // 媒体没有正文
+  // ⚠️ 这两条是 v0.20 的**反向**守卫：窗口没了，那句「更深的用 grep」就是假话，
+  // 留着还会让模型为一件不存在的事去做多余的 grep。
+  assert.ok(!/2500/.test(text), '不许再提 2500 字的窗口')
+  assert.ok(!/grep/.test(text), '不许再叫模型去 grep「更深的」内容')
 
   // 真的空工作区仍然走原来那句
   assert.match(renderToolText(packOf({ total: 0 })), /No documents or code files found in the workspace\./)
@@ -585,10 +664,11 @@ test('pickSnippet: 超长块**以命中词为中心**截，不是从头截', () 
   assert.match(snippet, /…$/, '右边被截掉要有省略号')
 })
 
-test('pickSnippet: 只看评分窗口内的正文（2500 字之后不算）', () => {
-  // 与 index.js 的 HAYSTACK_CHARS 对齐；否则会出现「排上来但段落里没有命中词」
+test('pickSnippet: 全文分块 —— 2500 字之后的内容同样抽得出来（v0.20 取消了窗口）', () => {
+  // v0.19 这条断言的是**空串**（只看每篇前 2500 字，与 HAYSTACK_CHARS 对齐）。
+  // 需求 §3 取消窗口后，评分看全文，抽段落也必须看全文 —— 否则「排上来了却没有片段」。
   const text = `${'甲'.repeat(3000)}\n\nBM25 在很后面。`
-  assert.equal(pickSnippet(text, ['bm25']), '')
+  assert.equal(pickSnippet(text, ['bm25']), 'BM25 在很后面。')
 })
 
 test('execute: 传了 read 时命中的那篇带 snippet；没有命中词的篇**不带这个字段**', async () => {
@@ -606,29 +686,47 @@ test('execute: 传了 read 时命中的那篇带 snippet；没有命中词的篇
   }
 })
 
-test('execute: 不传 read → 只是不带段落，分层照常给', async () => {
+test('execute: 不传 read → 命中的那篇照样带 matches（v0.20 起片段来自扫描，不再读盘）', async () => {
   const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
   const out = await runTool(exec, { query: 'sidebar', limit: 3 })
   assert.ok(allItems(out).length > 0, '不给 read 也要照常分层')
-  for (const doc of allItems(out)) {
-    assert.equal('snippet' in doc, false, '没给 read 就不该带段落')
+  const readme = allItems(out).find((d) => d.rel === 'README.md')
+  assert.ok(readme, '样本里应当有 README.md')
+  assert.ok(Array.isArray(readme.matches) && readme.matches.length > 0, '片段由 scan() 提供')
+  for (const m of readme.matches) {
+    assert.ok(Number.isInteger(m.startLine) && Number.isInteger(m.endLine), '片段必须带行号')
+    assert.ok(Number.isInteger(m.startOffset) && Number.isInteger(m.endOffset), '片段必须带偏移量')
+    assert.ok(Array.isArray(m.terms) && m.terms.length > 0, '片段必须说清命中了哪些词')
+    assert.equal(typeof m.snippet, 'string')
   }
+  // 没有命中词的篇仍然**字段缺省**（不编造）
+  const other = allItems(out).find((d) => !d.matches)
+  if (other) assert.equal('snippet' in other, false)
 })
 
-test('execute: read 抛错时**不影响**整次调用（只是少一段）', async () => {
+test('execute: read 抛错时**不影响**整次调用（兜底路径也只是少一段）', async () => {
   const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
   const boom = async () => { throw new Error('读盘炸了') }
-  const out = await runTool(exec, { query: 'sidebar', limit: 3 }, { read: boom })
+  // 剥掉 matches ⇒ 走 v0.19 的兜底（read + pickSnippet），这里让它炸
+  const out = await runTool(exec, { query: 'sidebar', limit: 3 },
+    { read: boom, scan: scanWithoutMatches(scan) })
   assert.ok(allItems(out).length > 0, '排序结果照常返回')
-  for (const doc of allItems(out)) assert.equal('snippet' in doc, false)
+  for (const doc of allItems(out)) {
+    assert.equal('snippet' in doc, false)
+    assert.equal('matches' in doc, false)
+  }
 })
 
 test('execute: read 返回失败信封时也只是少一段，不抛', async () => {
   const exec = fakeExec(fakeSession([userMessage(1, 'sidebar')]))
   const denied = async () => ({ ok: false, code: 'knit/outside-workspace' })
-  const out = await runTool(exec, { query: 'sidebar', limit: 3 }, { read: denied })
+  const out = await runTool(exec, { query: 'sidebar', limit: 3 },
+    { read: denied, scan: scanWithoutMatches(scan) })
   assert.ok(allItems(out).length > 0)
-  for (const doc of allItems(out)) assert.equal('snippet' in doc, false)
+  for (const doc of allItems(out)) {
+    assert.equal('snippet' in doc, false)
+    assert.equal('matches' in doc, false)
+  }
 })
 
 test('execute: 时间序（无命中词）时不抽段落，也不硬凑三层', async () => {
@@ -664,6 +762,137 @@ test('renderToolText: 有段落时多一行 `match:`，且行序是 标题 / 摘
   assert.equal(lines[at + 2], '   Why: matched in the title (排序)', 'Why 行在摘要之后')
   assert.equal(lines[at + 3], '   match: 命中段落甲', '段落行在 Why 之后且带 match: 前缀')
   assert.ok(!text.includes('match: \n'), '没有段落时不该出现空的 match 行')
+})
+
+test('renderToolText: v0.20 命中片段带行号，且**只渲染第一段**（第二、三段都不给）', () => {
+  const match = (startLine, endLine, snippet) => ({
+    startLine, endLine, startOffset: startLine * 10, endOffset: endLine * 10 + 5, terms: ['排序'], snippet,
+  })
+  const value = {
+    mode: 'relevance', topic: '排序', total: 1,
+    primary: [{
+      rel: 'a.md',
+      title: '甲',
+      summary: '',
+      mtimeMs: 1,
+      source: 'doc',
+      reason: { code: 'bodyMatch', terms: ['排序'], fields: 1 },
+      matches: [match(147, 163, '片段甲'), match(900, 912, '片段乙'), match(2000, 2010, '片段丙')],
+    }],
+    supporting: [], related: [], totals: { matched: 1, total: 1 },
+  }
+  const lines = renderToolText(value).split('\n')
+  const at = lines.findIndex((l) => l.startsWith('   match: '))
+  assert.ok(at > 0, '应当有 match 行')
+  assert.equal(lines[at], '   match: lines 147–163 — 片段甲', '第一段带行号')
+  // 需求 §16 的预算实测（R2：两段 4614 字符 = 1.71× > 1.4×）⇒ 工具侧只留一段。
+  const matchLines = lines.filter((l) => l.startsWith('   match: '))
+  assert.equal(matchLines.length, 1, `一条结果只渲染一段：${matchLines.join(' | ')}`)
+  assert.ok(!lines.some((l) => l.includes('片段乙')), '第二段不许出现')
+  assert.ok(!lines.some((l) => l.includes('片段丙')), '第三段不许出现')
+  assert.ok(!lines.some((l) => l.startsWith('   also:')), '不再有 also: 行')
+})
+
+test('renderToolText: 没有 matches 时才走注入的 readSnippet（v0.19 兜底路径）', () => {
+  const item = {
+    rel: 'a.md', title: '甲', summary: '', mtimeMs: 1, source: 'doc',
+    reason: { code: 'bodyMatch', terms: ['排序'], fields: 1 },
+  }
+  const value = {
+    mode: 'relevance', topic: '排序', total: 1,
+    primary: [item], supporting: [], related: [], totals: { matched: 1, total: 1 },
+  }
+  // 没有 matches ⇒ 用注入的 readSnippet（不带行号，因为兜底路径不知道行号）
+  const withRead = renderToolText(value, () => '兜底片段')
+  assert.ok(withRead.includes('   match: 兜底片段'), `兜底路径要渲染：${withRead}`)
+  assert.ok(!withRead.includes('lines '), '兜底路径没有行号，不许编一个')
+  // 有 matches ⇒ 用 matches，**不读** readSnippet
+  const withBoth = renderToolText({
+    ...value,
+    primary: [{
+      ...item,
+      matches: [{ startLine: 3, endLine: 4, startOffset: 0, endOffset: 9, terms: ['排序'], snippet: '片段' }],
+    }],
+  }, () => '兜底片段')
+  assert.ok(withBoth.includes('   match: lines 3–4 — 片段'), `优先用 matches：${withBoth}`)
+  assert.ok(!withBoth.includes('兜底片段'), '有 matches 就不该再读盘抽段落')
+})
+
+test('R2 预算：片段只带来有界增量 —— 每条结果一行 `match:`，且长度 ≤ SNIPPET_CHARS + 24', async () => {
+  // 需求 §16：进模型上下文的**要更精准，不是更多**。实现说明 §7 的 R2 定的上界是
+  // 「相对 v0.19 同一次调用不超过 1.4×」。这里把它落成一条**可复现**的守卫：
+  //   · v0.19 基线 = 剥掉 `matches` ⇒ 走 `read` + `pickSnippet` 兜底（老宿主的行为）
+  //   · v0.20 = 带 `matches` ⇒ 每篇渲染 `match:` 一行（**只有一行**：第二段已在
+  //     2026-10-07 的实测后砍掉，当时两段 = 1.71× > 1.4×）
+  // 比的是**整条增量**与**每条结果的增量**，不是比值 —— 比值会随 v0.19 兜底片段
+  // 的长短飘（pickSnippet 对短段落只给几十字符，那时比值天然高，并不代表膨胀）。
+  const para = (n, word) => `第 ${n} 段：关于 ${word} 的说明放在这里，后面跟着一些不重要的叙述，`
+    + '用来把这一段撑到接近一个正常段落该有的长度，免得测试量到的是一个玩具样本。'.repeat(4)
+  const extra = []
+  for (let i = 1; i <= 6; i += 1) {
+    extra.push([`docs/budget-${i}.md`, [
+      `# 预算 ${i}`,
+      '',
+      para(1, '无关内容'),
+      '',
+      `命中：woollybear 的处理入口在预算 ${i} 这一段的开头，${'后面继续展开细节，'.repeat(8)}`,
+      '',
+      para(3, '无关内容'),
+      '',
+      `再次提到 woollybear 是作为对照。`,
+      '',
+    ].join('\n')])
+  }
+  const root = makeWorkspace(extra)
+  const exec = fakeExec(fakeSession([{ role: 'user', text: 'woollybear 怎么处理' }], { cwd: root }))
+  const args = { query: 'woollybear', limit: 5 }
+  // ⚠️ 要比的是**模型读到的那个字符串**：工具的 `execute()` 返回结构化 value，
+  // 模型看到的是 `output.render()` 的产物。直接 `renderToolText(value)` 会漏掉
+  // 注册在 `output.render` 里的那个 `readSnippet` 兜底（`(item) => item.snippet`），
+  // 于是 v0.19 那条会因为「没有片段来源」而变空 —— 第一次就踩了这个坑。
+  const render = async (def) => {
+    const value = await def.execute(args, exec)
+    return def.output.render({}, value)[0].text
+  }
+  const v020 = await render(knitDocsDefinition(scan, readDocument, buildContextFor, undefined))
+  const v019 = await render(knitDocsDefinition(scanWithoutMatches(scan), readDocument, buildContextFor, undefined))
+  const items = v020.split('\n').filter((l) => /^\d+\. /.test(l)).length
+  const matchLines = v020.split('\n').filter((l) => l.startsWith('   match: '))
+  assert.ok(items > 0, `要有结果才量得到：${v020}`)
+  assert.ok(matchLines.length > 0, `v0.20 要带行号片段：${v020}`)
+  assert.ok(matchLines.length <= items, `一条结果最多一行 match:，实测 ${matchLines.length} 行 / ${items} 条`)
+  for (const line of matchLines) {
+    // `   match: lines 147–163 — ` 是 24 个字符的固定前缀，片段本体 ≤ SNIPPET_CHARS
+    assert.ok(line.length <= SNIPPET_CHARS + 24, `单条片段超长（${line.length}）：${line}`)
+  }
+  assert.ok(v019.includes('   match: '), `v0.19 兜底也要有片段，否则这个对比没意义：${v019}`)
+  assert.equal(v019.includes('lines '), false, '兜底路径不许有行号')
+  const perItem = (v020.length - v019.length) / items
+  assert.ok(v020.length > v019.length, 'v0.20 应当多出片段信息（否则守卫是假的）')
+  assert.ok(
+    perItem <= SNIPPET_CHARS + 24,
+    `R2 超预算：每条结果多出 ${perItem.toFixed(0)} 字符 > ${SNIPPET_CHARS + 24}`,
+  )
+  // 实测比值只作为**记录**（真机压力语料上是 1.35×），不作门槛 —— 见上面的理由。
+  console.log(`    R2 实测：v0.20 ${v020.length} 字符 / v0.19 ${v019.length} 字符 = `
+    + `${(v020.length / v019.length).toFixed(2)}×（${items} 条结果）`)
+})
+
+test('镜像常量：工具里的单文件上限与片段长度必须和宿主一致', () => {
+  // 这两对常量是「两处各写一份、必然漂移」的典型：
+  //   · `MAX_INDEXED_KB`（工具对模型说的话）vs `index.js` 的 `MAX_BODY_BYTES`（真读多少）
+  //   · `SNIPPET_CHARS`（工具渲染上限）vs `passage.js` 的 `SNIPPET_CHARS`（评分侧片段上限）
+  // 漂了不会报错，只会让工具**对模型说假话**（说 256 KB、实际读 128 KB），
+  // 所以按源码文本断言 —— 两个文件都真实存在，改一边忘另一边就红。
+  const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
+  const toolSrc = src('../src/host/tool.js')
+  const indexSrc = src('../src/host/index.js')
+  const kb = Number((toolSrc.match(/const MAX_INDEXED_KB = (\d+)/) || [])[1])
+  const bytesKb = Number((indexSrc.match(/const MAX_BODY_BYTES = (\d+) \* 1024/) || [])[1])
+  assert.ok(Number.isFinite(kb) && Number.isFinite(bytesKb), '两处常量都要能解析出来')
+  assert.equal(kb, bytesKb, `工具说 ${kb} KB，宿主实际读 ${bytesKb} KB`)
+  const toolSnippet = Number((toolSrc.match(/const SNIPPET_CHARS = (\d+)/) || [])[1])
+  assert.equal(toolSnippet, SNIPPET_CHARS, `工具渲染上限 ${toolSnippet} vs 评分侧 ${SNIPPET_CHARS}`)
 })
 
 test('renderToolText: 不传 readSnippet → 段落字段被忽略（渲染函数无副作用）', () => {

@@ -3,6 +3,251 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.20.0] - 2026-10-07
+
+> **Deep Context Retrieval**。核心体验从「任务 → 相关文件」升级为
+> 「**任务 → 相关文件 → 相关内容片段**」—— Find the file. Then find the part that matters.
+> 在这之前，每一篇只有**正文前 2500 字**参与打分，所以「那一段在 5000 字之后」就等于
+> 「搜不到」，而 `knit_docs` 只能诚实地告诉模型「用 grep 去更深处找」。
+> 关键约束：**没有 embedding / 向量库 / LLM / 网络请求 / AST / LSP / Tree-sitter /
+> 代码知识图谱、没有第二个栏位、没有 Dashboard、没有新的 preview framework。**
+> 文件仍然是 Context Pack 的**基本实体** —— 这不是把 Knit 改成一个纯片段搜索工具。
+
+### 变化
+
+- **取消「每篇只看前 2500 字」**（删掉 `HAYSTACK_CHARS`）。文档与代码的 `body` / `hayBody`
+  现在都是**整篇**转小写，上限仍是单文件 `MAX_BODY_BYTES = 256 KB`。
+  一个容易忽略的事实：宿主**本来就把整篇读进内存**（`readFile` 之后才 `subarray`），
+  所以这一版新增的磁盘 I/O 约等于 0，代价是幂等副本的内存（约 2× 正文，见「已知限制」）。
+- **新增 `src/host/passage.js`（零依赖、纯字符串、无 AST）**。切分是**结构优先 + 长度兜底**：
+  Markdown 按 H1/H2/H3 / 段落 / 代码块，代码按 `function` `class` `const` `let` `var`
+  `interface` `type` `export` `import` 声明起点与大括号块；行号与字符偏移量由构造过程保证
+  （不是事后 `indexOf` 猜的）。导出 `chunkText()` / `snippetOf()` / `passageMatchesFor()` /
+  `windowTf()` / `passageTfOf()` 与 `PASSAGE_WINDOW = 24` / `PASSAGE_MAX_PER_FILE = 2` /
+  `SNIPPET_CHARS = 200` / `PASSAGE_MAX_CHARS = 1200`。
+- **文件排序与片段排序分开**（需求 §8）。既有 `rankByRelevance()` 一行未改：先按文件排名，
+  再在每篇内部挑片段（命中词种数优先、其次窗口字频、最后行号升序），每篇最多 2 段、
+  段与段不重叠；「20 个低价值片段堆高分」这条被 `PASSAGE_MAX_PER_FILE` 与窗口内字频同时挡住。
+- **长文件污染不再因为全文检索复活**（需求 §9）。`context.js` 的 `isDocHit` 闸门改用
+  **片段窗口内的字频**（`windowTf`，默认窗口 = `PASSAGE_MAX_CHARS`）而不是整篇字频 ——
+  否则 29000 字的 CHANGELOG 会对**每一个**任务都满足「这一篇在讲它」而挤进每条任务的 Supporting。
+  没有片段数据时（老宿主、`test/context*/fixture.mjs` 的合成记录）逐字退回 v0.19 的整篇口径，
+  因此 `test/eval.test.mjs` 与 `test/context-eval.test.mjs` 的基线**一条都没改**。
+- **`knit_docs` 给出「文件 + 理由 + 最相关片段 + 行号」**（需求 §15/§11）。每项可选带
+  `matches: [{startLine, endLine, startOffset, endOffset, terms, snippet}]`；渲染成
+  `match: lines 147–163 — …`。**只渲染一段**：R2 实测两段 = v0.19 的 1.71×，超过实现说明
+  定的 1.4×，按那条规则砍到一段（同一语料 1.04×，最坏语料 1.36×）。诚实性文案改成
+  「Every document and code file was searched in full (files over 256 KB are indexed only up
+  to that size); images and videos have no searchable text.」—— 不再提 `2500 characters`
+  和 `use grep`。顺带拿掉 v0.19 里「每返回一条就 `readDocument()` 读一遍整篇」的 I/O。
+- **面板多一行 metadata：「命中段 147–163」**（需求 §12 + 2026-10-07 用户裁决）。它是一个
+  **长得像文字的 button**（无图标、**无描边** —— 选中 / 聚焦都不画环，键盘焦点靠与 hover
+  同款的下划线；**有一个灰底**：`--knit-chip-bg` + 6px 圆角（胶囊感）、1px 6px 内边距，两个主题各一套值，
+  比行选中那档深一点，免得它在被选中的行里消失），点它走**既有**的就地预览。**点整行也一样**：行点击与
+  「点那行字」都带上篇内第一段命中（用户原话「我在点击这个文档或者是代码块的时候，就进入一个
+  预览，那能不能直接定位到这几段呢？这样的交互非常丝滑」）。代码文件会定位到命中行，命中区域画
+  一条中性灰横带（`.knit-code-hit`，`position:absolute` + `pointer-events:none` + **`opacity:.5`**
+  —— 用户要求「背景太深了，再减少一半」；不写死颜色、用 `--knit-active-bg` 回落），滚动用的仍是
+  既有那一个 `.knit-preview-body`。文案从「命中片段」缩到**「命中段」**（EN `Passage:`），并且与
+  v0.14 的「直接命中」**合成同一条 metadata 行**（`.knit-subrow`：命中段在左、中间一条 1px 中性
+  竖线、理由在右）—— 于是这一版**没有让每一行变高**。没有分数、没有百分比、没有置信度、
+  没有「AI 分析」—— 只展示可验证的行号区间。**2026-10-07 用户裁决（标点）**：中文去掉全角冒号
+  （`命中段 147–163 ｜ 直接命中 knit · border`）—— 全角冒号占一个整字宽 + 强制停顿，而这一行是两个
+  标签并排；整族 6 个理由标签一起改，否则标点会随理由类型跳。**冒号只在引出列表时保留**，**英文保留
+  ASCII 冒号**（半个字宽，且 `direct match knit` 读起来像在说 match 这个词）。
+- **Markdown 预览也跳到命中段**（2026-10-07 用户裁决：「文档这边也参考代码块一样，选中文档以后进入详情，
+  要指定到段落」）。`.md` 没有行号 ⇒ 不走行锚点，走**文本锚点**：从片段原文的 `[startOffset, endOffset)`
+  里按行取 1–4 根「针」（长度 ≥12、≤40；去掉行首 `#` / `>` / 列表符，`[文字](地址)` 只留文字，
+  `*` / `~` / 反引号去掉，**下划线只在成对强调处删**以保住 `snake_case`，空白折叠），再把渲染后的
+  文本节点接成一根带下标映射的串去 `indexOf`，找到就滚 `.knit-preview-body` 并给那一块一次 1.2s 的淡底
+  （`.knit-md-body .knit-doc-hit`，与 Coverage 那层同一档灰、同一个 `FLASH_MS`）；**找不到就什么都不做**
+  （宁可不动，也不假装动了 —— 需求 §26）。两处都是真机实测后才对的：① DSH 的**行内 `code` 是
+  `inline-block`** —— 不把它算作行内，淡底会画在那一小片片上，所以 `DOC_INLINE_DISPLAY` 里补上
+  `inline-block / inline-flex / inline-grid / ruby`，落到所在的段落 / 列表项；② 同一根针在长文档里出现
+  几十次是常态，`docPickOffset()` 先**独特的那根针优先**、同档再按 `startOffset / 全文长度` 挑
+  **离锚点最近的那一次**（否则 `indexOf` 永远跳去全篇最早那次 —— 实测 CHANGELOG 就跳去了第 11 行的
+  同名行内 code 而不是第 36 行）。渲染仍是 DSH 的 `MarkdownText`（`DocPane` 只包一层，**不自己渲染
+  Markdown**）；正文走**显式 `body` prop** 而不是 children（测试替身展开函数组件时只传 props）。
+- **修一处在真机截图上发现的缺陷：Context Pack 的三层行不显示「命中片段」**（2026-10-07 验收时发现）。
+  宿主给三层条目的投影只有 `rel / title / summary / mtimeMs / kind / source / reason` 七个键
+  （`context.js`），**没有 `matches`** —— 于是 Primary / Supporting / Related 这九行（恰恰是最该给
+  片段的那几行）一条片段行都没渲染，只有「其他相关文档」区（取自 `docs`）有。修法是客户端按 `rel`
+  从 `visibleDocs` 取回 `matches`（`docs` 里本来就有这份数据 ⇒ **载荷零增长**；没有改成让宿主补键，
+  因为面板载荷已经吃掉 16 KB 预算的大部分）。新增守卫
+  `test/client.test.mjs`「v0.20 命中片段：三层（Primary/Supporting/Related）的行也要有片段行」——
+  把修法拿掉即变红（`README 在三层里，也必须有片段行`）。
+
+
+- **暗色模式：把列表里最高那一档的白降下来，并全部改回 DSH 官方令牌**（2026-10-07 用户：
+  「暗色模式下高亮那个色值是不是纯白色……太亮了，就是太白了，看得有点犯晕」）。属实：命中段的底
+  原本是**纯白 13%**（`--knit-chip-bg`），是三档里最高的一档，而且那个 13% 是我们自己拍的数 ——
+  DSH 官方的 `--dsw-alias-interactive-bg-active` 在暗色下只有 `#ffffff24` = 14.12%（值取自
+  `dsh-client-ui-theme/lib/client.js`）。现在三档一律「官方透明度 × 固定比例」，且**暗色三个比例
+  比浅色各低 10%**：hover `7.84%×0.36`、active `14.12%×0.54`、chip `14.12%×0.81`（浅色比例是
+  `0.41` / `0.60` / `0.90`，暗色这组 = 浅色 ×0.9；**浅色的三个值一个字没动**）。顺手修掉两处「自己造一套」：
+  ① 代码里有 6 处引用 `--dsw-alias-text-primary/secondary/tertiary` —— **DSH 全库零定义**（逐文件核实），
+  等于一直在静默失效：`color` 取到 unset ⇒ 命中段那一格的 hover 变色其实从来没生效过；已全部改回
+  官方 `--dsw-alias-label-primary/secondary/tertiary`，并补上官方浅色值作 fallback。
+  ② 图标原来写死 `#000` / `#fff`：暗色的 `#fff` 比 DSH 自己的主文本色 `#f9fafb` 还亮，现在走
+  `--dsw-alias-label-primary`（令牌自己随主题切，那条 `body[data-ds-dark-theme] .knit-icon` 覆盖规则
+  因此删掉）。守卫：`test/client.test.mjs` 的灰底用例改成断言三档 + 「命中段必须比行选中更深」
+  + 「不得亮过官方 active 14.12%」+「不许出现 `--dsw-alias-text-`」；`test/icon.test.mjs` 改成断言
+  官方令牌 + 不许再写死黑白。**测试数不变（635）**，是替换断言而不是加用例。
+
+- **代码预览：语法高亮（2026-10-07 用户新增需求）**。用户原话：「我们现在在暗色模式下它是白色，
+  对于一个阅读代码的用户来说，它的可读性太低了；那在浅色模式下它也是一种黑色……你看这块要怎么治理一下？」
+  治理方式**不是自己配色**，而是**接 DSH 官方那一套**：
+  ① 复用客户端**本来就在 require** 的 `@deepseek-ai/dsh-client-ui-primitives` 里的
+  `useCodeHighlighter(language)`（与 `MarkdownText` 同一个包 ⇒ **零新依赖、零新 specifier**）；
+  ② 语言标识**只认宿主分类层**给的 `language`（`classifyFile()` 的结论）—— 客户端自己不建第二张后缀表；
+  ③ 颜色**只来自 `--shiki-*`**（定义在 `dsh-client-ui-theme`：`--shiki-token-keyword` 浅 `#d6336c` /
+  暗 `#faa2c1`、`comment` `#868e96` / `#adb5bd`、`string` `#2f9e44` / `#69db7c`……）⇒ 深浅两个主题
+  各自吃到官方调色板，不必为任何一个主题写死色值（这正是上面那条暗色治理的反面教材）；
+  ④ 拿不到高亮器（旧版 DSH / 包缺失）时**静默回落纯文本**，不报错、不空白。
+  **性能**：官方高亮器是同步的 shiki JS 引擎，真机实测约 170–560 ms / 千行 —— 4000 行的文件
+  （v0.19.1 基线 117 ms 打开）要 **1.3–2.2 s**，回车点开会白等一秒多。当天先收到「只上色前
+  800 行」，用户仍反馈「加载还是有点慢」，于是**再收一次**（用户原话：「要不代码模块我们换一个方案，
+  就是命中段才有颜色，不命中的段就不用上颜色，还是用原来的，浅色模式下用黑色，暗色模式下用白色
+  就可以了。我觉得这样可能就简单了。因为我刚刚去看了一下，加载还是有点慢，800 行也是很慢」）：
+  上色范围 = **命中段前后各 `CODE_HL_PAD = 60` 行**，硬上限 `CODE_HL_MAX_LINES = 800`
+  （命中段本身可能几百行）；**没有命中段（载荷里没有 `matches`）就一个 token 都不上色**，其余行
+  保持默认正文色（浅色黑 / 暗色白，跟随主题令牌）；窗口之上 / 之下的行各是**一个**纯文本节点
+  （截断的是颜色，不是内容）。真机实测（同一浏览器会话连开 8 篇）：`client.js`（4000 行）
+  **1496 → 424 ms**、`client.test.mjs`（4000 行）**2226 → 193 ms**，8 篇合计约 **5.9 s → 1.3 s**。
+  ⚠️ 已知代价：窗口从半截注释 / 字符串中间开始时缺分词上下文，那一段可能**错色**（命中横带仍精确
+  标出行）。⚠️ 试过并**否决**「用
+  `useEffect` + `setTimeout(0)` 让出一帧、颜色随后补」：真机反而更慢（首个文本 3605 ms、颜色 3614 ms，
+  基线是同步版 1458 ms）—— `setTimeout(0)` 的回调在下一次绘制**之前**就跑掉了，纯文本那一帧从未
+  真正画出来，还多付了一次「文本节点 → 19782 个 span」的替换提交。
+  **渲染形状**：正文仍是**一个** `<pre>`，行间只隔一个 `'
+'` 文本节点、**不包逐行元素** ——
+  行锚点（v0.20 §13）靠 `pre.scrollHeight / 行数` 量行高，逐行元素会把这个几何改掉；
+  窗口之外的头 / 尾也各是**一个**纯文本节点。高亮器返回的行数与正文对不上时一律退回纯文本
+  （宁可没颜色，也不能让颜色落在错误的代码上）。`useMemo` 记忆化，滚动 / 悬停 / 5 s 轮询的重渲染不重算。
+  测试 **+4（635 → 639）**：`test/client.test.mjs` 新增「逐 token 上色、颜色只来自 `--shiki-*`」
+  「宿主没导出高亮器时回落纯文本」「只给命中段前后各 60 行上色、窗口被 `CODE_HL_MAX_LINES` 截住」
+  「没有命中段就一个 token 都不上色」；`test/harness.mjs` 的假高亮器同时记录收到的**语言**与**正文**。
+  真机实测（Playwright，浅/暗两主题）：颜色集合 = `--shiki-token-keyword/-comment/-string/-constant/
+  -function/-punctuation` + `--shiki-foreground`；命中横带几何、锚点滚动、横向滚动都没被 token 化破坏。
+
+- **交互性能治理（2026-10-07，用户报「点击选中文档 / 代码都很卡、切换标签也卡顿」）**。先测后改：
+  宿主**不慢**（`/api/recent` 59–104 ms、`/api/context` 58 ms；R1 规模基准 1000 文件 cold 157 ms /
+  warm 21 ms，两条门槛都 PASS），慢在客户端四处：① **语法高亮每次重付**（`CodePane` 的 `useMemo`
+  只活在挂载期，切换类型档会卸载预览）⇒ 加**按文件缓存**（`CODE_HL_CACHE`，LRU 8 篇，键 =
+  `rel` + 窗口范围）；② **FLIP 每次提交把整屏行全量量一遍**（`applyRowFlips` 的 `settled` 判据只看
+  视图签名）⇒ 加**行签名短路**（`rowSig` = 窗口尺寸 + 每行 `rel` / `tierKey` / `matches` 数 / mtime，
+  签名不变就复用上次的布局点、一行都不量）；③ **每 5 s 轮询无条件 `setState` 一个新对象** ⇒
+  载荷签名与上次相同就**返回同一个 state 对象**（真 React 靠 `Object.is` 跳过整棵子树重渲染），
+  时间戳也改成渲染时刻取钟、不再为它重建 state；④ 行高 layout effect **先量后判** ⇒ 改成不补间就
+  提前返回（「别白量」：一屏挂着上万个 token span 时白量一次 ≈ 0.25 s @4× 节流）。
+  **改前 / 改后**（4× CPU 节流 + Retina，同一套脚本）：切换类型档阻塞 **118 → 0–69 ms**、
+  点文档行阻塞 **415 → 172 ms**、同一篇代码关掉再开阻塞 **1390 → 261 ms**（CDP Profiler 里
+  `findNextMatchSync` = shiki 分词**从热点中消失**）、点代码行首开仍重（**2728 → 2217 ms**，剩下的是
+  第一次冷分词，第二次起走缓存）。测试 **+2（639 → 641）**：「同一篇代码收起再打开不再重新分词
+  （按文件缓存）」「载荷一字没变时，轮询不再落状态」—— 两条都**放过一次 bug**：把缓存 / 去重绕过
+  立刻变红（`actual 17 vs 11` / `actual 2 vs 1`）。⚠️ `test/harness.mjs` 的 `reset()` 补了
+  `timers.clear()` 与 `stateWrites()`：轮询链会自己续命、替身又从不跑 effect cleanup，上一个用例的
+  链会污染下一个用例的 hook 槽位（`v0.18 Coverage flash` 那条用例因此补了一次 `await harness.flush()`，
+  断言一个字没改）。
+
+### 测试
+
+- `npm test`：**641 / 641 通过**（v0.19.1 是 588；26 个测试文件）。
+- **新增 `test/deep-context.test.mjs`（17 条）**：需求 §21 点名的 12 个用例逐条对应 + §17 的
+  媒体反例 + `windowTf` 单元 + 长归档分层集成 + **R2 面板预算**（≤24 篇带片段、每篇 ≤2 段、
+  片段 ≤`SNIPPET_CHARS`+8、载荷增量 ≤ 实测上界 16 KB / 每篇 700 B）。
+- **新增 `test/deep-eval.test.mjs`（4 条）** 与 `test/eval/deep.mjs`（四指标的唯一定义处）。
+- **新增 `test/deep-scale.test.mjs`（3 条）**：1000 文件规模的硬门槛与确定性。
+- `test/client.test.mjs` **+17**（127 → 144）：命中片段的渲染与点击、代码行锚点几何、样式纪律、i18n 键、
+  「媒体卡片即使被塞上 `matches` 也不渲染」，以及两条 2026-10-07 的裁决守卫：
+  **三层行也要有片段行**（`README 在三层里，也必须有片段行` —— 把客户端的 `withHits` 拿掉即红）、
+  **两条 metadata 合成一条**（`.knit-subrow` 存在、命中段在「正文命中」之前、有且只有一条 1px 竖线）、
+  **点整行带锚点**（行为断言 + `previewFor(doc, firstMatchOf(doc))` 源码守卫 —— 测试替身没有真实
+  布局，横带量不到行高，所以这条按 `AGENTS.md` §8.2 走「守代码形状 + 人眼」）。样式守卫同时钉住
+  `outline:none`（不再有白描边）、横带 `opacity:.5`、竖线是 1px 且不是虚线 / 渐变。
+  其中 **6 条是 Markdown 文本锚点**：归一化口径（`snake_case` 不许被当成强调）、取针（跳太短的行 /
+  去重 / 上限 / 越界不许闭眼切）、`docPickOffset`（重复的针按位置比例挑、独特的针优先、空正文返回 -1）、
+  `DocPane` 只包一层且没有 DOM 时不抛、接线守卫（`ratio` 一路传下去、`inline-block` 必须算行内）、
+  样式纪律（`transition` 在基础选择器上、时长 == `FLASH_MS`、不画边框）。
+- `test/tool.test.mjs` +3：R2 预算守卫、镜像常量守卫（工具说的 256 KB 必须等于宿主真读的
+  `MAX_BODY_BYTES`，工具的 `SNIPPET_CHARS` 必须等于评分侧的）、**跨面集成守卫**（需求 §15：
+  同一条任务下 `knit_docs` 的 `matches` 行号必须与面板载荷 `docs[].matches` 逐条一致 ——
+  两侧各有自己的补偿路径〔面板靠客户端按 `rel` 取回、工具靠 `tool.js` 的 `matchesByRel`〕，
+  单面测试**各自都是绿的**，只有这条能抓住它们漂移）。
+- **v0.19 的既有基线一条没改**（需求 §22）：`test/eval.test.mjs` 与
+  `test/context-eval.test.mjs` 的断言、夹具与阈值全部原样通过。
+
+### 改动量
+
+- **26 个功能文件 = 20 改 + 6 新增**（另有 2 个不进包的开发文件：`tools/agents-budget.mjs`、`knit/AGENTS.md`；
+  发布提交合计 **33 处改动 = 25 改 + 8 新增** —— 多出来的 5 处是仓库侧的演示资产：`docs/README.md`
+  与重拍的四张图 `docs/screenshot.png` / `screenshot-media.png` / `screenshot-all.png` / `demo-reorder.gif`）。
+  仓库根就是 `knit/`；`git diff --shortstat` = `25 files changed, 2507 insertions(+), 218 deletions(-)`，
+  不含 8 个新文件。
+  > 2026-10-08 仓库侧又补了两轮**不进包**的改动：① **指令上下文治理**（`tools/agents-budget.mjs` 加
+  > `--claims` / `--strict` / 每层 sha256 指纹，常驻层改成触发词路由并净减 302 B，裁决记在
+  > `Knit-决策记录.md`）；② 按 v0.20 界面**重拍四张演示图**（`docs/` 不在 `files` 白名单里，它们只出现在
+  > GitHub README 与市场详情页上）。两轮都**没动插件代码**（tarball 只因本节这几行文档改动而略变，
+  > 打包数字见下）。
+- **新增 6 个**：`src/host/passage.js`、`test/deep-context.test.mjs`、`test/deep-eval.test.mjs`、
+  `test/deep-scale.test.mjs`、`test/eval/deep.mjs`、`tools/deep-benchmark.mjs`。
+- `npm pack --dry-run`：**51 文件 / 557.0 kB 打包 / 1.66 MB 解包**（v0.19.1 是 46 文件 / 483.4 kB）。
+  ⚠️ **shasum 故意不写在这一节里**：这份 CHANGELOG 本身就在 tarball 里，写自己的 shasum 会自指
+  （改一次就变一次）。**发布前那一刻的 shasum 记在 `03_发布/发布清单-v0.20.0.md`**（仓库外）。
+
+### 基准
+
+- **Deep Context Eval（需求 §23 的四个指标，`node -e "…runDeepEval()"`）**：
+  `DeepHitRate = 1.000`（v0.19 口径 **0.167**）、`PassageHit@1 = 1.000`、
+  `PassageRecall = 1.000`、`LongDocumentNoiseRate = 0.000`。5 条深度用例（词只在 2500 字之后、
+  尾部、一处两命中、代码函数附近、heading 附近）全部 `✔ 第 1 名`，长归档在 6 条用例里
+  **一次都没进 Primary/Supporting**。
+- **R1 规模（`node tools/deep-benchmark.mjs`）**：100 文件 cold 63 ms；500 文件 164 ms；
+  1000 文件（进池 400 文档 + 100 代码）**157 ms**；真实工作区 1100 文件
+  （进池 400 + 300）**384 ms**。门槛 `1500 ms` / `1200 ms`，余量约 10× / 3×。
+- **R2 预算（实测）**：面板载荷 24 篇带片段时 `+14760` 字节（每篇 615 B，片段最长 202 字符 ——
+  需求 §16 要的是更精准而不是更大，所以这条钉了自动守卫）；`knit_docs` 渲染文本
+  1.04×（真机压力语料）～1.36×（最坏语料），均在 1.4× 以内。
+- **§29 Step 8 真实验证**（真实工作区 `08_Knit`，非合成样本）：`knit/CHANGELOG.md`
+  第 907 行的唯一词（正是那句「Matches come from the first 2500 characters…」）与
+  `knit/src/host/context.js` 第 133 行的唯一词，两者都**不在前 2500 字内** ——
+  v0.20 都能命中并给出覆盖该行的片段（名次 5/126 与 10/126）。
+
+### 已知限制
+
+- **Markdown 预览靠文本锚点跳段，不是行号**：`.md` 的「命中段」点击（以及直接点整行）会滚到**那一块**
+  （片段首行那根「针」落在哪个渲染块上）并闪一次底 —— 但它指的是一段**文本**，不是源文件第 N 行；
+  针在渲染结果里找不到时只打开、不滚动（宁可不动，也不指错）。代码文件才是精确到行的锚点。
+- **单文件 256 KB 上限**：超过的部分不索引（输出里如实说明）。
+- **媒体没有可检索正文**，不做 OCR、不调视觉模型（需求 §17）。
+- **内存**：`body`（原文）与 `hayBody`（小写副本）现在都是整篇，每条约占 2× 正文；
+  缓存淘汰仍按 `bodyBytes` 计一份（已知偏差，未改）。
+- **多词查询下，什么话题都提一句的长归档在文件级仍可能排在聚焦短文前面**：
+  `isDocHit` 管的是**分层**，不管文件名次。
+
+### 没有实现（刻意）
+
+Context Provenance、Context Graph UI、Pin-Lock、Context Bundle、Multi-Harness、MCP Server、
+Doubao Adapter、Semantic Search、Embedding、Session Memory、AI Summary、新 Dashboard、
+embedding / 向量数据库 / LLM / 网络 / LSP / Tree-sitter / AST 依赖图 / 语义模型 / 知识图谱，
+以及把 Knit 做成 IDE / Code Intelligence / Language Server。
+
+### 三问（每版必答，需求 §16）
+
+1. **用户现在多获得了什么能力**：点开任何一篇（无论多长）都能直接看到**命中在哪几行**，并且
+   预览会**滚到那一段** —— 代码精确到行、Markdown 落到那一块。此前长文档里「第 5000 字之后」
+   等于不存在：列表只给文件名，预览从头开始，用户得自己在整篇里找。
+2. **Agent 的 Context Consumption 多获得了什么能力**：**知道「文件内部哪里相关」**。
+   `knit_docs` 每条多一行 `match: lines 147–163 — …`（原文片段 + 行号），模型不必为定位再 `grep`
+   或整篇读一遍；诚实性文案也随之改成「全文都搜过了」（不再说「只看前 2500 字，更深的用 grep」）。
+3. **明确没有做**：见上一节「没有实现（刻意）」。这一版**刻意不做**的四条最容易被误加的：
+   语义/向量检索（留 v0.24）、把片段当排序基本实体（文件仍是基本实体）、第二套预览框架、
+   在任何界面上显示分数 / 百分比 / 命中计数。已知边界另见「已知限制」。
+
+### 升级注意
+
+- **宿主不热加载** ⇒ 升级后要重启 DSH 才会生效（客户端 bundle 随页面刷新）。
+
 ## [0.19.1] - 2026-10-07
 
 > **定位重构（只改对外叙事，一行代码没动）**。产品已经从 v0.12 时代的「更聪明的最近文件列表」

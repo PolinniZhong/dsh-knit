@@ -11,15 +11,12 @@
  *     一个对所有文档相同的常数 —— 它不影响名次，评测测的就纯粹是相关性。
  *  2. **直接构造 `{haystack, mtimeMs}`，不走文件系统。** 被测对象是排序器，
  *     不是扫描器/解析器；把 I/O 与解析拉进来只会制造混淆变量。
- *     haystack 的口径严格照抄宿主（`src/host/index.js:237-239`）：
- *     **先截前 2500 字，再转小写**。
+ *     haystack 的口径严格照抄宿主（`src/host/index.js` 的 `readDoc`）：
+ *     **整篇正文转小写**（v0.20 取消了「只取前 2500 字」的窗口）。
  *
  * 覆盖六类用例（PRD §6.1）：纯中文 / 纯英文技术词 / 中英混合 /
  * 高频词陷阱 / 长文档陷阱 / 退化场景，另加一条一次性罕见词（SDD §4.8）。
  */
-
-/** 与宿主一致的正文截断长度。 */
-const HAYSTACK_CHARS = 2500
 
 /** 固定的「现在」，让评测完全确定（不受运行时间影响）。 */
 export const NOW = 1_760_000_000_000
@@ -46,7 +43,7 @@ function doc(rel, { title, summary = '', body = '' }) {
     haystack: {
       title: title.toLowerCase(),
       summary: summary.toLowerCase(),
-      body: body.slice(0, HAYSTACK_CHARS).toLowerCase(),
+      body: body.toLowerCase(),
     },
   }
 }
@@ -245,7 +242,7 @@ Knit 浮层里的点击是即时响应的，不走列表接口，也不等轮询
  * ```text
  * filename → title   （权重 ×4）
  * path     → summary （权重 ×2，保留结尾斜杠）
- * content  → body    （权重 ×1，前 HAYSTACK_CHARS 字）
+ * content  → body    （权重 ×1，整篇正文 —— v0.20 起不再截窗口）
  * ```
  *
  * `title` 是**带扩展名的文件名**，不是去扩展名的 stem —— 代码的文件名里扩展名本身
@@ -257,7 +254,7 @@ Knit 浮层里的点击是即时响应的，不走列表接口，也不等轮询
  * 走完全相同的 `{rel, haystack, mtimeMs}` 形状**，只是三段文本的来源不同。
  *
  * @param {string} rel - 工作区相对路径
- * @param {string} head - 文件开头的内容（会被截到 `HAYSTACK_CHARS`）
+ * @param {string} head - 文件内容（v0.20：整篇都进 body，与宿主一致）
  * @param {string} [kind] - 产物类型，默认 `'code'`
  * @returns {object} 语料记录
  */
@@ -275,7 +272,7 @@ function codeDoc(rel, head, kind = 'code') {
     haystack: {
       title: name.toLowerCase(),
       summary: dir.toLowerCase(),
-      body: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
+      body: head.toLowerCase(),
     },
   }
 }

@@ -26,6 +26,9 @@ import { buildLinkGraph, linksOf } from './links.js'
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
 // `renderContextText` 却没人调用 —— 那是个会与 `tool.js` 漂移的第二渲染器，已删。
 import { buildContext } from './context.js'
+// v0.20：内容片段层（Deep Context Retrieval）。**纯函数、不读盘**，
+// 目录遍历与缓存全在本文件 —— 它只回答「这篇正文里哪几段相关」。
+import { passageMatchesFor, passageTfOf, PASSAGE_WINDOW } from './passage.js'
 // v0.19：文件分类层。**所有「这个文件是什么、能不能预览/检索/进上下文」的判断都在这里**，
 // 本文件（以及 retrieval / preview / UI）不再自己看扩展名 —— 见 `classification.js` 的文件头。
 import {
@@ -69,17 +72,33 @@ const MAX_CODE = 300
 const SCAN_BUDGET_MS = 4000
 const HEAD_BYTES = 16 * 1024
 /**
- * 代码文件参与扫描时读取的头部字节数（v0.19）。
+ * 代码文件参与扫描时读取的**头部**字节数（v0.19）。
  *
- * 比 Markdown 的 16KB 更小是**刻意的**：代码的 haystack 只需要前 `HAYSTACK_CHARS`
- * 个字符，而真实项目里 `.ts` / `.js` 的数量可能非常高 —— 这是「bounded content read」
+ * 比 Markdown 的 16KB 更小是**刻意的**：头部只服务于引用关系与摘要渲染，
+ * 而真实项目里 `.ts` / `.js` 的数量可能非常高 —— 这是「bounded content read」
  * 那条要求（需求 §16）唯一的落地点。
+ *
+ * ⚠️ v0.20 之后它**不再**限制检索：参与打分的正文是 `MAX_BODY_BYTES` 那份，
+ * 与本常量彻底解耦（见 `readCode()`）。
  */
 const CODE_HEAD_BYTES = 8 * 1024
 /** 单次内联预览返回的正文上限（超出截断，面板只做预览不做全量阅读）。 */
 const DOC_MAX_BYTES = 512 * 1024
-/** 参与相关性打分的正文长度（不需要整篇）。 */
-const HAYSTACK_CHARS = 2500
+/**
+ * 参与相关性打分的正文字节上限（v0.20）。
+ *
+ * v0.19 之前这里是「正文前 2500 个字符」，于是正文命中只可能发生在前 2500 字里 ——
+ * 而真实案例里目标词出现在第 29 033 字（`CHANGELOG.md` 那条「不改窗口」的记录）。
+ * v0.20 取消这个窗口：**整篇正文都参与打分**，剩下的只是内存兜底。
+ *
+ * 单位是**字节**而不是字符：它是一道内存闸门，按字节量才是诚实的
+ * （中文文件因此拿到更少的字符数 —— 偏差方向是安全的那一侧）。
+ */
+const MAX_BODY_BYTES = 256 * 1024
+/** 解析结果缓存的条目上限（v0.20：缓存里现在留着整篇正文，必须封顶）。 */
+const MAX_CACHE_ENTRIES = 1200
+/** 解析结果缓存里正文的总字节上限 —— 比条目数更硬的那道闸门。 */
+const MAX_CACHE_BYTES = 24 * 1024 * 1024
 
 /** 相关性输入：最多回看几条消息、总字符上限。 */
 const CONV_MAX_MESSAGES = 6
@@ -174,6 +193,36 @@ const SKIP_DIRS = new Set([
 /* ── 解析结果缓存：key = 绝对路径，mtime+size 未变则直接复用 ──── */
 /** @type {Map<string, object>} */
 const cache = new Map()
+
+/** 缓存里正文的总字节数（配合 `MAX_CACHE_BYTES` 淘汰）。 */
+let cacheBodyBytes = 0
+
+/**
+ * 写缓存并做容量淘汰（v0.20）。
+ *
+ * 淘汰顺序是**插入序**（`Map` 的迭代序），命中时不重排 —— 也就是 FIFO，不是严格的 LRU。
+ * 对本插件的访问模式这是合适的：每次轮询扫的是同一批文件，FIFO 足够；
+ * 更重要的是它**完全确定**，不会引入「同一输入两次跑出不同结果」的风险（§20）。
+ *
+ * @param {string} key - 绝对路径
+ * @param {object} entry - 解析结果（`bodyBytes` 为正文占用）
+ */
+function cacheSet(key, entry) {
+  const prev = cache.get(key)
+  if (prev) {
+    cacheBodyBytes -= prev.bodyBytes || 0
+    cache.delete(key)
+  }
+  cache.set(key, entry)
+  cacheBodyBytes += entry.bodyBytes || 0
+  while (cache.size > MAX_CACHE_ENTRIES || (cacheBodyBytes > MAX_CACHE_BYTES && cache.size > 1)) {
+    const oldest = cache.keys().next()
+    if (oldest.done) break
+    const dropped = cache.get(oldest.value)
+    cacheBodyBytes -= (dropped && dropped.bodyBytes) || 0
+    cache.delete(oldest.value)
+  }
+}
 
 /* ── 对话关键词缓存：key = sessionId，seq 未变则直接复用 ─────── */
 /** @type {Map<string, {seq:number, keywords:Array<{term:string,weight:number}>}>} */
@@ -271,9 +320,18 @@ async function readDoc(absPath) {
   if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit
 
   let head = ''
+  let body = ''
+  let bodyBytes = 0
+  let bodyTruncated = false
   try {
     const buf = await readFile(absPath)
     head = buf.subarray(0, HEAD_BYTES).toString('utf8')
+    // v0.20：**整篇正文**参与打分。只解码前 `MAX_BODY_BYTES` 个字节 ——
+    // `toString(enc, start, end)` 在字节边界解码，超出部分从不变成字符串，
+    // 所以「巨文件」这条路径上的内存占用是有界的。
+    bodyBytes = Math.min(buf.length, MAX_BODY_BYTES)
+    body = buf.toString('utf8', 0, bodyBytes)
+    bodyTruncated = buf.length > MAX_BODY_BYTES
   } catch {
     return null
   }
@@ -288,11 +346,19 @@ async function readDoc(absPath) {
     // ⚠️ 原文首部**留在缓存里**（v0.14）：上下文装配要用它抽引用关系。
     // 它已经在内存里了 —— 再读一遍盘才是浪费。`publicDoc()` 不会把它发出去。
     head,
+    // v0.20：正文（截到上限）也留在缓存里 —— 片段切分与全文打分的输入。
+    // 语义上 `head` 是「首部」（引用关系用，16KB），`body` 是「全文」，
+    // 两者**不许互相挪用**（实现说明 D4）。
+    body,
+    bodyBytes,
+    bodyTruncated,
     hayTitle: title.toLowerCase(),
     haySummary: summary.toLowerCase(),
-    hayBody: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
+    // v0.20：**不再截前 2500 字**。文件级 BM25 现在看得到整篇正文，
+    // 于是 `avgdl[body]` 是真实长度，长文件被 `b = 0.75` 直接惩罚（D3）。
+    hayBody: body.toLowerCase(),
   }
-  cache.set(absPath, entry)
+  cacheSet(absPath, entry)
   return entry
 }
 
@@ -307,7 +373,7 @@ async function readDoc(absPath) {
  *
  *   - `title`   ← 文件名（权重 4，最高价值字段：`plugin-loader.js` 本身就带任务语义）
  *   - `summary` ← 工作区相对路径的目录部分（权重 2）
- *   - `body`    ← 正文前 `HAYSTACK_CHARS` 个字符（权重 1）
+ *   - `body`    ← **整篇正文**（权重 1；v0.20 起不再截前 2500 字）
  *
  * 于是 `FIELD_WEIGHTS` 现成的 4 / 2 / 1 恰好等于
  * 「filename × 4 / path × 2 / content × 1」，排序器零改动。
@@ -329,9 +395,16 @@ async function readCode(absPath, root) {
   if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit
 
   let head = ''
+  let body = ''
+  let bodyBytes = 0
+  let bodyTruncated = false
   try {
     const buf = await readFile(absPath)
     head = buf.subarray(0, CODE_HEAD_BYTES).toString('utf8')
+    // v0.20：与 `readDoc` 同一条口径 —— 头部只服务引用关系，打分看整篇正文。
+    bodyBytes = Math.min(buf.length, MAX_BODY_BYTES)
+    body = buf.toString('utf8', 0, bodyBytes)
+    bodyTruncated = buf.length > MAX_BODY_BYTES
   } catch {
     return null
   }
@@ -347,6 +420,9 @@ async function readCode(absPath, root) {
     mtimeMs: st.mtimeMs,
     size: st.size,
     head,
+    body,
+    bodyBytes,
+    bodyTruncated,
     // ⚠️ 标题是**带扩展名的文件名**，不是去扩展名的 stem。
     // 代码的文件名里扩展名是信息的一部分（`plugin-loader.js` vs `plugin.json`），
     // 去掉它反而丢掉了最能区分两个候选的那个字符。
@@ -355,9 +431,9 @@ async function readCode(absPath, root) {
     summary: dir,
     hayTitle: name.toLowerCase(),
     haySummary: dir.toLowerCase(),
-    hayBody: head.slice(0, HAYSTACK_CHARS).toLowerCase(),
+    hayBody: body.toLowerCase(),
   }
-  cache.set(absPath, entry)
+  cacheSet(absPath, entry)
   return entry
 }
 
@@ -503,10 +579,14 @@ async function readMediaMeta(root, { abs, kind }) {
 export async function collectDocs(root) {
   const found = await collectEntries(root)
   const docs = []
+  // v0.20：被 `MAX_BODY_BYTES` 截掉尾巴的文件数。**只是计数**，用来在规模报告里
+  // 诚实说出「有多大比例的文件没有全量参与打分」，不参与任何排序。
+  let bodyTruncated = 0
 
   for (const abs of found.md) {
     const meta = await readDoc(abs)
     if (!meta) continue
+    if (meta.bodyTruncated) bodyTruncated += 1
     docs.push({
       kind: KIND_DOC,
       path: abs,
@@ -518,6 +598,9 @@ export async function collectDocs(root) {
       mtimeMs: meta.mtimeMs,
       // 原文首部：`buildContextFor()` 抽引用关系用（v0.14）。内部字段，不下发。
       head: meta.head,
+      // v0.20：整篇正文随记录走 —— 片段切分与 `matches` 的输入。
+      // 它是**内部字段**：`publicDoc()` 不转发正文，只转发派生出的行号与摘要。
+      body: meta.body,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
@@ -530,6 +613,7 @@ export async function collectDocs(root) {
   for (const abs of found.code) {
     const meta = await readCode(abs, root)
     if (!meta) continue
+    if (meta.bodyTruncated) bodyTruncated += 1
     code.push({
       kind: KIND_CODE,
       path: abs,
@@ -540,6 +624,7 @@ export async function collectDocs(root) {
       size: meta.size,
       mtimeMs: meta.mtimeMs,
       head: meta.head,
+      body: meta.body,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
@@ -559,7 +644,7 @@ export async function collectDocs(root) {
     truncated: found.mdTruncated,
     codeTruncated: found.codeTruncated,
     mediaTruncated: found.mediaTruncated,
-    stats: found.stats,
+    stats: { ...found.stats, bodyTruncated },
     scanMs: found.scanMs,
   }
 }
@@ -718,7 +803,7 @@ function conversationFor(session, sessionId) {
  * @returns {object} 公开记录
  */
 function publicDoc(doc) {
-  return {
+  const out = {
     kind: doc.kind || KIND_DOC,
     path: doc.path,
     rel: doc.rel,
@@ -729,6 +814,11 @@ function publicDoc(doc) {
     mtimeMs: doc.mtimeMs,
     score: typeof doc.score === 'number' ? doc.score : null,
   }
+  // v0.20：命中片段（§11）。只下发**派生结果** —— 行号区间、命中词、片段摘要；
+  // `body` 与 `passage.text` 一律不出宿主（§16：不准把大文件正文塞进载荷）。
+  // 没有片段的记录**不带这个键**（v0.19 的响应形状因此逐字不变）。
+  if (Array.isArray(doc.matches) && doc.matches.length > 0) out.matches = doc.matches
+  return out
 }
 
 /**
@@ -817,8 +907,29 @@ export async function scan(root, limit, options = {}) {
   let ordered
   let topic = ''
   if (mode === 'relevance') {
-    const ranked = rankByRelevance(pool, keywords, Date.now())
+    // 一个 `now` 贯到底（打分与片段用同一个时间基准）—— 同一批输入两次跑出的
+    // 结果因此逐字相同（§20 的确定性要求）。
+    const now = Date.now()
+    const ranked = rankByRelevance(pool, keywords, now)
     ordered = ranked.docs
+    // v0.20（D5）：给每条命中记录附上逐词的「单窗口内最大字频」。
+    // 分层闸门 `isDocHit` 原来用**整篇**字频，而整篇字频会随文件变长而虚高 ——
+    // 窗口一开，29000 字的 CHANGELOG 就能对**每个**任务满足闸门（需求 §9 明令禁止）。
+    // 这一步只算「正文真的命中」的词，成本是几次 `indexOf`，不改名次、也不进 payload。
+    for (const doc of ordered) {
+      const tf = passageTfOf(doc)
+      if (tf) doc.passageTf = tf
+    }
+    // v0.20：给排名最前的 `PASSAGE_WINDOW` 条挂上命中片段（§11）。
+    // ⚠️ 这一步**不改名次**：片段是文件名的投影（实现说明 D3）。
+    // 窗口之外的记录只是「没有片段」，不是「不相关」—— `limit` 才管分页，
+    // 这里是宿主侧的成本上限（切段是 O(全文)，不该为 400 篇文件各做一遍）。
+    // `rankByRelevance` 返回的是浅拷贝，所以挂 `matches` 不会污染 `pool`。
+    const stop = Math.min(ordered.length, PASSAGE_WINDOW)
+    for (let i = 0; i < stop; i++) {
+      const matches = passageMatchesFor(ordered[i], keywords, now)
+      if (matches.length > 0) ordered[i].matches = matches
+    }
     // 话题标签用 `label`（把命中词的**原文区间合并**后的可读结果），不是 `matched`。
     // 后者是「语料里真实存在的词」，但仍可能是一堆碎片：
     // 「项目文档」的候选是 `项目文` / `目文档`，直接显示就成了「按「目文档、项目文」排序」。

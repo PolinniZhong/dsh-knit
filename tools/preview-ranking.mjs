@@ -88,8 +88,10 @@ const corpus = await collectDocs(root)
 
 /**
  * 每个词在**全文**里有几篇命中。
- * 用全文而不是 `haystack` —— 因为这里要回答的是「`grep` 能不能穷举」，
- * 而 `grep` 看的是全文（`haystack.body` 只截了前 2500 字，会低估）。
+ * 这里仍然自己读盘、不用 `haystack` —— 要回答的是「`grep` 能不能穷举」，
+ * 得用与打分完全独立的证据链（v0.20 起 `haystack.body` 也是全文了，
+ * 但它是**打分输入**，拿它当答案等于自证）。
+ * 上限仍是 `DOC_MAX_BYTES`（512KB）截断后的正文。
  */
 const texts = []
 for (const doc of corpus.docs) {
