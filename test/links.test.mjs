@@ -52,6 +52,32 @@ test('extractRefs：非 .md 不算', () => {
   assert.deepEqual(extractRefs('`a.png` `b.js` `c`'), [])
 })
 
+test('extractRefs：`anyExt` 显式放开目标到代码路径，默认行为一个字不改（v0.21 D5）', () => {
+  // 放开的是**目标**（关系层的 `documents`：md → 代码），不是源。默认调用必须与 v0.12 逐字一致。
+  assert.deepEqual(extractRefs('见 `docs/A.md` 与 `src/util.js`'), ['docs/A.md'])
+  assert.deepEqual(
+    extractRefs('见 `docs/A.md` 与 `src/util.js`', { anyExt: true }),
+    ['docs/A.md', 'src/util.js'],
+  )
+  // 裸路径写法同样受开关控制
+  assert.deepEqual(extractRefs('负责 src/host/links.js 的解析'), [])
+  assert.deepEqual(
+    extractRefs('负责 src/host/links.js 的解析', { anyExt: true }),
+    ['src/host/links.js'],
+  )
+  // 外链仍然不算（两个口径都一样）
+  assert.deepEqual(extractRefs('[x](https://e.com/a.js)', { anyExt: true }), [])
+})
+
+test('resolveRef：`anyExt` 与 extractRefs 同口径，默认只认 .md（v0.21 D5）', () => {
+  const idx = createIndex(['docs/A.md', 'src/util.js'])
+  assert.equal(resolveRef('src/util.js', idx, 'README.md'), null)
+  assert.equal(resolveRef('src/util.js', idx, 'README.md', { anyExt: true }), 'src/util.js')
+  assert.equal(resolveRef('docs/A.md', idx, 'README.md', { anyExt: true }), 'docs/A.md')
+  // 工作区里没有的文件仍然不产生关系
+  assert.equal(resolveRef('src/nope.js', idx, 'README.md', { anyExt: true }), null)
+})
+
 test('extractRefs：不咬 `a.md.bak` 这种更长但不是 .md 的串', () => {
   assert.deepEqual(extractRefs('备份在 a.md.bak'), [])
   assert.deepEqual(extractRefs('`a.md.bak`'), [])
@@ -206,6 +232,30 @@ test('buildLinkGraph：mtime 变了要重建', async () => {
   bump = 500
   await buildLinkGraph('/fake-5', io)
   assert.ok(reads.count > first, 'mtime 变了必须重建')
+})
+
+test('buildLinkGraph：候选集身份换了必须重建 —— 同进程两个 query 不许串图（v0.21 F5 回归）', async () => {
+  // 老签名是「篇数 + 最大 mtime + 是否截断」，**不含候选集身份**。下面这一对候选集
+  // 篇数相同、最大 mtime 相同，只有身份不同 —— 老签名分辨不出，第二个 query 会拿到
+  // 第一个 query 的图（关系全部落空）。这是实测复现过的真缺陷。
+  resetLinkCache()
+  const files = { 'A.md': '见 `T.md`', 'B.md': '见 `T.md`', 'T.md': 'target' }
+  let second = false
+  const io = {
+    list: async () => ({
+      docs: second
+        ? [{ rel: 'B.md', mtimeMs: 1000 }, { rel: 'T.md', mtimeMs: 1000 }]
+        : [{ rel: 'A.md', mtimeMs: 1000 }, { rel: 'T.md', mtimeMs: 1000 }],
+      truncated: false,
+    }),
+    read: async (_root, rel) => ({ ok: true, rel, text: files[rel] }),
+  }
+  const g1 = await buildLinkGraph('/fake-f5', io)
+  assert.deepEqual([...g1.out.get('A.md')], ['T.md'])
+  second = true
+  const g2 = await buildLinkGraph('/fake-f5', io)
+  assert.equal(g2.out.has('A.md'), false, '第二个候选集里没有 A.md，拿到旧图就是串了')
+  assert.deepEqual([...g2.out.get('B.md')], ['T.md'], '换了候选集必须重新建图')
 })
 
 test('buildLinkGraph：读失败的篇跳过，不影响其它篇（skipped 计数）', async () => {

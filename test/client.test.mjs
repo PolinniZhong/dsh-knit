@@ -757,7 +757,27 @@ test('媒体：默认文档视图有四个类型按钮（文档/代码/媒体/�
   // ⚠️ 列数改造后，**默认（1 列）形态的 DOM 与改造前逐字一致**：
   // 不多包一层容器（否则 byClass('knit-doc') 这类子串匹配会多命中一个）。
   assert.equal(byClass(nodes, 'knit-multicol').length, 0, '1 列不该有网格容器')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /2 篇/)
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^2$/,
+    'v0.21.x：计数只剩阿拉伯数字，量词只留在 title 里')
+})
+
+test('v0.21.x 顶行计数：可见的只有阿拉伯数字，量词只留在 title 里', async () => {
+  const mounted = await mountWithPayload(listPayload())
+
+  const count = byExactClass(mounted.nodes, 'knit-count')[0]
+  assert.ok(count, '顶行应有一个计数')
+  assert.equal(textOf(count), '2', '可见文本只有数字')
+  // 量词随档位变（篇 / 个代码文件 / 个媒体 / 项）—— 同一位置换个档就换一种中文，
+  // 所以整句降级进 title：悬停仍读得到，i18n 的 count.* 键也不被闲置。
+  assert.equal(count.props.title, '2 篇', '整句退到 title')
+  assert.match(textOf(count), /^[\d\s/]+$/, '可见计数里不许出现中文或字母')
+
+  // 过滤后是「命中 / 总数」，仍然只有数字与斜杠
+  byClass(mounted.nodes, 'knit-filter')[0].props.onChange({ target: { value: '技术' } })
+  const filtered = byExactClass(mounted.render(), 'knit-count')[0]
+  assert.equal(textOf(filtered), '1 / 2')
+  assert.equal(filtered.props.title, '1 / 2 篇')
+  assert.match(textOf(filtered), /^[\d\s/]+$/)
 })
 
 test('媒体：媒体视图渲染方形网格，图片出 img、视频出首帧 video 与播放三角', async () => {
@@ -782,7 +802,8 @@ test('媒体：媒体视图渲染方形网格，图片出 img、视频出首帧 
   assert.equal(videos[0].props.preload, 'metadata')
   assert.ok(String(videos[0].props.src).includes('#t=0.5'), '用 #t=0.5 取首帧')
   assert.equal(byClass(nodes, 'knit-thumb-play').length, 1, '视频有中央播放三角')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /2 个媒体/)
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^2$/,
+    'v0.21.x：媒体档也只剩阿拉伯数字（不再「个媒体」）')
 })
 
 test('媒体：点图片卡片就地预览大图，且不请求 /api/doc', async () => {
@@ -848,7 +869,7 @@ test('媒体：「全部」分上下两区，文档上限 4、媒体一格不隐
   // 载荷里 5 图 + 4 视频 = 9 个媒体：一格都不隐藏，纵向也**不封顶**（有多少行铺多少行）
   assert.equal(byToken(nodes, 'knit-media-card').length, 9, '媒体区不截断，9 个全出')
   assert.equal(byExactClass(nodes, 'knit-media-grid in-section').length, 1, '媒体区用分区网格')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /16 项/, '顶行仍报总数')
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^16$/, '顶行仍报总数')
 
   const grid = byExactClass(nodes, 'knit-media-grid in-section')[0]
   // 测试环境没有 ResizeObserver → 量不到宽度 → 走默认面板几何（632px）
@@ -1910,6 +1931,31 @@ test('上下文：键盘按屏幕顺序穿过三档（↓ 跨区不断链）', a
    任何右栏骨架。留着一套渲染不出来的样式，下一个人只会以为它还在生效。 */
 
 /**
+ * 展开函数组件，把一棵子树里的**元素节点**按文档顺序摊平。
+ *
+ * `byClass` / `byExactClass` 只看渲染树的扁平列表，答不了「谁在谁里面」「这一组里
+ * 谁在谁前面」；操作组必须先证明它在证据行**里面**，再证明组内顺序是
+ * 固定 → 排除 → 来源词（2026-10-08 用户规格）。
+ *
+ * @param {object} node - 节点
+ * @returns {object[]} 元素节点（文档顺序）
+ */
+function flattenUnder(node) {
+  const acc = []
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(walk); return }
+    const type = n.type
+    if (type && typeof type === 'object' && typeof type.type === 'function') { walk(type.type(n.props)); return }
+    if (typeof type === 'function') { walk(type(n.props)); return }
+    acc.push(n)
+    ;(n.children || []).forEach(walk)
+  }
+  walk(node)
+  return acc
+}
+
+/**
  * 收集一棵子树里所有元素节点的 className（展开函数组件）。
  *
  * `byClass` 只看扁平列表，答不了「谁在谁里面」；右栏必须在 listbox **外面**
@@ -1919,18 +1965,15 @@ test('上下文：键盘按屏幕顺序穿过三档（↓ 跨区不断链）', a
  * @returns {string[]} className 列表
  */
 function classesUnder(node) {
-  const acc = []
-  const walk = (n) => {
-    if (!n || typeof n !== 'object') return
-    if (Array.isArray(n)) { n.forEach(walk); return }
-    const type = n.type
-    if (type && typeof type === 'object' && typeof type.type === 'function') { walk(type.type(n.props)); return }
-    if (typeof type === 'function') { walk(type(n.props)); return }
-    if (n.props && n.props.className) acc.push(String(n.props.className))
-    ;(n.children || []).forEach(walk)
-  }
-  walk(node)
-  return acc
+  return flattenUnder(node)
+    .map((n) => (n.props && n.props.className ? String(n.props.className) : ''))
+    .filter(Boolean)
+}
+
+/** 一棵子树里第一个带这个 class 词的节点（找不到给 null）。 */
+function nodeUnder(node, token) {
+  return flattenUnder(node)
+    .find((n) => String((n.props && n.props.className) || '').split(/\s+/).includes(token)) || null
 }
 
 test('单栏：即使给了 Context Pack，DOM 里也没有任何右栏骨架', async () => {
@@ -3404,7 +3447,8 @@ test('v0.19 代码：「代码」档请求 kind=code，代码行带语言徽章�
   // 徽章是**纯展示**：它把文件名后缀说给人看，不参与任何判定（判定在宿主分类层）。
   assert.deepEqual(byExactClass(nodes, 'knit-lang').map(textOf), ['TS', 'JS'])
   assert.equal(byExactClass(nodes, 'knit-media-grid').length, 0, '代码档没有媒体网格')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /2 个代码文件/)
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^2$/,
+    'v0.21.x：代码档也只剩阿拉伯数字（不再「个代码文件」）')
 })
 
 test('v0.19 代码：文档行的语言徽章不出场 —— 整列都是 Markdown，挂 MD 是纯噪声', async () => {
@@ -3884,7 +3928,7 @@ test('v0.19 代码：「全部」档是三区（文档 / 代码 / 媒体），�
   assert.equal(byToken(nodes, 'knit-doc').length, 8, '文档区与代码区各自限 4 条')
   assert.equal(byExactClass(nodes, 'knit-lang').length, 4, '语言徽章只跟着代码区那 4 行')
   assert.equal(byToken(nodes, 'knit-media-card').length, 3, '媒体一格不隐藏')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /16 项/, '顶行仍报总数')
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^16$/, '顶行仍报总数')
 })
 
 test('v0.19 代码：Usage Lens 里的代码路径照常显示（读的是一份事实、不是两套）', async () => {
@@ -4170,8 +4214,14 @@ test('v0.20 命中段：与「直接命中」合成一条 metadata 行（命中�
   await harness.flush()
   nodes = render()
 
-  assert.equal(byExactClass(nodes, 'knit-subrow').length, 1, '两条 metadata 共用一个行容器')
+  // 2026-10-08 布局改造：证据行右端现在是操作组，于是**每一条文档行**都有这一行
+  // （没有证据的那些行只是左边空着）。「命中段与理由共用一行」这条要求本身没变，
+  // 所以按**行**来数，而不是数整屏。
   const row = byToken(nodes, 'knit-doc').find((r) => /README/.test(textOf(r)))
+  assert.equal(
+    classesUnder(row).filter((c) => c.split(/\s+/).includes('knit-subrow')).length, 1,
+    '两条 metadata 共用一个行容器',
+  )
   const txt = textOf(row)
   assert.ok(txt.includes('正文命中 sidebar'), `理由仍然在：${txt}`)
   assert.ok(txt.indexOf('命中段') < txt.indexOf('正文命中'), `命中段在理由前面：${txt}`)
@@ -4484,4 +4534,482 @@ test('v0.20 文档锚点：样式纪律 —— transition 在基础选择器上�
   assert.match(hit[1], /background:var\(--knit-active-bg/, '用既有中性令牌，不新增变量')
   assert.ok(!/border/.test(hit[1]), '不许画边框（与代码那边的横带同一个纪律）')
   assert.ok(!/transform|position:/.test(hit[1]), '不许位移')
+})
+
+/* ── v0.21 关系与控制（需求 §6、§8）────────────────────────────────────
+   这一层的纪律：**默认视图一个字节都不变**。固定区、来源徽标、行级证据、管道条、
+   排除说明全都是「有这件事才出现」的层，平铺列表（宿主没给 Context Pack）一个节点都不多。 */
+
+/**
+ * 造一份 v0.21 的载荷：三层 + 固定区 + 控制状态 + 行级关系。
+ *
+ * 只造**契约里真的会出现的形状**：
+ *  - 固定项同时出现在 `docs` 与 `context.pinned`（宿主是把它们从三层**移出**，
+ *    不是从候选集里删掉）；
+ *  - 被排除的文件**不在 `docs` 里**（宿主在检索之前就拿掉了），
+ *    所以「能不能恢复」只能看宿主给的 `exists`。
+ *
+ * @param {object} options - 固定 / 排除 / 关系 / 来源
+ * @returns {object} 载荷
+ */
+function v021Payload(options = {}) {
+  const {
+    pinnedRels = [], excluded = [], provenance = 'retrieval',
+    relations = null, relationsTotal = 0, skipped = 0,
+  } = options
+  const at = Date.now()
+  const total = 2 + pinnedRels.length
+  const item = (rel, title, extra = {}) => ({
+    rel,
+    path: `/p/${rel}`,
+    name: rel.split('/').pop(),
+    title,
+    summary: `摘要 ${title}`,
+    mtimeMs: at,
+    kind: 'md',
+    source: 'doc',
+    reason: { code: 'titleMatch', terms: ['排序'], fields: 2 },
+    provenance,
+    ...extra,
+  })
+  const doc = (rel, title) => ({
+    path: `/p/${rel}`, rel, name: rel.split('/').pop(), title, summary: `摘要 ${title}`,
+    mtimeMs: at, score: 10,
+  })
+  const pinned = pinnedRels.map((rel) => item(rel, rel, { provenance: 'manual' }))
+  return {
+    ok: true, root: '/p', total, mode: 'relevance', topic: 'BM25、排序', keywords: ['排序'],
+    control: { pinned: pinnedRels.map((rel) => ({ rel, at })), excluded, skipped, persisted: false },
+    docs: [
+      doc('docs/algo.md', '排序算法'),
+      doc('docs/eval.md', '排序评测'),
+      ...pinnedRels.map((rel) => doc(rel, rel)),
+    ],
+    context: {
+      mode: 'relevance', topic: 'BM25、排序', task: '',
+      pinned,
+      primary: [item('docs/algo.md', '排序算法', { relations, relationsTotal })],
+      supporting: [], related: [],
+      totals: { primary: 1, supporting: 0, related: 0, matched: 1, total },
+      summary: { primary: 1, supporting: 0, related: 0, shown: 1, matched: 1, total },
+    },
+  }
+}
+
+test('v0.21 来源：检索 / 关系 / 用户固定 三个中性词，不是分数', async () => {
+  const payload = v021Payload({ pinnedRels: ['docs/pin.md'] })
+  // supporting 换成**靠关系进来**的那一条（宿主给的 provenance 就是 relation）
+  payload.context.supporting = [{ ...payload.context.primary[0], rel: 'docs/eval.md', provenance: 'relation' }]
+  const { nodes } = await mountWithPayload(payload)
+  const provs = byExactClass(nodes, 'knit-prov').map(textOf).sort()
+  assert.deepEqual(provs, ['关系', '用户固定', '检索'].sort(), '三个来源各一个中性词')
+  // 来源**不是强弱**：不许带数字 / 百分比 / 颜色语义
+  for (const text of provs) {
+    assert.ok(!/\d|%/.test(text), `来源词里不许出现数字或百分比：${text}`)
+  }
+})
+
+test('v0.21.x 布局：标题行只剩标题与时间，来源与固定 / 排除搬到证据行右端（固定 → 排除 → 来源词）', async () => {
+  /* 2026-10-08 用户规格（Context 列表操作布局优化）：标题行右侧原来并排四样东西
+     （来源词 + 固定 + 排除 + 时间）＝信息过载。来源与命中段、理由说的是**同一层证据**，
+     固定 / 排除是**操作入口** —— 于是两者合成**一行**：证据在左、操作在右，
+     操作那一组默认不显示（`.knit-rowacts` 的 `visibility:hidden`，悬停 / 键盘光标 /
+     焦点进入这一行才出现）。这条用例守的就是这个结构本身。 */
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const relations = [
+    { type: 'references', dir: 'in', other: 'AGENTS.md', line: 83 },
+    { type: 'tests', dir: 'out', other: 'a.test.mjs' },
+  ]
+  const { nodes } = await mountWithPayload(v021Payload({ relations, relationsTotal: 2 }))
+
+  // ① 标题行：序号 / 标记 / 标题 / 时间之外，一个 v0.21 节点都不许留
+  const row1s = byExactClass(nodes, 'knit-row1')
+  assert.equal(row1s.length, byToken(nodes, 'knit-doc').length, '每一条文档行恰好一个标题行')
+  for (const row1 of row1s) {
+    const under = classesUnder(row1)
+    for (const gone of ['knit-prov', 'knit-rowacts', 'knit-act']) {
+      assert.ok(!under.some((c) => c.split(/\s+/).includes(gone)), `${gone} 不该再留在标题行里`)
+    }
+    assert.ok(under.some((c) => c.split(/\s+/).includes('knit-time')), '时间仍在标题行（位置不变）')
+  }
+
+  // ② 证据行：左证据 / 右操作是**同一条行**的两段，不是两行
+  const algoRow = byToken(nodes, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  const sub = nodeUnder(algoRow, 'knit-subrow')
+  assert.ok(sub, '证据行在行里面')
+  const main = nodeUnder(sub, 'knit-subrow-main')
+  const acts = nodeUnder(sub, 'knit-rowacts')
+  assert.ok(main && acts, '证据与操作组都在这一条证据行里')
+  assert.ok(textOf(main).includes('标题命中 排序'), '左边仍然是原来那条理由')
+  assert.ok(textOf(sub).indexOf(textOf(main)) < textOf(sub).indexOf(textOf(acts)), '证据靠左、操作靠右')
+
+  // ③ 组内顺序是硬的：固定 → 排除 → 来源词；而且**只有文字，没有任何图标**
+  const controls = flattenUnder(acts)
+    .filter((n) => /(^|\s)(knit-act|knit-prov)(\s|$)/.test(String((n.props && n.props.className) || '')))
+  assert.deepEqual(controls.map(textOf), ['固定', '排除', '检索'], '顺序：固定 → 排除 → 来源词')
+  for (const node of flattenUnder(acts)) {
+    assert.ok(!/^(svg|path|use|img|i)$/.test(String(node.type)), `不许加图标：${String(node.type)}`)
+  }
+
+  // ④ 默认不显示靠 `visibility`（真的退出焦点序），不是 `opacity:0`（那会「看不见却 Tab 得到」）
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const actsRule = source.match(/\.knit-rowacts\{([^}]*)\}/)[1]
+  assert.match(actsRule, /visibility:hidden/, '默认整组隐藏')
+  assert.ok(!/opacity/.test(actsRule), '不再用 opacity 压暗 —— 隐藏必须同时退出焦点序')
+  assert.ok(!/transition/.test(actsRule), '不加悬停动画 / 过渡')
+  assert.match(source.match(/\.knit-doc:hover \.knit-rowacts[^{]*\{([^}]*)\}/)[1], /visibility:visible/)
+  for (const trigger of ['.knit-doc.active', '.knit-doc.cursor', ':focus-within']) {
+    assert.ok(source.includes(`${trigger} .knit-rowacts`), `悬停之外还要认键盘与选中态：${trigger}`)
+  }
+  // 证据可以被截断（flex:1 1 auto + min-width:0），操作永远有位置（flex:none）
+  assert.match(source.match(/\.knit-subrow-main\{([^}]*)\}/)[1], /flex:1 1 auto/)
+  assert.match(actsRule, /flex:none/)
+})
+
+test('v0.21.x 布局：没有命中段也没有理由的条目仍留着那一行，只是左边空着（不写占位文字）', async () => {
+  const { nodes } = await mountWithPayload(v021Payload())
+  const evalRow = byToken(nodes, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/eval.md')
+  assert.ok(evalRow, '这一屏里有「其他相关文档」的条目')
+  const sub = nodeUnder(evalRow, 'knit-subrow')
+  assert.ok(sub, '没有证据也要留这一行 —— 否则这一条连固定 / 排除的入口都没有')
+  const main = nodeUnder(sub, 'knit-subrow-main')
+  // ⚠️ 先钉住「容器真的在」：`textOf(undefined)` 返回 `''`，缺了这一句，
+  // 下面那条「不写占位文字」会在容器整个消失时**空转通过**（证伪时实测过）。
+  assert.ok(main, '左边的证据容器在（只是空的）——它有偏移量，行才不跳')
+  assert.equal(textOf(main).trim(), '', '不写占位文字（连一个「—」都不给）')
+  assert.ok(
+    !classesUnder(sub).some((c) => /knit-hit|knit-why|knit-subrow-sep/.test(c)),
+    '一个证据节点都没有（没有证据就不装成有证据的样子）',
+  )
+  assert.ok(nodeUnder(sub, 'knit-rowacts'), '操作入口照旧在（默认隐藏）')
+})
+
+test('v0.21 固定区：排在三层最上面、不编号，并给「取消固定」', async () => {
+  const { nodes } = await mountWithPayload(v021Payload({ pinnedRels: ['docs/pin.md'] }))
+  // 分区标题按**文档顺序**取（`byExactClass` 吃的是扁平节点表，不递归）
+  assert.deepEqual(
+    byExactClass(nodes, 'knit-tiername').map(textOf).slice(0, 2),
+    ['固定上下文', '主要上下文'], '固定区在最上面，三层仍在它下面')
+  assert.equal(textOf(byExactClass(nodes, 'knit-tierhint')[0]), '你自己标记的')
+  const rows = byClass(nodes, 'knit-doc')
+  const pinRow = rows.find((r) => r.props['data-knit-rel'] === 'docs/pin.md')
+  const primaryRow = rows.find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  assert.match(textOf(pinRow), /用户固定/, '固定项的来源就是「用户固定」')
+  assert.deepEqual(byExactClass(nodes, 'knit-num').map(textOf), ['01'],
+    '编号只属于包内的阅读顺序 —— 固定项不编号，也不把它顶掉')
+  assert.ok(byExactClass(nodes, 'knit-gapmark').length >= 1, '没号的位置给中性占位，不留空洞')
+  assert.match(textOf(pinRow), /取消固定/)
+  assert.match(textOf(primaryRow), /固定/)
+  assert.ok(!textOf(primaryRow).includes('取消固定'), '包内条目给的是「固定」')
+})
+
+test('v0.21 排除：说明行只列还能找回来的那些，点了发 restore', async () => {
+  const payload = v021Payload({
+    excluded: [
+      { rel: 'docs/gone.md', at: 1, exists: false },
+      { rel: 'docs/eval.md', at: 2, exists: true },
+    ],
+    skipped: 1,
+  })
+  const posts = []
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url)
+    if (target.includes('/api/control')) {
+      posts.push({ url: target, body: JSON.parse(init.body) })
+      return {
+        json: async () => ({
+          ok: true, action: 'restore', rel: 'docs/eval.md', changed: true, persisted: false,
+          control: { pinned: [], excluded: [], skipped: 0, persisted: false },
+        }),
+      }
+    }
+    return {
+      json: async () => (target.includes('/api/links')
+        ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
+        : payload),
+    }
+  }
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const note = byExactClass(nodes, 'knit-excl')
+  assert.equal(note.length, 1, '有能恢复的排除项时才出现这一行')
+  assert.match(textOf(note[0]), /被用户排除：docs\/eval\.md/)
+  assert.ok(!textOf(note[0]).includes('gone.md'), '文件已经不在的就不给「恢复」（按下去什么都不会发生）')
+
+  const restore = byClass(nodes, 'knit-act').find((b) => textOf(b) === '恢复')
+  assert.ok(restore, '说明行里那个「恢复」是真的按钮')
+  restore.props.onClick()
+  await harness.flush()
+  assert.equal(posts.length, 1, '恢复是一个真的写动作')
+  assert.match(posts[0].url, /\/knit\/api\/control\?sessionId=s1/)
+  assert.deepEqual(posts[0].body, { action: 'restore', rel: 'docs/eval.md' })
+
+  // 一个都找不回来 ⇒ 整行不出现、也不占位
+  const nothing = await mountWithPayload(v021Payload({ excluded: [{ rel: 'docs/gone.md', at: 1, exists: false }] }))
+  assert.equal(byExactClass(nothing.nodes, 'knit-excl').length, 0)
+})
+
+test('v0.21.x 检索状态摘要：单行三组、竖线分隔、组内中点，且一个箭头都没有', async () => {
+  /* 2026-10-09 用户规格（检索状态摘要布局优化）：原来是「收集 4 ↓ 排除 1 → 3 ↓ 检索 / 排序
+     （BM25 词法） ↓ 关系投影 1 ↓ 固定覆盖 1 ↓ 包 1」—— 六个格子五根箭头，把一条**已经完成**
+     的管线画成了流程图（用户：「用箭头表达内部处理流程，增加理解成本」）。现在改成
+     工作区候选 ｜ 检索与调整 ｜ 最终结果 三组、组内中点、组间一根细竖线，
+     并且**每一格都能独立读懂**（那个没有名字的光数字「→ 3」现在叫「候选 3」）。 */
+  const { nodes } = await mountWithPayload(v021Payload({
+    pinnedRels: ['docs/pin.md'],
+    excluded: [{ rel: 'docs/eval.md', at: 2, exists: true }],
+    skipped: 1,
+    relations: [{ type: 'references', dir: 'out', other: 'docs/b.md', line: 7 }],
+  }))
+  const pipe = byExactClass(nodes, 'knit-pipe')
+  assert.equal(pipe.length, 1)
+
+  // ① 逐个格子的**原文**，以及分隔符的种类与位置 —— 顺序就是这条设计要传达的信息
+  const seq = flattenUnder(pipe[0]).slice(1).map(textOf)
+  assert.deepEqual(seq, [
+    '收集 4', '·', '排除 1', '·', '候选 3', '|',
+    'BM25 词法检索', '·', '关系 1 条', '·', '固定 1', '|',
+    '入包 1',
+  ], `三组 = 工作区候选 ｜ 检索与调整 ｜ 最终结果：${textOf(pipe[0])}`)
+
+  // ② 口径逐个钉住（不许因为改文案就改了统计含义）
+  assert.match(seq[0], /收集 4/, '收集 = 候选 + 本批真被排掉的（3 + 1）')
+  assert.match(seq[2], /排除 1/, '排除 = 宿主按候选集算的 skipped，不是 excluded 表的长度')
+  assert.match(seq[4], /候选 3/, '候选 = 排除之后进入检索的篇数（原来的光数字）')
+  assert.match(seq[6], /BM25 词法检索/, '零模型这条路要说出来')
+  assert.match(seq[8], /关系 1 条/, '关系 = 这一份包里带了几条关系证据')
+  assert.match(seq[10], /固定 1/, '固定 = 被固定、从三层移出进了固定区的篇数')
+  assert.match(seq[12], /入包 1/, '入包 = 三层条目数（固定区不算）')
+
+  // ③ 分隔符恰好是 4 个中点 + 2 根竖线；箭头与「管道」时代的类名一个都不留
+  assert.equal(seq.filter((s) => s === '·').length, 4, '组内中点：每组 n 格配 n-1 个')
+  assert.equal(seq.filter((s) => s === '|').length, 2, '组间竖线：三组两根')
+  assert.equal(byClass(nodes, 'knit-pipearrow').length, 0, '流程箭头已整体删除')
+  assert.ok(!/[↓→←↑]/.test(textOf(pipe[0])), `状态摘要里不许再出现箭头：${textOf(pipe[0])}`)
+  // 视觉纪律：没有图标、没有色块（需求 §三.5，与「不做 Dashboard」同一条）
+  for (const node of flattenUnder(pipe[0])) {
+    assert.ok(!/^(svg|path|use|img|i)$/.test(String(node.type)), `不许加图标：${String(node.type)}`)
+  }
+  for (const banned of ['%', '分数', '索引', '缓存', '命中率', '置信']) {
+    assert.ok(!textOf(pipe[0]).includes(banned), `状态摘要不许出现「${banned}」：${textOf(pipe[0])}`)
+  }
+})
+
+test('v0.21.x 工具栏：排序 ｜ 竖线 ｜ 类型 ｜ 搜索一行，两组不做成一个整体，搜索永远排尾', async () => {
+  /* 2026-10-09 用户规格：左侧「相关 / 最新」负责排序；中间「文档 / 代码 / 媒体 / 全部」负责
+     内容类型；搜索框固定在最右侧、宽度自适应（常规面板 180–240px，窄屏先缩它）。三条要守住：
+     ① 六个选项**不做成一个整体** —— 排序与类型是两个条件，中间一根浅灰竖线就是那道边界；
+     ② 搜索排尾、贴右、`flex:1 1 180px` + `max-width:240px` + `min-width:0`；
+     ③ 条件彼此独立：选「代码」再选「最新」= 最新的代码，搜索词两边都不重置。 */
+  const { nodes: first, renderAgain } = await mountWithPayload(v021Payload())
+  let nodes = first
+
+  const bar = byExactClass(nodes, 'knit-bar')
+  assert.equal(bar.length, 1, '工具栏恰好一个')
+  const under = flattenUnder(bar[0]).slice(1)
+  const cls = under.map((n) => String(n.props.className || ''))
+  const at = (name) => cls.findIndex((c) => c === name)
+
+  // ① 顺序：排序 → 竖线 → 类型 → 搜索（顺序本身就是这条规格要传达的信息）
+  for (const name of ['knit-seg', 'knit-bar-sep', 'knit-types', 'knit-filter']) {
+    assert.ok(at(name) >= 0, `工具栏里必须有 ${name}：${cls.join(' / ')}`)
+  }
+  assert.ok(at('knit-seg') < at('knit-bar-sep'), '竖线在排序组右边')
+  assert.ok(at('knit-bar-sep') < at('knit-types'), '竖线在类型组左边')
+  assert.equal(cls.at(-1), 'knit-filter', '搜索是工具栏里最后一个节点（工具栏尾部）')
+  assert.equal(byClass(nodes, 'knit-bar-sep').length, 1, '两组之间**就一根**线')
+  assert.equal(byExactClass(nodes, 'knit-bar-sep')[0].props['aria-hidden'], 'true',
+    '分隔线是装饰，不进可达性树')
+
+  // ② 六个选项都在，而且两组各用各的控件（不是六个连排的按钮）
+  assert.deepEqual(byClass(under, 'knit-seg-btn').map(textOf), ['相关', '最新'])
+  assert.deepEqual(byClass(under, 'knit-type-btn').map(textOf), ['文档', '代码', '媒体', '全部'])
+  for (const node of under) {
+    assert.ok(!/^(svg|path|use|img|i)$/.test(String(node.type)), `不许加图标：${String(node.type)}`)
+  }
+
+  // ③ 条件彼此独立
+  const input = () => byClass(nodes, 'knit-filter')[0]
+  const activeText = (name) => textOf(byClass(nodes, name).find((n) => String(n.props.className).includes('active')))
+  input().props.onChange({ target: { value: '排序' } })
+  nodes = await renderAgain()
+  assert.equal(input().props.value, '排序', '搜索词落在输入框上')
+
+  byClass(nodes, 'knit-type-btn').find((b) => textOf(b) === '代码').props.onClick()
+  nodes = await renderAgain()
+  assert.equal(input().props.value, '排序', '切类型不许重置搜索词')
+  assert.equal(activeText('knit-seg-btn'), '相关', '切类型不许改排序')
+
+  byClass(nodes, 'knit-seg-btn').find((b) => textOf(b) === '最新').props.onClick()
+  nodes = await renderAgain()
+  assert.equal(activeText('knit-type-btn'), '代码', '切排序不许改类型 ⇒ 看到的就是「最新的代码」')
+  assert.equal(input().props.value, '排序', '切排序也不许重置搜索词')
+
+  // ④ 样式：搜索框自适应且贴右，前面两组 flex:none 永不被挤
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const rule = (sel) => {
+    const m = source.match(new RegExp(`\\.${sel}\\{([^}]*)\\}`))
+    assert.ok(m, `必须有 .${sel} 这条规则`)
+    return m[1]
+  }
+  const filter = rule('knit-filter')
+  assert.match(filter, /flex:1 1 180px/, '搜索框：基础宽 180px，可长可缩')
+  assert.match(filter, /max-width:240px/, '搜索框封顶 240px（常规面板 180–240px）')
+  assert.match(filter, /margin-left:auto/, '封顶后剩下的空间留在左边 ⇒ 搜索框贴住右端')
+  assert.match(filter, /min-width:0/, '面板窄了先缩搜索框')
+  assert.match(rule('knit-seg'), /flex:none/, '排序组不被挤')
+  assert.match(rule('knit-types'), /flex:none/, '类型组不被挤')
+  assert.ok(!/\.knit-types\{[^}]*padding/.test(source), '类型组不再自带左右内边距（.knit-bar 统一给）')
+  const sep = rule('knit-bar-sep')
+  assert.match(sep, /width:1px/, '是竖线不是横线')
+  assert.match(sep, /background:var\(--dsw-alias-border-l3/, '浅灰：与排序组外框、搜索框描边同一个 token')
+})
+
+test('v0.21.x 开关「使用情况」不许把检索状态摘要顶下去（摘要紧贴工具栏，观察层在它下面）', async () => {
+  /* 2026-10-09 用户反馈：原来观察层插在 `.knit-bar` 和状态摘要之间，一点「使用情况」，
+     那一行数字就被顶下去（原话「这一列…向下排，我觉得这列不用向下排，而是固定在原来的位置」）。
+     守住两条：① 摘要**永远紧贴工具栏**（它的前一个兄弟就是 `.knit-bar`）；
+     ② 开关前后摘要的位置**一模一样**，观察层排在它下面。 */
+  const direct = (root) => {
+    const out = []
+    const push = (n) => {
+      if (!n || typeof n !== 'object') return
+      if (Array.isArray(n)) { n.forEach(push); return }
+      const type = n.type
+      if (type && typeof type === 'object' && typeof type.type === 'function') { push(type.type(n.props)); return }
+      if (typeof type === 'function') { push(type(n.props)); return }
+      out.push(String((n.props && n.props.className) || ''))
+    }
+    ;(root.children || []).forEach(push)
+    return out
+  }
+  const { nodes: first, renderAgain } = await mountWithPayload(v021Payload())
+  let nodes = first
+  const rootOf = (list) => byExactClass(list, 'knit-root')[0]
+
+  const orderOff = direct(rootOf(nodes))
+  const pipeOff = orderOff.indexOf('knit-pipe')
+  assert.ok(pipeOff > 0, `状态摘要必须在（相关序）: ${orderOff.join(' / ')}`)
+  assert.equal(orderOff[pipeOff - 1], 'knit-bar', '摘要的前一个兄弟就是工具栏 —— 它钉在工具栏下面')
+  assert.ok(!orderOff.some((c) => c === 'knit-usage'), '关着的时候观察层一个节点都没有')
+
+  const toggle = byExactClass(nodes, 'knit-btn').find((node) => textOf(node) === '使用情况')
+  assert.ok(toggle, '头部必须有「使用情况」按钮')
+  toggle.props.onClick()
+  nodes = await renderAgain()
+
+  const orderOn = direct(rootOf(nodes))
+  assert.ok(orderOn.includes('knit-usage'), '打开后有观察层')
+  assert.equal(orderOn.indexOf('knit-pipe'), pipeOff, '开关前后摘要的位置一模一样（不许被顶下去）')
+  assert.equal(orderOn[pipeOff - 1], 'knit-bar', '打开后它仍紧贴工具栏')
+  assert.ok(orderOn.indexOf('knit-usage') > pipeOff, '观察层排在摘要下面，不是上面')
+})
+
+test('v0.21 证据：默认一个节点都不渲染，点开「为什么」才有；最多 3 条 + 共 N 条', async () => {
+  const relations = [
+    { type: 'references', dir: 'in', other: 'AGENTS.md', line: 83 },
+    { type: 'imports', dir: 'out', other: 'src/x.js', line: 22 },
+    { type: 'tests', dir: 'out', other: 'a.test.mjs' },
+    { type: 'documents', dir: 'in', other: 'PRD.md', line: 10 },
+  ]
+  const { nodes, renderAgain } = await mountWithPayload(v021Payload({ relations, relationsTotal: 6 }))
+  assert.equal(byExactClass(nodes, 'knit-rellist').length, 0, '默认视图一个字节都不变')
+  const why = byClass(nodes, 'knit-why')
+  assert.equal(why.length, 1)
+  assert.equal(why[0].type, 'button', '有关系可看时，「为什么」就是那个开关')
+  assert.equal(why[0].props['aria-expanded'], 'false')
+  assert.match(textOf(why[0]), /标题命中 排序/, '开关上的文本一个字节都没变')
+
+  why[0].props.onClick({ stopPropagation() {} })
+  const after = await renderAgain()
+  const list = byExactClass(after, 'knit-rellist')
+  assert.equal(list.length, 1, '点开才有')
+  assert.equal(byClass(after, 'knit-relrow').length, 3, '每项最多投影 3 条（预算是硬的）')
+  const txt = textOf(list[0])
+  assert.match(txt, /引用/)
+  assert.match(txt, /← AGENTS\.md/, 'in 边的方向与对方都如实写出来')
+  assert.match(txt, /第 83 行/)
+  assert.match(txt, /共 6 条关系/, '被截断时必须说出总数，不然就是「我以为这就是全部」')
+  assert.ok(!txt.includes('PRD.md'), '第 4 条按优先级被截掉了')
+  const algoRow = byToken(after, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  assert.equal(
+    classesUnder(algoRow).filter((c) => c.split(/\s+/).includes('knit-subrow')).length, 1,
+    '证据挂在行容器**之外**：这一行的 metadata / 操作行仍然只有一条',
+  )
+  for (const sub of byExactClass(after, 'knit-subrow')) {
+    assert.ok(
+      !classesUnder(sub).some((c) => c.split(/\s+/).includes('knit-rellist')),
+      '关系证据挂在证据行**之外**（展开不能把那一行撑高）',
+    )
+  }
+  assert.ok(textOf(byClass(after, 'knit-why')[0]).includes('标题命中'), '理由那一行仍是原文')
+
+  byClass(after, 'knit-why')[0].props.onClick({ stopPropagation() {} })
+  const closed = await renderAgain()
+  assert.equal(byExactClass(closed, 'knit-rellist').length, 0, '再点一次收起来')
+})
+
+test('v0.21.x 行级证据是向下延展：入场补间播完要注销，不许把行高钉死（否则证据压在下一行上面）', async () => {
+  // 真机上 DocRow 的入场补间是 WAAPI `fill:'both'`：它播完之后**仍然**按入场那一刻量到的
+  // height 钉着这一行，`el.style.height=''` 清不掉（内联样式与补间效果是两层）。后果就是
+  // 点开「检索」长出来的证据列表不把下面的行挤下去，而是压在下一行上面
+  // （2026-10-09 用户真机截图：「检索的数据压在下一个列表的下面」）。
+  // 测试替身没有 DOM（`motionAllowed()` 会把那段 layout effect 直接挡掉），所以这里喂纯对象。
+  const { exports } = loadClientModule()
+  const { settleEnterAnim } = exports.__test
+  assert.equal(typeof settleEnterAnim, 'function', '收尾必须是一个可测的函数，不是内联箭头')
+
+  const el = { style: { height: '88px', overflow: 'hidden' } }
+  const called = []
+  settleEnterAnim(el, { cancel: () => called.push('cancel') })
+  assert.deepEqual(called, ['cancel'], '必须注销补间 —— 只清内联样式等于把行高钉在入场那一刻')
+  assert.equal(el.style.height, '', '内联高度也要清')
+  assert.equal(el.style.overflow, '', '内联裁切也要清')
+
+  // 边界：补间没有 cancel / 整个传 null / cancel 自己抛错，都不许把收尾卡住
+  settleEnterAnim({ style: {} }, {})
+  settleEnterAnim(null, null)
+  const bad = { style: { height: '10px' } }
+  settleEnterAnim(bad, { cancel: () => { throw new Error('cancel 抛错') } })
+  assert.equal(bad.style.height, '', 'cancel 抛错也必须把内联样式清掉')
+
+  // 调用点也钉住：一旦退回「补间播完只清内联样式」那种写法，这条就红。
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  assert.match(source, /const settle = \(\) => settleEnterAnim\(el, anim\)/, 'DocRow 的入场收尾必须走这一条')
+  assert.ok(
+    !/done\.then\(\(\) => \{ el\.style\.height/.test(source),
+    '不许退回「补间播完只清 el.style」的老写法',
+  )
+})
+
+test('v0.21 平铺列表：一个 v0.21 节点都不多（时间序 / 媒体档逐字不变）', async () => {
+  const flat = v021Payload()
+  delete flat.context
+  const { nodes } = await mountWithPayload(flat)
+  for (const cls of ['knit-prov', 'knit-rowacts', 'knit-act', 'knit-pipe', 'knit-excl', 'knit-rellist', 'knit-num']) {
+    assert.equal(byClass(nodes, cls).length, 0, `平铺列表不该出现 ${cls}`)
+  }
+})
+
+test('镜像常量：客户端的 REL_MAX 必须等于宿主的面板投影上限', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const host = readFileSync(fileURLToPath(new URL('../src/host/relations.js', import.meta.url)), 'utf8')
+  const hostMax = Number((host.match(/MAX_RELATIONS_PER_ITEM\s*=\s*(\d+)/) || [])[1])
+  assert.equal(hostMax, 3, '宿主的面板投影上限')
+  assert.equal(
+    loadClientModule().exports.__test.REL_MAX, hostMax,
+    '客户端镜像必须与宿主一致 —— 否则「共 N 条关系」那句话会撒谎',
+  )
 })

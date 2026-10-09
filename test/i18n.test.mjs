@@ -179,7 +179,9 @@ test('词典：不存在空串或残留的 key 自指', () => {
 test('渲染：英文环境下整个面板出英文', async () => {
   const { nodes } = await renderPanel('en', () => listPayload())
 
-  assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2 docs')
+  // v0.21.x：屏幕上只有数字；量词的本地化（docs / 篇）改成查 title
+  assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2')
+  assert.equal(byClass(nodes, 'knit-count')[0].props.title, '2 docs')
   // 排序说明那一行 2026-09-30 已整体删除（排序方式由切换按钮自己表达），
   // 所以这里只剩切换按钮本身的文案。
   assert.deepEqual(
@@ -194,7 +196,9 @@ test('渲染：英文环境下整个面板出英文', async () => {
 test('渲染：中文环境下整个面板出中文', async () => {
   const { nodes } = await renderPanel('zh', () => listPayload())
 
-  assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2 篇')
+  // v0.21.x：屏幕上只有数字；量词的本地化（篇）改成查 title
+  assert.equal(textOf(byClass(nodes, 'knit-count')[0]), '2')
+  assert.equal(byClass(nodes, 'knit-count')[0].props.title, '2 篇')
   assert.deepEqual(
     byClass(nodes, 'knit-seg-btn').map(textOf),
     ['相关', '最新'],
@@ -206,13 +210,15 @@ test('渲染：中文环境下整个面板出中文', async () => {
 test('渲染：占位符按语言正确替换（含过滤计数）', async () => {
   const panel = await renderPanel('en', () => listPayload())
 
-  // 未过滤：{n} docs
-  assert.equal(textOf(byClass(panel.nodes, 'knit-count')[0]), '2 docs')
+  // 未过滤：数字上屏、{n} docs 进 title
+  assert.equal(textOf(byClass(panel.nodes, 'knit-count')[0]), '2')
+  assert.equal(byClass(panel.nodes, 'knit-count')[0].props.title, '2 docs')
 
-  // 过滤掉一篇：{hit} / {total} docs
+  // 过滤掉一篇：{hit} / {total} 上屏（不加量词），整句进 title
   byClass(panel.nodes, 'knit-filter')[0].props.onChange({ target: { value: 'a.md' } })
   const filtered = await panel.rerender()
-  assert.equal(textOf(byClass(filtered, 'knit-count')[0]), '1 / 2 docs')
+  assert.equal(textOf(byClass(filtered, 'knit-count')[0]), '1 / 2')
+  assert.equal(byClass(filtered, 'knit-count')[0].props.title, '1 / 2 docs')
   assert.equal(byClass(filtered, 'knit-doc').length, 1)
 })
 

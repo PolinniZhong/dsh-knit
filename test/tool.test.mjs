@@ -23,6 +23,7 @@ import {
 } from '../src/host/tool.js'
 import { scan, apply, readDocument, buildContextFor, publicScanPayload } from '../src/host/index.js'
 import { SNIPPET_CHARS } from '../src/host/passage.js'
+import { MAX_TOOL_RELATIONS_PER_ITEM } from '../src/host/relations.js'
 // 校验器与真机探针**共用同一份** —— 两边各写一份必然漂移，
 // 而它锁的恰恰是「工具返回值 vs 它自己的 schema」这件最容易腐坏的事。
 import { validateAgainst } from '../tools/json-schema-subset.mjs'
@@ -209,7 +210,21 @@ test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致'
     assert.equal(items.additionalProperties, false, `${tier} 的条目必须是严格对象`)
     assert.deepEqual(
       items.required,
-      ['rel', 'title', 'summary', 'mtimeMs', 'kind', 'source', 'reason'],
+      ['rel', 'title', 'summary', 'mtimeMs', 'kind', 'source', 'reason', 'provenance'],
+    )
+    // v0.21：来源三值必须**声明**（同 `kind` 那条教训 —— 装配层每条都给，
+    // schema 少声明一个字段就会在**校验层**静默失败），且不是 `source` 的替代品。
+    assert.deepEqual(
+      items.properties.provenance.enum,
+      ['retrieval', 'relation', 'manual'],
+    )
+    assert.deepEqual(
+      Object.keys(items.properties.relations.items.properties), ['type', 'dir', 'other', 'line'],
+      `${tier} 的关系事实只允许这四个字段（不下发正文、不下发绝对路径）`,
+    )
+    assert.deepEqual(
+      items.properties.relations.items.required, ['type', 'dir', 'other'],
+      '`line` 是可选：`tests` 的证据是文件名约定，没有行号，不编一个',
     )
     // 定义里不许出现 score / raw —— 相对分数会被模型当成绝对置信度
     assert.ok(!Object.keys(items.properties).includes('score'), `${tier} 里不该有 score`)
@@ -438,6 +453,69 @@ test('集成: 同一条任务下，knit_docs 的命中段与面板载荷逐条�
       `工具给出了 ${item.rel} 的命中段，面板载荷里也必须带`,
     )
   }
+})
+
+test('集成: 同一条任务下，关系行在面板与工具两侧同源（v0.21 §10.17）', async () => {
+  // 与上一条同一个承诺：一个引擎、两个面。面板每项最多投影 3 条、工具最多 2 条
+  // （§6.7 的载荷预算），但**前 2 条必须逐字相同** —— 否则用户点开的证据行
+  // 与模型读到的行号会是两回事，而两侧各自的测试都还是绿的。
+  const root = makeWorkspace([
+    ['docs/spec.md', '# 规格\n\n实现见 `src/host/plugin.js`，另见 `docs/other.md` 与 `docs/third.md`。\n'],
+    ['docs/other.md', '# 另一篇\n\n补充说明。\n'],
+    ['docs/third.md', '# 第三篇\n\n补充说明。\n'],
+    ['src/host/plugin.js', "import { load } from '../util/helper.js'\n\nexport const plugin = load()\n"],
+    ['src/util/helper.js', 'export const load = () => 1\n'],
+  ])
+  const query = 'plugin 规格 helper'
+  const session = fakeSession([userMessage(1, query)], { cwd: root, id: 'sess-rel-face' })
+
+  // ① 面板路径：宿主真实的那次装配（`contextPayload` 就是这么调的）
+  const payload = await scan(root, 40, {
+    session, sessionId: 'sess-rel-face', sort: 'relevance', kind: 'context', query,
+  })
+  const pack = await buildContextFor(root, {
+    ranked: payload.ranked, topic: payload.topic, task: payload.task, total: payload.total,
+  })
+  const panelItems = new Map()
+  for (const tier of ['pinned', 'primary', 'supporting', 'related']) {
+    for (const item of pack[tier] || []) panelItems.set(item.rel, item)
+  }
+  const panelWithRel = [...panelItems].filter(([, item]) => (item.relations || []).length > 0)
+  assert.ok(panelWithRel.length > 0, '夹具里至少该有一项带关系，否则这条是空测试')
+
+  // ② 工具路径：喂**同一份** scan 产物，差异只可能来自工具自己的投影
+  const value = await runTool(
+    fakeExec(session), { limit: 40, query }, { scan: async () => payload, read: readDocument },
+  )
+  const items = allItems(value)
+
+  for (const [rel, panel] of panelWithRel) {
+    const item = items.find((entry) => entry.rel === rel)
+    assert.ok(item, `面板给出了 ${rel} 的关系，工具也必须给出这一篇`)
+    assert.deepEqual(
+      item.relations,
+      panel.relations.slice(0, MAX_TOOL_RELATIONS_PER_ITEM),
+      `${rel} 的关系：工具必须是面板的前 ${MAX_TOOL_RELATIONS_PER_ITEM} 条（同一条、同一序号）`,
+    )
+  }
+  // ③ 反向：工具给了关系的，面板也不能缺
+  for (const item of items) {
+    if (!Array.isArray(item.relations) || item.relations.length === 0) continue
+    assert.ok((panelItems.get(item.rel) || {}).relations, `工具给出了 ${item.rel} 的关系，面板也必须带`)
+  }
+  // ④ 截断口径：工具侧最多 2 条，被截时如实写总数（不是「那就是全部」）
+  let truncated = 0
+  for (const item of items) {
+    if (!Array.isArray(item.relations)) continue
+    assert.ok(item.relations.length <= MAX_TOOL_RELATIONS_PER_ITEM)
+    const panel = panelItems.get(item.rel)
+    if (panel.relations.length > MAX_TOOL_RELATIONS_PER_ITEM) {
+      truncated += 1
+      assert.equal(item.relationsTotal, panel.relationsTotal || panel.relations.length,
+        `${item.rel} 被截断了，「relationsTotal」必须如实说出真数`)
+    }
+  }
+  assert.ok(truncated > 0, '夹具里至少该有一项超过 2 条关系，否则截断那一段没被验到')
 })
 
 test('agentScope: 从 exec 里取出的三个字段都可用', () => {

@@ -207,6 +207,28 @@ test('context: Supporting —— 反方向的引用关系给的是 linkSource', 
   assert.equal(pack.supporting[0].reason.code, 'linkSource')
 })
 
+test('context: 来源三值 —— 靠引用进来的那条是 relation，命中进来的是 retrieval（v0.21 D3）', () => {
+  // §10.16：`provenance` 是**来源**（`source` 从 v0.14 起是文件角色，不是这个）。
+  // 这里要钉的是：零命中、靠引用被带进来的条目，来源不许写成 `retrieval` ——
+  // 那等于说「它是被检索出来的」，是没证据的点头（需求 §6.5）。
+  const pack = assemble([
+    doc('docs/main.md', 30, [hit('alpha', { title: true })]),
+    doc('docs/impl.md', 0),
+  ], { graph: graphOf({ 'docs/main.md': ['docs/impl.md'] }) })
+
+  assert.equal(pack.primary[0].source, 'doc', 'source 仍是文件角色（v0.14 起的含义）')
+  assert.equal(pack.primary[0].provenance, 'retrieval')
+  assert.equal(pack.supporting[0].reason.code, 'linkTarget')
+  assert.equal(pack.supporting[0].provenance, 'relation',
+    '靠引用带进来的条目，来源必须是 relation')
+
+  // 三值就三个，且**只有调用方**（Phase B 的固定覆盖）能写 manual
+  for (const item of [...pack.primary, ...pack.supporting, ...pack.related]) {
+    assert.ok(['retrieval', 'relation', 'manual'].includes(item.provenance),
+      `${item.rel} 的 provenance 越界：${item.provenance}`)
+  }
+})
+
 test('context: Supporting —— 没有 Primary 就没有引用邻居（引用是相对 Primary 说的）', () => {
   const pack = assemble([
     doc('docs/lone.md', 5, [hit('alpha', { body: true, bodyTf: 1 })]),
@@ -518,11 +540,19 @@ test('context: 输出里不许出现内部分数 —— 名次本身就是答案
   }
 })
 
-test('context: 条目字段是固定投影（rel/title/summary/mtimeMs/kind/source/reason）', () => {
+test('context: 条目字段是固定投影（rel/title/summary/mtimeMs/kind/source/reason/provenance）', () => {
   const pack = assemble([doc('docs/main.md', 100, [hit('alpha', { title: true })], { summary: '摘要' })])
   assert.deepEqual(Object.keys(pack.primary[0]).sort(),
-    ['kind', 'mtimeMs', 'reason', 'rel', 'source', 'summary', 'title'])
+    ['kind', 'mtimeMs', 'provenance', 'reason', 'rel', 'source', 'summary', 'title'])
   assert.deepEqual(Object.keys(pack.primary[0].reason).sort(), ['code', 'fields', 'term', 'terms'])
+  // 没有关系时**不出现** `relations` / `relationsTotal`（空数组是纯噪音），
+  // 有了才出现 —— 见 v0.21 §6.7 与 context.js 的 `project()`。
+  assert.equal('relations' in pack.primary[0], false)
+  assert.equal('relationsTotal' in pack.primary[0], false)
+  // `source` 是**文件角色**（v0.14 起），`provenance` 是**来源**（v0.21 起）——
+  // 两个字段名不能互相顶替，否则客户端与工具 schema 会静默错读。
+  assert.equal(pack.primary[0].source, 'doc')
+  assert.equal(pack.primary[0].provenance, 'retrieval')
 })
 
 test('context: task 是原样引用 —— 本模块不生成、不改写、也不截断', () => {

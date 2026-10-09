@@ -83,6 +83,9 @@
 // 在这里写 `doc.kind === 'code'` 会让 `code` 被误认成一个理由码。
 // `classification.js` 零依赖，import 它不会成环。
 import { KIND_CODE } from './classification.js'
+// v0.21：关系**只做投影**（见 D2）。它读的是一份已经算好的「谁提到谁」事实表，
+// 不参与任何分层判断 —— 所以这里 import 它不会让排序多一条路径。
+import { MAX_RELATIONS_PER_ITEM, relationsOf } from './relations.js'
 
 /* ── 上限（对外契约的一部分，测试直接断言它们）───────────────── */
 
@@ -307,6 +310,19 @@ const REASON_ORDER = {
   related: 6,
 }
 
+/**
+ * 靠**引用关系**进包的那几个理由码。
+ *
+ * v0.21 用它把「这条是从哪来的」落成 §6.5 的三值之一：
+ * 命中关键词是 `retrieval`，靠关系进来的是 `relation`，用户自己钉的是 `manual`
+ * （`manual` 由调用方在装配**之后**改，本模块不认识「固定」这件事 —— 那是控制层的活）。
+ *
+ * ⚠️ 名字是 `provenance`，**不是** `source`：条目上的 `source` 早在 v0.14 就有，
+ * 指的是**文件角色**（`impl` / `test` / `config` / `design` / `doc`，见 `sourceTypeOf()`），
+ * 与「来源」是两件事。改那个字段的语义会静默打断客户端与工具 schema，所以另起一个名字。
+ */
+const RELATION_REASON = new Set(['linkTarget', 'linkSource', 'related'])
+
 /* ── 主函数 ─────────────────────────────────────────── */
 
 /**
@@ -319,6 +335,9 @@ const REASON_ORDER = {
  * @param {Array<object>} input.ranked - 相关度降序的文档（`rankByRelevance().docs`）
  * @param {string} [input.topic] - 当前话题标签（`topicLabel()` 的产物）
  * @param {object} [input.graph] - `buildLinkGraph()` 的产物；不给就退化成「只看命中」
+ * @param {Map<string, Array<object>>} [input.relations] - v0.21：`buildRelationFacts()`
+ *   的 `incident`（谁提到谁）。**只用来给已经进包的条目补一段可核验的关系**，
+ *   不参与任何分层判断；不给就是「这个包不投影关系」。
  * @param {number} [input.maxPrimary] - 覆盖 Primary 上限（默认 `MAX_PRIMARY` = 1）
  * @param {number} [input.maxSupporting] - 覆盖 Supporting 上限（默认 `MAX_SUPPORTING` = 3）
  * @param {number} [input.maxRelated] - 覆盖 Related 上限（默认 `MAX_RELATED` = 5）
@@ -330,6 +349,7 @@ const REASON_ORDER = {
 export function buildContext(input = {}) {
   const ranked = Array.isArray(input.ranked) ? input.ranked.filter(Boolean) : []
   const graph = input.graph
+  const incident = input.relations instanceof Map ? input.relations : null
   const topic = typeof input.topic === 'string' ? input.topic : ''
   // `task` 原样透传 —— 它可能很长、可能为空，这里一个字都不加工（加工就是编造）。
   const task = typeof input.task === 'string' ? input.task : ''
@@ -546,23 +566,39 @@ export function buildContext(input = {}) {
   }
 
   /**
-   * 把内部记录投影成对外的条目：**只有 rel / title / summary / mtimeMs / kind / source / reason**。
+   * 把内部记录投影成对外的条目：**只有 rel / title / summary / mtimeMs / kind / source /
+   * reason / provenance**（外加有关系时的 `relations` + `relationsTotal`）。
    * `raw` / `strength` / `terms` / `fields` 一个都不出去 —— 名次本身就是答案。
+   *
+   * v0.21：`relations` 与 `relationsTotal` **只在真有关系时才出现**。空数组是纯噪音
+   * （没有关系时界面什么也不画），而条目的形状本来是稳定的 —— 少一个恒为空的可选键，
+   * 比多 9 个 `"relations":[]` 更省。`relationsTotal` 更只在**被截断**时出现：
+   * 界面要说的那句话是「共 N 条关系」，没截断时 `N` 就是列表长度，不必下发。
    */
   const project = (entry) => {
     const record = entry.record
-    return {
+    const reason = explainContext(
+      { rel: record.rel, kind: record.kind, matchedTerms: record.termFields },
+      entry,
+    )
+    const item = {
       rel: record.rel,
       title: record.title,
       summary: record.summary,
       mtimeMs: record.mtimeMs,
       kind: record.kind,
       source: record.source,
-      reason: explainContext(
-        { rel: record.rel, kind: record.kind, matchedTerms: record.termFields },
-        entry,
-      ),
+      reason,
+      provenance: RELATION_REASON.has(reason.code) ? 'relation' : 'retrieval',
     }
+    if (incident) {
+      const found = relationsOf(incident, record.rel, MAX_RELATIONS_PER_ITEM)
+      if (found.relations.length > 0) {
+        item.relations = found.relations
+        if (found.total > found.relations.length) item.relationsTotal = found.total
+      }
+    }
+    return item
   }
 
   /** 同一层内：名次优先；名次相同按理由强弱；再相同按 rel 字典序（确定性兜底）。 */

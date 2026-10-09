@@ -344,11 +344,15 @@ test('context-eval: Context Pack 不出分数、不出正文、不出绝对路�
   assert.ok(!serialized.includes('"text"'), '不该带原文')
   for (const item of [...pack.primary, ...pack.supporting, ...pack.related]) {
     assert.ok(!item.rel.startsWith('/'), `rel 必须是相对路径：${item.rel}`)
+    // v0.21：`provenance` 是来源三值，`relations` 只在真有关系时出现（这里的关系表是空的，
+    // 所以两个可选键都不该出现）；`provenance` 说的是「怎么进来的」，不是分数。
     assert.deepEqual(
       Object.keys(item).sort(),
-      ['kind', 'mtimeMs', 'reason', 'rel', 'source', 'summary', 'title'],
+      ['kind', 'mtimeMs', 'provenance', 'reason', 'rel', 'source', 'summary', 'title'],
       `条目字段必须固定：${Object.keys(item).join('/')}`,
     )
+    assert.ok(['retrieval', 'relation', 'manual'].includes(item.provenance),
+      `provenance 必须是三个值之一：${item.provenance}`)
   }
 })
 

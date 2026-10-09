@@ -19,7 +19,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { makeScaleWorkspace, timeWorkspace, GATES, SIZES } from '../tools/deep-benchmark.mjs'
+import { makeScaleWorkspace, timeWorkspace, GATES, SIZES } from './deep-corpus.mjs'
 import { scan } from '../src/host/index.js'
 
 test('规模门槛 R1：1000 文件、带 query 的完整 scan 必须远低于 5 秒轮询', async () => {

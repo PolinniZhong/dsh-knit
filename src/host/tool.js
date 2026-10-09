@@ -50,6 +50,11 @@ const SUMMARY_CHARS = 90
  */
 const SNIPPET_CHARS = 200
 
+// v0.21：工具侧的每项关系上限（面板是 3，工具更贵 ⇒ 2）。
+// 常量只有一处真源（`relations.js`），这里不抄一份 —— 抄一份就必然漂。
+import { MAX_TOOL_RELATIONS_PER_ITEM } from './relations.js'
+
+
 /**
  * 单文件参与检索的上限（KB）。
  *
@@ -176,6 +181,33 @@ const ITEM_SCHEMA = {
       // 所以它是 required，不是 optional —— schema 要如实描述。
       required: ['code', 'terms', 'fields', 'term'],
     },
+    // v0.21：**来源**（怎么进的这个包）。与上面的 `source`（文件角色）是两件事，
+    // 名字故意不同 —— 把 `source` 的语义换掉会静默打断老调用方。
+    //   retrieval = 命中当前任务的关键词；relation = 靠关系进来；manual = 用户自己钉的。
+    provenance: { type: 'string', enum: ['retrieval', 'relation', 'manual'] },
+    // v0.21：**这个条目与工作区里别的文件的关系**（需求 §6.7）。
+    // 每条都带证据：`other` 是对方 rel，`line` 是**提及所在那一行**（1 起）。
+    //   dir:'out' ⇒ 本条目提到了 other，`line` 在本条目里
+    //   dir:'in'  ⇒ other 提到了本条目，`line` 在 other 里
+    // `tests` 是唯一没有 `line` 的一类：它的证据是文件名约定，不是某一行文字。
+    // **可选**（没有关系时键不出现，而不是给空数组），且也**不是全集** ——
+    // 最多 `MAX_TOOL_RELATIONS_PER_ITEM`（2）条，按类型的证据强度截断。
+    relations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['references', 'imports', 'tests', 'documents'] },
+          dir: { type: 'string', enum: ['in', 'out'] },
+          other: { type: 'string' },
+          line: { type: 'integer' },
+        },
+        required: ['type', 'dir', 'other'],
+      },
+    },
+    // 截断前的真实条数（`relations` 只是投影出来的一小段）。只有被截断时才有。
+    relationsTotal: { type: 'integer' },
     // v0.11：命中的那一小段**原文**（不是整篇）。**可选** ——
     // 时间序模式没有命中词，抽不出来就不带这个字段，
     // 而不是给个空串假装有。
@@ -209,7 +241,8 @@ const ITEM_SCHEMA = {
   },
   // `kind` 也是 required：`buildContext()` 每条都给了（取不到时回落 `'md'`）。
   // 声明成可选就等于允许「有的条目有 kind、有的没有」这种形状漂移。
-  required: ['rel', 'title', 'summary', 'mtimeMs', 'kind', 'source', 'reason'],
+  // v0.21 起 `provenance` 也是 —— 装配层每条都算得出来（`retrieval` 是兜底值）。
+  required: ['rel', 'title', 'summary', 'mtimeMs', 'kind', 'source', 'reason', 'provenance'],
 }
 
 const OUTPUT_SCHEMA = {
@@ -226,6 +259,10 @@ const OUTPUT_SCHEMA = {
     primary: { type: 'array', items: ITEM_SCHEMA },
     supporting: { type: 'array', items: ITEM_SCHEMA },
     related: { type: 'array', items: ITEM_SCHEMA },
+    // v0.21：**用户亲手固定**的条目（实现说明 §9）。它们已经**从三层移出**，
+    // 所以三层里不会再出现同一条 —— 面板与工具用的是同一份装配结果。
+    // 可选：没有固定项时这个键不出现（老调用方一字不受影响）。
+    pinned: { type: 'array', items: ITEM_SCHEMA },
     // 渲染头部那条「N matching documents」用的计数。**它不是分数** ——
     // 只是「本批语料里命中了几篇 / 一共有几篇」，给模型一个「有没有漏」的锚。
     // 只有 relevance 模式有，所以不在 `required` 里。
@@ -446,10 +483,13 @@ export function renderToolText(value, readSnippet) {
   const primary = (value && Array.isArray(value.primary)) ? value.primary : []
   const supporting = (value && Array.isArray(value.supporting)) ? value.supporting : []
   const related = (value && Array.isArray(value.related)) ? value.related : []
+  // v0.21：用户固定项（实现说明 §9）。它们**已经不在三层里**，所以不会重复出现。
+  const pinned = (value && Array.isArray(value.pinned)) ? value.pinned : []
 
   // 三层都空 = 真的没有可看的上下文。**不能只判 total** —— 工作区有文档、
   // 但当前话题一篇都没命中、且一条引用邻居都没有时，`total` 是正数而三层全空。
-  if (primary.length + supporting.length + related.length === 0) {
+  // ⚠️ v0.21：三层空但**有固定项**时不算空 —— 用户亲手钉的那几篇就是这一轮的全部上下文。
+  if (primary.length + supporting.length + related.length + pinned.length === 0) {
     if (total === 0) return EMPTY
     // 文档在、但一个词都没命中 —— **不许说成「工作区里没有文档」**：
     // 那是一句假话，而且会把 agent 推向一个错的结论（「这个项目里没有相关材料」）。
@@ -495,13 +535,44 @@ export function renderToolText(value, readSnippet) {
    * 它走本地 HTTP、不进模型上下文，需求 §11 的「可带多段」在那里成立。
    * 这也正对需求 §15 的措辞：给的是「**最相关片段**」（单数）+ 文件 + 理由。
    */
+  /**
+   * 一项的**关系**（v0.21，需求 §6.7 / §9）。
+   *
+   * 形状是刻意压到最小的：一条事实 = `类型 箭头 对方路径[:行号]`，最多 2 条，一行说完。
+   *   · 箭头是**方向**：`→` 本条目提到了对方；`←` 对方提到了本条目。
+   *     （只写类型不写方向，模型会把「被引用」读成「引用了」，那是两件相反的事。）
+   *   · 行号是**证据**：拿到它就能直接去读那一行，不必重新搜。
+   *   · **不写理由文案**（「因为它被主文档引用」那种话由 `reason` 承担），
+   *     关系这一行只给可核验的事实 —— 文案越长越容易变成解释而不是证据。
+   *   · 没有关系就不渲染这一行（不写「无」）。`tests` 天生没有行号，也不编一个。
+   *
+   * 上限由 `relations.js` 的 `MAX_TOOL_RELATIONS_PER_ITEM` 定，`project()` 已截过一次，
+   * 这里再截一次是**冗余的保险**：`renderToolText()` 是导出函数，可能被直接喂一份
+   * 手写的 value（测试就这么干），那时它必须自己守住预算。
+   */
+  const relationLine = (item) => {
+    const list = item && Array.isArray(item.relations) ? item.relations : []
+    return list
+      .slice(0, MAX_TOOL_RELATIONS_PER_ITEM)
+      .map((r) => {
+        if (!r || !r.other) return ''
+        const arrow = r.dir === 'in' ? '←' : '→'
+        const at = Number.isInteger(r.line) ? `:${r.line}` : ''
+        return `${String(r.type || 'related')} ${arrow} ${r.other}${at}`
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+
   const lines = (items) => items.map((item, index) => {
     const summary = oneLine(item.summary)
     const why = whyText(item.reason)
     const snippet = matchLine(item)
+    const links = relationLine(item)
     return `${index + 1}. ${item.rel} — ${item.title}`
       + `${summary ? `\n   ${summary}` : ''}`
       + `${why ? `\n   Why: ${why}` : ''}`
+      + `${links ? `\n   relations: ${links}` : ''}`
       + `${snippet ? `\n   match: ${snippet}` : ''}`
   })
 
@@ -513,6 +584,11 @@ export function renderToolText(value, readSnippet) {
     + 'primary / supporting / related by deterministic local rules (first-read order — '
     + 'not a flat relevance list; each tier is still ranked by IDF-weighted relevance):')
 
+  // v0.21：固定项排在最前 —— 它是**用户的话**，比任何排序都硬（实现说明 §6）。
+  // 放在三层之前是有语义的：模型先看到「这个人要求我一直带着的几篇」。
+  if (pinned.length > 0) {
+    out.push('', 'Pinned by the user (always in scope, in the order they were pinned):', ...lines(pinned))
+  }
   if (primary.length > 0) {
     out.push('', 'Primary (read these first):', ...lines(primary))
   }
@@ -717,11 +793,21 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
        * `integer` —— v0.14 把三层条目**原样透传**过一次，于是 `knit_docs` 每次调用
        * 都在校验层失败（`"value.primary[0].mtimeMs" must be an integer`），
        * agent 一个 Context Pack 都拿不到。时间序那条分支一直是取整的，两边不一致。
+       *
+       * v0.21：关系在这里再截一次（面板给 3，工具只给 2）。被截掉时把**真实总数**
+       * 写进 `relationsTotal` —— 模型要知道「这不是全部」，而不是以为那就是全部关系。
        */
-      const project = (item) => ({
-        ...item,
-        mtimeMs: Number.isFinite(item.mtimeMs) ? Math.trunc(item.mtimeMs) : 0,
-      })
+      const project = (item) => {
+        const row = {
+          ...item,
+          mtimeMs: Number.isFinite(item.mtimeMs) ? Math.trunc(item.mtimeMs) : 0,
+        }
+        if (Array.isArray(row.relations) && row.relations.length > MAX_TOOL_RELATIONS_PER_ITEM) {
+          row.relationsTotal = Number.isInteger(row.relationsTotal) ? row.relationsTotal : row.relations.length
+          row.relations = row.relations.slice(0, MAX_TOOL_RELATIONS_PER_ITEM)
+        }
+        return row
+      }
 
       // v0.20：命中片段**在 `scan()` 里就算好了**（`payload.ranked[].matches`，带行号），
       // 键是 `rel`。有片段就不再读盘 —— 这是顺带拿到的性能收益：v0.19 为了抽 200 字，
@@ -773,6 +859,10 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
         primary: await withSnippets(pack.primary || []),
         supporting: await withSnippets(pack.supporting || []),
         related: await withSnippets(pack.related || []),
+        // v0.21：用户固定项。**没有就一个键都不加**（老调用方的输出形状一字不变）。
+        ...(Array.isArray(pack.pinned) && pack.pinned.length > 0
+          ? { pinned: await withSnippets(pack.pinned) }
+          : {}),
         // 只有 `audit: true` 且真的取到摘要时才有这个字段（否则连键都不出现）
         ...(usage ? { usage } : {}),
       }

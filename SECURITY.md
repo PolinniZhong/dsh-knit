@@ -2,7 +2,7 @@
 
 > **Knit 的安全属性 —— 每一条都指向一个真实存在的检查。**
 >
-> 最后更新：2026-10-07（v0.20.0）
+> 最后更新：2026-10-08（v0.21.0）—— 新增 `POST /knit/api/control` 与固定/排除的落盘，两条属性已按实际情况改写
 
 ## 为什么有这份文件
 
@@ -31,7 +31,8 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 | 读文件接口守在会话工作区内 | ✅ | `test/host.test.mjs` 的越界用例（解析后必须落在工作区内，否则一律拒绝） |
 | `/knit/api/doc` 只放行文本类产物 | ✅ | v0.19 起因代码而放宽（原为「仅 Markdown」），所以边界要重新说清：**文档 / 代码 / 生成产物**放行，**媒体与未知后缀一律拒绝**。`test/host.test.mjs` 的 `notPreviewable` 用例 + `test/classification.test.mjs` 的 `isPreviewKind` 闭集断言 |
 | `/knit/api/raw` 叠扩展名白名单 | ✅ | `test/host-http.test.mjs`（非图片/视频扩展名一律拒绝） |
-| 只允许 GET、只允许回环地址 | ✅ | `test/host-http.test.mjs` |
+| 只允许 GET、只允许回环地址 | ✅ | `test/host-http.test.mjs`。**v0.21 起有一个例外**：`POST /knit/api/control`（写固定 / 排除），它同样只认回环地址，且只接受 `pin`/`unpin`/`exclude`/`restore` 四个动作 + 一条工作区内的相对路径；非 POST 打这个路由回 405、坏 body 回 400 |
+| 唯一的写动作 = 固定 / 排除，且只写 DSH 给的存储单元 | ✅ | `src/host/control.js` 只通过 `ctx` 注入的 storage 服务读写单元 `knit_control`（`~/.dsh/storages/knit_control.json`，按工作区隔离），**不碰工作区里的任何文件**；`test/control.test.mjs` + `test/host-http.test.mjs` |
 | 响应带 `nosniff` 与 `default-src 'none'; sandbox` | ✅ | `test/host-http.test.mjs`（两个指令各自断言） |
 | 零网络出口：客户端 `fetch` 全部同源相对路径 | ✅ | `src/client/client.js` 的三个接口常量都是 `/knit/api/*`；`test/security.test.mjs` 断言无协议头。HTML 的「网页预览」按钮是把文件交给 **DSH 自己的**文档预览标签页去渲染（Knit 这一侧一个请求都不发），渲染的沙箱与 CSP 归 DSH 管 —— 所以这条承诺不变 |
 | 宿主半边不 import `@deepseek-ai/*` | ✅ | `test/security.test.mjs` 扫三个宿主文件，注释里提到可以、真实 `import` 不行 |

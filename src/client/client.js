@@ -138,6 +138,45 @@ window.__ModuleLoader__.load({
       'context.supportingHint': '辅助',
       'context.relatedHint': '背景',
       'context.why': '为什么在这里',
+      // ── v0.21 上下文控制（固定 / 排除）与关系来源 ────────────────────
+      // ⚠️ 三个来源词是**中性词**：来源只说明「它怎么进来的」，不表达强弱。
+      //    所以它们一色到底（都是 caption 灰），靠**字**区分，不靠颜色。
+      'context.pinned': '固定上下文',
+      'context.pinnedHint': '你自己标记的',
+      'prov.retrieval': '检索',
+      'prov.relation': '关系',
+      'prov.manual': '用户固定',
+      'control.pin': '固定',
+      'control.unpin': '取消固定',
+      'control.exclude': '排除',
+      'control.restore': '恢复',
+      'control.excluded': '被用户排除：{rel}',
+      'control.failed': '操作没生效：{error}',
+      // 行级证据（需求 §6.2）：类型 + 方向 + 谁 + 第几行 + 打开。点「为什么」才展开。
+      'rel.toggle': '点开看这一行的证据',
+      'rel.references': '引用',
+      'rel.imports': '导入',
+      'rel.tests': '测试',
+      'rel.documents': '描述',
+      'rel.line': '第 {line} 行',
+      'rel.open': '打开',
+      'rel.more': '共 {n} 条关系，每项最多投影 {max} 条（预算，不是建议）',
+      // 检索状态摘要（需求 §6.3）：**分组与顺序本身就是这条设计要传达的信息** ——
+      // 工作区候选 ｜ 检索与调整 ｜ 最终结果；三组之间是细竖线，组内是中点（见 CSS 的 .knit-pipe）。
+      // ⚠️ 每一格都是**已经发生过的事实**，不是估算，也不许改成别的口径（见宿主侧注释）。
+      'pipe.collect': '收集 {n}',
+      'pipe.exclude': '排除 {n}',
+      // v0.21.x（2026-10-09 用户规格）：排除之后的候选数原来是一个**光数字**（只有
+      // 「→ 79」），现在给它一个名字 —— 状态摘要里每一格都必须能独立读懂。
+      'pipe.candidates': '候选 {n}',
+      'pipe.rank': 'BM25 词法检索',
+      // ⚠️ 「关系 N 条」说的是**这一份包里带了几条关系证据**（三层各条 relations 之和），
+      // 不是工作区里的关系总数、也不是候选数（那两类数字宿主另有字段，这里不展示）。
+      'pipe.relations': '关系 {n} 条',
+      // ⚠️ 「固定 N」= 有几篇被你固定、因此**从三层移出**进了固定区（pack.pinned 的长度）。
+      // 不写「固定覆盖」这种内部说法；也不带量词 —— 固定对象可能是文档、代码或媒体。
+      'pipe.pin': '固定 {n}',
+      'pipe.pack': '入包 {n}',
       // 理由码 → 文案。宿主只给码（AGENTS.md §4.5），翻译在这里。
       // ⚠️ 2026-09-29 用户要求把这行压得更克制：原来是「直接命中当前话题：…」，
       // 读起来像调试信息。现在它是**标签 + 值**，词之间用「 · 」分隔。
@@ -365,6 +404,35 @@ window.__ModuleLoader__.load({
       'context.supportingHint': 'supporting',
       'context.relatedHint': 'background',
       'context.why': 'Why it is here',
+      // ── v0.21 context control (pin / exclude) and relation provenance ──
+      // ⚠️ The three provenance words are **neutral**: provenance says how an item got
+      //    in, not how strong it is — so they share one colour and differ by word.
+      'context.pinned': 'Pinned',
+      'context.pinnedHint': 'you marked these',
+      'prov.retrieval': 'retrieved',
+      'prov.relation': 'relation',
+      'prov.manual': 'pinned',
+      'control.pin': 'Pin',
+      'control.unpin': 'Unpin',
+      'control.exclude': 'Exclude',
+      'control.restore': 'Restore',
+      'control.excluded': 'Excluded by you: {rel}',
+      'control.failed': 'Action failed: {error}',
+      'rel.toggle': 'open the evidence for this line',
+      'rel.references': 'references',
+      'rel.imports': 'imports',
+      'rel.tests': 'tests',
+      'rel.documents': 'documents',
+      'rel.line': 'line {line}',
+      'rel.open': 'Open',
+      'rel.more': '{n} relations total, at most {max} projected per item',
+      'pipe.collect': '{n} collected',
+      'pipe.exclude': '{n} excluded',
+      'pipe.candidates': '{n} candidates',
+      'pipe.rank': 'BM25 lexical retrieval',
+      'pipe.relations': '{n} relations',
+      'pipe.pin': '{n} pinned',
+      'pipe.pack': '{n} in pack',
       // Reason codes → copy. The host only ships codes (AGENTS.md §4.5).
       // ⚠️ Flattened on 2026-09-29: "direct topic match: …" read like debug output.
       'why.direct': 'direct match: {term}',
@@ -593,6 +661,14 @@ window.__ModuleLoader__.load({
     // v0.12：某篇的「谁引用了它 / 它引用了谁」。与上面三条一样是**同源相对地址**，
     // 所以仍然满足「客户端零网络出口」那条守卫（test/security.test.mjs）。
     const LINKS_API = '/knit/api/links'
+    // v0.21：整个 HTTP 面**唯一**的写动作（固定 / 排除）。只回环、只 POST、只认
+    // `{action, rel}`；工作区根由 `sessionId` 解析 —— 与其余路由同一条纪律。
+    const CONTROL_API = '/knit/api/control'
+    // v0.21：**镜像**宿主的面板投影上限（`src/host/relations.js` 的
+    // `MAX_RELATIONS_PER_ITEM = 3`）。客户端只需要它来写「共 N 条关系，每项最多投影 3 条」
+    // 那句话 —— 真正的截断在宿主做，这里**不截断**（截断两次就会出现两份真相）。
+    // ⚠️ 两个数字必须一致：`test/client.test.mjs` 有一条源码级守卫同时读两侧。
+    const REL_MAX = 3
 
     /** 轮询间隔。 */
     const POLL_MS = 5000
@@ -841,8 +917,17 @@ body[data-ds-dark-theme] .knit-root{
        横本身就是 .5px，色值对上而粗细仍写 1px，高分屏上比它粗一倍。三处同粗：.knit-seg
        外框、.knit-seg 内部竖线、.knit-filter。CSS 里统一写 0.5px（与官方 .wSkVaW_header 的 .5px 同值）。
    ⚠️ 选中态只改**底色 + 字重 600**（不是 700），hover 只改底色 —— 不许 scale / translate /
-      box-shadow（md §五）。暗色下靠 --knit-active-bg 这个 token，不写死颜色。 */
+      box-shadow（md §五）。暗色下靠 --knit-active-bg 这个 token，不写死颜色。
+   ⚠️ 2026-10-09（v0.21.x 用户规格）：这一行现在是**三组一行**，顺序就是控件顺序，
+      别再挪 —— ① 排序「相关 / 最新」（灰底分段控件）② 一条浅灰竖线
+      ③ 类型「文档 / 代码 / 媒体 / 全部」（下划线页签）④ 搜索框（排尾、贴右、宽度自适应）。
+      那根竖线是**边界**，不是把六个选项连成一个整体：排序与类型是两个互不干扰的条件，
+      搜索只过滤当前范围、不重置它们（用户规格 §三.3）。 */
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
+/* 排序组与类型组之间**就这一根线**（用户规格 §二.2：中间用一条浅灰竖线与排序区隔开）。
+   色号取 .knit-seg 外框、.knit-filter 描边同一个 border-l3 ⇒ 三处一样淡；粗细写 1px ——
+   0.5px 的竖线在高分屏上会淡到看不见，它不是描边而是分隔。纯装饰：aria-hidden。 */
+.knit-bar-sep{flex:none;width:1px;height:16px;background:var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 .knit-seg{display:inline-flex;flex:none;border-radius:10px;overflow:hidden;
   border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 .knit-seg-btn{height:28px;padding:0 15px;cursor:pointer;font-size:13px;font-weight:400;
@@ -852,7 +937,11 @@ body[data-ds-dark-theme] .knit-root{
 .knit-seg-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
 .knit-seg-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
   color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
-.knit-filter{flex:1;min-width:0;height:28px;padding:0 12px;border-radius:10px;font-size:13px;
+/* 搜索框在工具栏**尾部**（用户规格 §二.3：搜索是对当前列表的进一步过滤，放最右符合
+   工具栏惯例）。flex-basis 180px + grow ⇒ 常规面板里就是 180–240px 并贴住右边；
+   max-width 240px 封顶之后剩下的空间交给 margin-left:auto（否则它会一路长到面板边缘）。
+   ⚠️ min-width:0 = 面板窄了**先缩搜索框**；前面两组都 flex:none，永远不被它挤。 */
+.knit-filter{flex:1 1 180px;min-width:0;max-width:240px;margin-left:auto;height:28px;padding:0 12px;border-radius:10px;font-size:13px;
   background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
   border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));outline:none;
   transition:border-color .16s ease}
@@ -1053,8 +1142,12 @@ body[data-ds-dark-theme] .knit-root{
    「这样就会减少文档列表的高度」。命中段在左（本版最该被看见的那一格），
    中间一条 1px 中性竖线分隔 —— 不是虚线、不是分隔带、不加底色。
    ⚠️ 仍然**独占一行**，不并到标题行右侧：那里的省略号会把它截成
-   「标题命中当前…」，恰好把要传达的东西吃掉（Design §11 的字段顺序不变）。 */
+   「标题命中当前…」，恰好把要传达的东西吃掉（Design §11 的字段顺序不变）。
+   2026-10-08 用户规格：这一行的**右端**现在是操作组（固定 / 排除 / 来源词），
+   所以行本身是「左证据 + 右动作」的两段式 —— 左边 flex:1 可截断，右边 flex:none。
+   行高不变、也不因为动作出现或隐藏而跳动（隐藏用的是 visibility，位置一直留着）。 */
 .knit-subrow{display:flex;flex-wrap:nowrap;align-items:baseline;gap:8px;min-width:0;padding-top:2px}
+.knit-subrow-main{flex:1 1 auto;display:flex;flex-wrap:nowrap;align-items:baseline;gap:8px;min-width:0}
 .knit-subrow-sep{flex:none;align-self:stretch;width:1px;margin:2px 0;
   background:var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 /* 11px 而不是 10px，因为它承担的是**信息**（可核验的理由），不是装饰标注。 */
@@ -1075,6 +1168,94 @@ body[data-ds-dark-theme] .knit-root{
   border-radius:6px;background:var(--knit-chip-bg,rgba(255,255,255,.12));font:inherit;
   font-size:11px;line-height:15px;cursor:pointer;color:var(--dsw-alias-label-secondary,#61666b)}
 .knit-hit:hover,.knit-hit:focus-visible{color:var(--dsw-alias-label-primary,#0f1115);text-decoration:underline}
+/* ── v0.21 来源词 / 行级证据 / 固定与排除（需求 §6、§8）────────────
+   这一层整体是**弱化层**：来源、动作、证据都排在标题与摘要之下，字号 10–11px、
+   都是 caption / tertiary 灰。两条纪律：
+   ① **来源不是强弱**：检索 / 关系 / 用户固定 三个词**共用一种灰**，靠字区分，
+      不做彩色徽标、不做分数（需求 §8：颜色只用来区分来源，不用来表达强弱）；
+   ② 证据列表是「点开才有」的第二层，默认一个节点都不渲染（默认视图一个字节都不变）。
+   2026-10-08 用户规格（v0.21.x 布局改造）：来源词从标题行搬进证据行右端的操作组，
+   成为那一组里的**第三个文字按钮**（固定 → 排除 → 来源词）—— 于是它不能再是
+   一枚有底色的胶囊（§3.4：默认根本不显示，出现时就是克制的文字操作）。
+   ⚠️ 它仍然是「这一条怎么进来的」这条**事实**：没有图标、没有描边、同一种灰；
+      有关系可展开时才是 button（多一个 hover / 焦点的下划线反馈），
+      没有证据可展开时就是一个 span：**不装成能点的样子**。 */
+.knit-prov{flex:none;margin:0;padding:0 5px;border:0;outline:none;background:transparent;
+  border-radius:5px;font:inherit;font-size:11px;line-height:15px;
+  color:var(--dsw-alias-label-caption,#80868b)}
+button.knit-prov{cursor:pointer}
+button.knit-prov:hover,button.knit-prov:focus-visible{background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#0f1115)}
+/* 证据行右端的操作组：固定 → 排除 → 来源词。
+   **默认整组不显示** —— 悬停到这一行、键盘光标在这一行（.cursor 类）、这一行处于
+   选中态（.active 类）、或焦点进入这一行（:focus-within）才出现（2026-10-08 用户规格 §3.3）。
+   ⚠️ 用 visibility:hidden 而**不是** opacity:0：隐藏时必须同时退出焦点序与命中测试，
+      否则「看不见却 Tab 得到 / 点得到」就是骗人的（§3.3 第 4 条）。
+   ⚠️ 没有 opacity / visibility 的过渡动画（§3.3 第 6 条：不加悬停动画、发光、装饰）。
+   ⚠️ flex:none + visibility ⇒ 出现与隐藏都**不改变行高、不推挤左侧证据**。 */
+.knit-rowacts{flex:none;display:flex;align-items:center;gap:2px;visibility:hidden}
+.knit-doc:hover .knit-rowacts,.knit-doc.active .knit-rowacts,.knit-doc.cursor .knit-rowacts,
+.knit-doc:focus-within .knit-rowacts{visibility:visible}
+.knit-act{flex:none;margin:0;padding:0 5px;border:0;outline:none;background:transparent;
+  border-radius:5px;font:inherit;font-size:11px;line-height:15px;cursor:pointer;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-act:hover,.knit-act:focus-visible{background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#0f1115)}
+/* 2026-10-09 用户反馈（真机体验过第一版之后）：① 「固定 / 排除 / 检索 这个字号有点太小了，
+   可以跟命中段一样大小」⇒ 10px → **11px / 15px**，与命中段（.knit-hit）同档；
+   ② 「悬停的时候那个背景可以再左右各加 4 个像素，热区有点小、有点点不到」⇒
+   padding 5px → **9px**，同时用 **-4px 的负外边距**把那 4px 从布局宽度里收回来：
+   于是**行宽与三个词之间的视觉间距一点没变**，只有悬停底色与可点区域向左右各长 4px。
+   ⚠️ 只作用于证据行右端这一组（恢复那个单独的 .knit-act 不动，它旁边没有兄弟会被挤）。 */
+.knit-rowacts .knit-act,.knit-rowacts .knit-prov{padding:0 9px;margin:0 -4px}
+/* 「为什么」在**有关系可看**时是一个按钮（点开就是那一行的证据），但看起来必须仍是
+   一行灰字：没有图标、没有描边、没有底色，只有 hover 时加下划线 —— 与 .knit-hit
+   同一套语言（那是事实，不是操作）。
+   ⚠️ 文本**一个字节都没变**（test/client.test.mjs 按 knit-why 取这一行的原文）。 */
+button.knit-why{margin:0;padding:0;border:0;outline:none;background:transparent;font:inherit;
+  font-size:11px;line-height:17px;text-align:left;cursor:pointer;
+  color:var(--dsw-alias-label-tertiary,#81858c)}
+button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-secondary,#61666b);
+  text-decoration:underline}
+/* 行级证据（需求 §6.2）：默认不渲染，点开才有。每条一行，四个字段都不省略：
+   类型 · 方向 · 谁 · 第几行。.knit-relline 用等宽体承接行号（对齐扫读）。 */
+.knit-rellist{margin-top:4px;padding:5px 0 0;display:flex;flex-direction:column;gap:2px;
+  border-top:.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+.knit-relrow{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:11px;line-height:16px;
+  color:var(--dsw-alias-label-tertiary,#81858c)}
+.knit-reltag{flex:none;font-size:10px;padding:0 4px;border-radius:4px;
+  background:var(--knit-active-bg,rgba(38,49,72,.061));color:var(--dsw-alias-label-caption,#80868b)}
+.knit-relwho{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.knit-relline{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px}
+.knit-relopen{flex:none;margin:0;padding:0 4px;border:0;outline:none;background:transparent;
+  border-radius:4px;font:inherit;font-size:10px;line-height:15px;cursor:pointer;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-relopen:hover,.knit-relopen:focus-visible{color:var(--dsw-alias-label-primary,#0f1115);
+  text-decoration:underline}
+.knit-relmore{font-size:10px;line-height:16px;color:var(--dsw-alias-label-caption,#80868b)}
+/* 被用户排除的那一行：**单行弱化说明**，空的时候不出现、也不占位（需求 §6.3）。
+   它说的是「这一批少了什么」，所以用中性描边而不是警告色 —— 这不是错误，是用户的选择。 */
+.knit-excl{flex:none;display:flex;align-items:baseline;gap:6px;margin:0 12px 6px;padding:5px 8px;
+  border-radius:6px;font-size:11px;line-height:16px;
+  background:var(--knit-hover-bg,rgba(255,255,255,.03));color:var(--dsw-alias-label-caption,#80868b)}
+.knit-excl-what{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 检索状态摘要（需求 §6.3；2026-10-09 用户规格重排）：**单行、三组、竖线分组** ——
+   收集 79 · 排除 0 · 候选 79  ｜  BM25 词法检索 · 关系 24 条 · 固定 0  ｜  入包 9。
+   三组就是阅读顺序：工作区候选 → 检索与调整 → 最终结果。
+   ⚠️ 箭头（↓ / →）和「检索 / 排序（BM25 词法）」「关系投影」「固定覆盖」这些内部说法
+      **已整体删除** —— 它们把一条**已经完成**的管线画成了流程图（用户原话：箭头「增加理解成本」）。
+   ⚠️ 它仍然只是一串计数：没有图标、没有胶囊、没有卡片、没有色块、没有装饰性边框，
+      只有灰字 + 中点 + 一根细竖线。
+   ⚠️ 中点与竖线都是**文本节点**（不是伪元素、不是边框）：它们跟同一行流排版，
+      基线天然对齐，窄面板换行时也不会留下一条贴边的孤线。
+   ⚠️ 这段是模板字符串：注释里**不许出现反引号**（AGENTS.md §6.1，踩过三回了）。 */
+.knit-pipe{flex:none;display:flex;align-items:baseline;flex-wrap:wrap;gap:4px;
+  margin:0 12px 8px;font-size:10.5px;line-height:15px;
+  color:var(--dsw-alias-label-caption,#80868b)}
+.knit-pipecell{flex:none;white-space:nowrap}
+.knit-pipecell.strong{color:var(--dsw-alias-label-secondary,#61666b);font-weight:500}
+.knit-pipedot,.knit-pipesep{flex:none;color:var(--dsw-alias-label-caption,#80868b)}
+.knit-pipesep{margin:0 3px}
 /* 滚动条**不要自己画**：DSH 主题里已有全局样式
    （::-webkit-scrollbar 宽 8px ＋ --dsh-scrollbar-thumb，见 dsh-client-ui-theme）。
    曾经在这里写死 6px 宽 ＋ rgba(255,255,255,.14) 的滑块 —— 白色 14% 在白底上完全隐形，
@@ -1352,8 +1533,13 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    ⚠️ 2026-09-30 用户反馈：页签条底下原本还有一条全宽 hairline（border-l1）——
    「最细最淡那条横线」与下面的列表割裂，**删掉**。层级现在只由选中项自己那条
    2px 下划线表达，页签条本身不画线（也不是「下划线悬空」：它画在自己的文字下面）。
-   ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。 */
-.knit-types{display:flex;gap:14px;padding:0 12px;flex:none}
+   ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。
+   ⚠️ 2026-10-09（v0.21.x 用户规格）：这一组从**自己一行**搬进了 .knit-bar，排在排序组
+   右边、与它之间隔一根 .knit-bar-sep。于是这里**不再自带左右 12px 内边距**（那是
+   .knit-bar 的事，再写一遍就是双重缩进、两组对不齐）。下划线式选中态**保持不变** ——
+   用户这次说「选中项用浅色背景或文字强调即可」，下划线 + 主色文字正是「文字强调」，
+   而且它覆盖 2026-09-29 那条「不要灰底」的裁决，不要因为并排就退回灰底按钮。 */
+.knit-types{display:flex;gap:14px;flex:none}
 .knit-type-btn{flex:none;height:30px;padding:0;cursor:pointer;
   border:none;border-bottom:2px solid transparent;background:transparent;
   color:var(--dsw-alias-label-secondary,#9aa0a6);font-family:inherit;font-size:14px;
@@ -2031,6 +2217,34 @@ video.knit-preview-media{width:100%;background:#000}
     }
 
     /**
+     * 入场补间播完时的**收尾**：注销补间 + 清掉那两行内联样式。
+     *
+     * ⚠️ `cancel()` 不是可省的礼节，是这件事的全部要点：入场补间用 `fill:'both'`
+     * （延迟期间要按住 `height:0`），而 **fill 会在补间播完之后继续生效** ——
+     * 于是这一行被**入场那一刻量到的高度**永久钉住；`el.style.height=''` 清不掉它
+     * （内联样式与补间效果是两层）。后果：之后行内长出新的内容（点开「检索」多出来的
+     * 那几条行级证据）不会把下面的行挤下去，而是**溢出到下一行上面**。
+     * 2026-10-09 用户真机截图报的「检索的数据压在下一个列表的下面」就是它。
+     *
+     * 纯对象即可测（替身里没有 DOM，跑不到 DocRow 那段 layout effect ⇒
+     * `test/client.test.mjs` 直接喂假 el / 假 anim 守这一条，并另有一条钉住调用点）。
+     *
+     * @param {{style?: object}|null} el - 行节点
+     * @param {{cancel?: Function}|null} anim - `el.animate()` 返回的补间
+     */
+    function settleEnterAnim(el, anim) {
+      if (anim && typeof anim.cancel === 'function') {
+        try {
+          anim.cancel()
+        } catch (err) { /* cancel 抛错也不能把收尾卡住 */ }
+      }
+      if (el && el.style) {
+        el.style.height = ''
+        el.style.overflow = ''
+      }
+    }
+
+    /**
      * 算这一帧哪些行是**新来的**、哪些行**走了**（纯函数，测试直接喂它）。
      *
      * 「走了」的行带回它上一帧的 `tierKey` / `index` —— 幽灵行要靠这两个值插回原来的位置，
@@ -2192,7 +2406,12 @@ video.knit-preview-media{width:100%;background:#000}
     }
 
     function DocRow({ doc, now, active, cursor, relevance, why, num, mark, primary, life,
-      glyph, onGlyph, onSelect, onOpenTab, passage, onPassage, optionId, entering, leaving }) {
+      glyph, onGlyph, onSelect, onOpenTab, passage, onPassage, optionId, entering, leaving,
+      // ── v0.21（需求 §6.3 / §8）：来源徽标、行级证据、固定与排除 ──────────
+      // 全部是**可选** props：平铺列表（时间序 / 过滤结果）一个都不传，那一屏与 v0.20
+      // 逐字相同。`onAct` 为 null ⇒ 不渲染动作按钮；`relations` 为空 ⇒ 「为什么」退回
+      // 纯文本（没有证据就不装成有证据的样子）。
+      prov, pinned, onAct, relations, relationsTotal, whyOpen, onWhyToggle, onOpenRelation }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       const rowRef = React.useRef(null)
       /* v0.19：只有**代码行**带语言徽章。
@@ -2236,12 +2455,12 @@ video.knit-preview-media{width:100%;background:#000}
           { height: `${height}px`, transform: 'translateY(0)', opacity: 1, filter: 'blur(0px)' },
         ], { duration: MOTION_ENTER_MS, delay: entering, easing: MOTION_EASE, fill: 'both' })
         const done = anim && anim.finished
-        if (done && typeof done.then === 'function') {
-          done.then(() => { el.style.height = ''; el.style.overflow = '' }).catch(() => {})
-        } else {
-          el.style.height = ''
-          el.style.overflow = ''
-        }
+        // ⚠️ 收尾必须**注销补间**（`settleEnterAnim` 里那句 `cancel()`）——
+        //    只清 `el.style.height` 会把这一行按入场高度永久钉住，之后点开「检索」
+        //    长出来的证据列表就只会溢出到下一行上面（2026-10-09 用户真机反馈）。
+        const settle = () => settleEnterAnim(el, anim)
+        if (done && typeof done.then === 'function') done.then(settle).catch(settle)
+        else settle()
       })
 
       return h('div', {
@@ -2319,6 +2538,11 @@ video.knit-preview-media{width:100%;background:#000}
           //    永远不抢标题。
           life ? h('span', { className: 'knit-life' }, life) : null,
           // 时间在标题右边的行尾 —— 靠 .knit-title 的 flex-grow 推过去，不是靠 margin。
+          // ⚠️ 2026-10-08 用户规格：标题行**到此为止** —— 只剩「序号 · 标记 · 标题 · 时间」。
+          //    来源词（检索 / 关系 / 用户固定）与固定 / 排除原来都挤在这一行的右端，
+          //    现在全部搬到下面那条证据行的右端（见 `.knit-subrow` / `.knit-rowacts`）。
+          //    原因：来源与命中段、理由说的是**同一件事的两级证据**，而固定 / 排除是
+          //    操作入口 —— 四样东西并排 = 标题行信息过载，且每一行都重复一遍。
           h('div', { className: 'knit-time' }, relTime(doc.mtimeMs, now))),
         doc.summary
           ? h('div', { className: 'knit-sum' }, doc.summary)
@@ -2337,25 +2561,120 @@ video.knit-preview-media{width:100%;background:#000}
         //    分两行等于每行都变高；合一行列表就矮回来一格。
         // ⚠️ 这一行**仍然独占一行**，不并进标题行：标题右侧的省略号会把它截成
         //    「标题命中当前…」，恰好把要传达的东西吃掉（Design §11 字段顺序不变）。
-        (passage || why) ? h('div', { className: 'knit-subrow' },
-          /* ── 命中段（需求 §12）─────────────────────────────────────────
-             只有一个行号区间 —— 这是「文件 → 相关内容片段」升级在列表里唯一露出的
-             那一格。它**不是**：分数、百分比、置信度、AI 摘要、高亮预览卡片
-             （§26 明令禁止那一类展示）。
-             ⚠️ 它是真 `button`（Tab 得到、回车能开、读屏读得出），并且
-             `stopPropagation` —— 否则点它会顺带触发行的 onSelect（预览开/关切换），
-             于是「点片段」在同一行上点第二次会把预览关掉。 */
-          passage ? h('button', {
-            className: 'knit-hit',
-            type: 'button',
-            title: t('row.passages', { range: fmtRange(passage) }),
-            onClick: (event) => {
-              if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
-              onPassage(doc, passage)
-            },
-          }, t('row.passages', { range: fmtRange(passage) })) : null,
-          (passage && why) ? h('span', { className: 'knit-subrow-sep', 'aria-hidden': 'true' }) : null,
-          why ? h('div', { className: 'knit-why', title: `${t('context.why')}：${why}` }, why) : null) : null))
+        // ── 2026-10-08 用户规格（v0.21.x 布局改造）：这一行现在是**证据行 + 操作行** ──
+        //    左边＝证据（命中段 ｜ 理由），右边＝三个文字动作（固定 → 排除 → 来源词）。
+        //    为什么来源词也搬到这里：它和命中段、理由说的是**同一层证据**（这一条怎么进来的），
+        //    而固定 / 排除是操作入口 —— 原来四样东西并排挤在标题行右端，是信息过载。
+        //    ⚠️ 那一组默认**不显示**（`.knit-rowacts` 的 `visibility:hidden`），
+        //    悬停到这一行 / 键盘光标在这一行 / 焦点进入这一行才出现。
+        //    ⚠️ 没有命中段、也没有理由时这一行**仍然渲染**（左边就是空的，一个字的占位都不写）：
+        //    否则那一条会连固定 / 排除的入口一起没有。为什么不留占位文字 —— 需求 §6.4
+        //    「没有证据就不装成有证据的样子」，所以这里连一个「—」都不给。
+        (passage || why || onAct || prov) ? h('div', { className: 'knit-subrow' },
+          // 左（flex:1 1 auto，可被截断）＝证据。右（flex:none）＝动作，永远有位置：
+          // 窄宽度下先截证据，不让动作压到证据上面（需求 §3.2）。
+          h('div', { className: 'knit-subrow-main' },
+            /* ── 命中段（需求 §12）─────────────────────────────────────────
+               只有一个行号区间 —— 这是「文件 → 相关内容片段」升级在列表里唯一露出的
+               那一格。它**不是**：分数、百分比、置信度、AI 摘要、高亮预览卡片
+               （§26 明令禁止那一类展示）。
+               ⚠️ 它是真 `button`（Tab 得到、回车能开、读屏读得出），并且
+               `stopPropagation` —— 否则点它会顺带触发行的 onSelect（预览开/关切换），
+               于是「点片段」在同一行上点第二次会把预览关掉。 */
+            passage ? h('button', {
+              className: 'knit-hit',
+              type: 'button',
+              title: t('row.passages', { range: fmtRange(passage) }),
+              onClick: (event) => {
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                onPassage(doc, passage)
+              },
+            }, t('row.passages', { range: fmtRange(passage) })) : null,
+            (passage && why) ? h('span', { className: 'knit-subrow-sep', 'aria-hidden': 'true' }) : null,
+            why ? (onWhyToggle && relations
+              // v0.21：**有关系可看时，「为什么」就是那个开关**（需求 §6.6：点「原因」展开证据）。
+              // 文本一个字节都没变，只是从 div 变成 button —— 它现在真的可点、可 Tab、可回车。
+              // 2026-10-08：证据行右端的来源词（检索 / 关系 / 用户固定）**是同一个开关** ——
+              // 用户规格要的就是它，而理由那一行的原文与交互一个字都没动。
+              ? h('button', {
+                className: 'knit-why',
+                type: 'button',
+                title: t('rel.toggle'),
+                'aria-expanded': whyOpen ? 'true' : 'false',
+                onClick: (event) => {
+                  if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                  onWhyToggle()
+                },
+              }, why)
+              : h('div', { className: 'knit-why', title: `${t('context.why')}：${why}` }, why)) : null),
+          /* ── 右端＝操作组（2026-10-08 用户规格）───────────────────────────
+             顺序是**硬的**：固定 → 排除 → 来源词。**只有文字、没有任何图标**
+             （不加 Pin / 放大镜 / 禁止符号 / 星形，不加 SVG 装饰），也不给三个按钮
+             各自的彩色胶囊 —— 它们默认根本不显示，出现时就是一行克制的灰字。
+             ⚠️ 来源词是**第三个**：它既是「这一条怎么进来的」这条事实，又是展开证据的入口
+                （有关系可看时才是 button；没有证据可展开时只是一个词，不装成能点）。
+             ⚠️ 三个动作都 `stopPropagation` —— 否则点它会顺带开 / 关这一篇的预览。 */
+          (onAct || prov) ? h('div', { className: 'knit-rowacts' },
+            onAct ? h('button', {
+              className: 'knit-act',
+              type: 'button',
+              title: t(pinned ? 'control.unpin' : 'control.pin'),
+              onClick: (event) => {
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                onAct(pinned ? 'unpin' : 'pin', doc.rel)
+              },
+            }, t(pinned ? 'control.unpin' : 'control.pin')) : null,
+            onAct ? h('button', {
+              className: 'knit-act',
+              type: 'button',
+              title: t('control.exclude'),
+              onClick: (event) => {
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                onAct('exclude', doc.rel)
+              },
+            }, t('control.exclude')) : null,
+            prov ? (onWhyToggle && relations
+              ? h('button', {
+                className: 'knit-prov',
+                type: 'button',
+                title: t('rel.toggle'),
+                'aria-expanded': whyOpen ? 'true' : 'false',
+                onClick: (event) => {
+                  if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                  onWhyToggle()
+                },
+              }, prov)
+              : h('span', { className: 'knit-prov', title: t('context.why') }, prov)) : null) : null) : null,
+        // ── v0.21 行级证据（需求 §6.2）──────────────────────────────────
+        // **默认一个节点都不渲染**，点开「为什么」才有。每条一行，四个字段全都可核验：
+        // 类型 · 方向 · 谁 · 第几行。⚠️ 它渲染在 `.knit-subrow` **之外**（.knit-subrow 是
+        // 「一条 metadata 行」那个容器，有测试钉着它每行恰好一个）。
+        // ⚠️ 类名刻意避开 `knit-why` 子串 —— `byClass` 是子串匹配，测试用
+        //    `byClass(nodes,'knit-why')` 数理由行，撞上就会多算。
+        // `tests` 那一类**没有行号**：它的证据是「文件名约定」这个事实，不是某一行文字，
+        // 所以不编一个行号出来。
+        whyOpen && relations ? h('div', { className: 'knit-rellist' },
+          ...relations.slice(0, REL_MAX).map((rel, index) => {
+            // 「谁在提这件事」的那个文件：`in` 边是对方指向这一篇（对方是叙述方），
+            // `out` 边是这一篇指向对方。行号属于**叙述方**那份文件。
+            const owner = rel.dir === 'in' ? rel.other : doc.rel
+            return h('div', { className: 'knit-relrow', key: `${rel.type}:${rel.dir}:${rel.other}:${index}` },
+              h('span', { className: 'knit-reltag' }, t(`rel.${rel.type}`)),
+              h('span', { className: 'knit-relwho' }, `${rel.dir === 'in' ? '←' : '→'} ${rel.other}`),
+              Number.isInteger(rel.line) ? h('span', { className: 'knit-relline' }, t('rel.line', { line: rel.line })) : null,
+              h('button', {
+                className: 'knit-relopen',
+                type: 'button',
+                onClick: (event) => {
+                  if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                  onOpenRelation(owner, rel.line)
+                },
+              }, t('rel.open')))
+          }),
+          relationsTotal > relations.length
+            ? h('div', { className: 'knit-relmore' },
+              t('rel.more', { n: relationsTotal, max: REL_MAX }))
+            : null) : null))
     }
 
     /**
@@ -3206,6 +3525,10 @@ video.knit-preview-media{width:100%;background:#000}
         usage: null,
         // v0.20 性能治理：这一份数据自己的签名 —— 轮询回来的载荷与它相同就不重渲染（见 `load`）。
         sig: '',
+        // v0.21：用户自己的上下文控制（固定 / 排除）。宿主在 `/api/recent` 里回
+        // `{pinned, excluded, skipped, persisted}`；`skipped` 是**这一批真的被排掉几篇**
+        // （不是 excluded 的长度 —— 被排除的文件可能已经不在工作区里了）。
+        control: null,
       })
       const [preview, setPreview] = React.useState(null)
       /* v0.20 性能治理：**一分钟一次**的刷新信号。相对时间标签是按分钟变的，所以轮询只在
@@ -3240,6 +3563,9 @@ video.knit-preview-media{width:100%;background:#000}
       // 仍然放在最后：前面那些 hook 的位置被测试按位预置，别插队。
       const [gapOpen, setGapOpen] = React.useState(false)
       const [deltaOpen, setDeltaOpen] = React.useState(false)
+      // v0.21：哪一条的**行级证据**是展开的。按 `rel` 记、一次只开一条 —— 证据是「这一行
+      // 为什么在这里」的补充说明，同时展开多条就不是在看一行了。仍然放在最后（同上）。
+      const [whyOpen, setWhyOpen] = React.useState('')
 
       /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
          `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
@@ -3302,6 +3628,8 @@ video.knit-preview-media{width:100%;background:#000}
               mode: data.mode || 'time',
               context: data.context || null,
               usage: data.usage || null,
+              // v0.21：固定 / 排除的原始记录（面板要拿它画固定区、排除说明与管道条）。
+              control: data.control || null,
               sig,
             }))
           } else {
@@ -3330,6 +3658,37 @@ video.knit-preview-media{width:100%;background:#000}
         run()
         return () => { alive = false; if (timer) clearTimeout(timer) }
       }, [load, visible])
+
+      /* ── v0.21 固定 / 排除：整个 HTTP 面唯一的**写**动作 ──────────────
+         一次点击 = 一次 POST + 一次重取。为什么要重取而不是本地改状态：被固定的那篇
+         要从三层里**移出**、被排除的那篇要**离开候选集**（连 `matched` 计数都变），
+         这些判断都在宿主侧（`context.js` 的分层与 `scan()` 的候选集）—— 客户端自己
+         算一份就是第二个真相。`sig: ''` 是让紧接着的 `load` 一定落一次状态，
+         不等下一次轮询（即时信号那条纪律：点一下就该有反应）。
+         ⚠️ 失败必须是**说明**而不是静默：失败只写 notice，不动任何本地状态
+         （乐观更新在这条路径上会让界面先骗人再改口）。 */
+      const act = React.useCallback(async (action, rel) => {
+        if (!sessionId || !rel) return
+        try {
+          const res = await fetch(`${CONTROL_API}?sessionId=${encodeURIComponent(sessionId)}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify({ action, rel }),
+          })
+          const data = await res.json()
+          if (data && data.ok && data.control) {
+            setNotice('')
+            setWhyOpen('')
+            setState((prev) => ({ ...prev, control: data.control, sig: '' }))
+            await load(true)
+          } else {
+            setNotice(t('control.failed', { error: hostMessage(data) }))
+          }
+        } catch (error) {
+          setNotice(t('control.failed', { error: String((error && error.message) || error) }))
+        }
+      }, [sessionId, load])
 
       /* ── 过滤：纯客户端，不重新请求宿主 ─────────────── */
       const visibleDocs = React.useMemo(() => {
@@ -3474,6 +3833,14 @@ video.knit-preview-media{width:100%;background:#000}
         const withHits = (item) => (item.matches ? item
           : (hitByRel.has(item.rel) ? { ...item, matches: hitByRel.get(item.rel) } : item))
         const sections = []
+        /* v0.21：**用户固定**在最上面，独立一区、不编号（需求 §6.3）。它排在三层之前不是
+           因为它更重要，而是因为它是**用户自己的动作**：三层是这一轮的检索结果，下一轮
+           就变了；固定的那几篇会一直在。`pack.pinned` 由宿主从三层里**移出**后给出，
+           所以这里不会与下面三层重复。 */
+        const pinned = Array.isArray(pack.pinned) ? pack.pinned.filter((item) => visible.has(item.rel)).map(withHits) : []
+        if (pinned.length > 0) {
+          sections.push({ key: 'pinned', titleKey: 'context.pinned', hintKey: 'context.pinnedHint', docs: pinned })
+        }
         for (const [tierKey, titleKey, hintKey] of tiers) {
           const items = Array.isArray(pack[tierKey]) ? pack[tierKey] : []
           const docs = items.filter((item) => visible.has(item.rel)).map(withHits)
@@ -3485,6 +3852,8 @@ video.knit-preview-media{width:100%;background:#000}
         for (const tierKey of ['primary', 'supporting', 'related']) {
           for (const item of (Array.isArray(pack[tierKey]) ? pack[tierKey] : [])) placed.add(item.rel)
         }
+        // 固定区里的也在包里 —— 它们同样不该出现在「其他相关文档」。
+        for (const item of (Array.isArray(pack.pinned) ? pack.pinned : [])) placed.add(item.rel)
         const rest = visibleDocs.filter((doc) => !isMedia(doc) && !placed.has(doc.rel))
         if (rest.length > 0) {
           sections.push({ key: 'other', titleKey: 'context.other', hintKey: '', docs: rest })
@@ -3493,9 +3862,10 @@ video.knit-preview-media{width:100%;background:#000}
         // 行首序号（Design §11）：**只编三层里的**，而且是跨层连续的
         // （01 属于 Primary、02/03 属于 Supporting……），与右栏证据行的计数对齐。
         // 「其他相关文档」不编号 —— 它们不在这个包里面。
+        // v0.21：**固定区也不编号** —— 它的位置由用户决定，不由阅读顺序决定。
         const numbers = new Map()
         for (const section of sections) {
-          if (section.key === 'other') continue
+          if (section.key === 'other' || section.key === 'pinned') continue
           for (const doc of section.docs) numbers.set(doc.rel, numbers.size + 1)
         }
         // 键盘到达顺序 = 屏幕上从上到下的顺序（分组顺序 + 组内顺序）
@@ -4161,7 +4531,25 @@ video.knit-preview-media{width:100%;background:#000}
         // v0.18：生命周期现在是**一枚 glyph + 一段极短的文字**。glyph 可点：
         // 点它＝打开 / 选中这一篇（**已经打开则保持原预览**，不重开也不重拉）。
         const info = withLife ? lifeInfo(doc.rel) : null
+        // v0.21：上下文控制只在**有包的视图**里给出（相关序 + 宿主真的给了 Context Pack）
+        // —— 固定与排除说的都是「这个包 / 这份候选集里的这一条」，管道条与排除说明
+        // 也在同一条件下出现。来源徽标只有宿主真的给了 `provenance` 才渲染：
+        // 平铺列表里的条目来源未知，不能替它认领一个「检索」。
+        const controllable = Boolean(contextView && !isMedia(doc))
         return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary,
+          prov: doc.provenance ? t(`prov.${doc.provenance}`) : null,
+          pinned: doc.provenance === 'manual',
+          onAct: controllable ? act : null,
+          whyOpen: Boolean(whyOpen) && whyOpen === doc.rel,
+          // 「为什么」只有在**真的有关系可看**时才是一个可点的开关（没有证据就不装成
+          // 有证据的样子 —— 需求 §6.4：解释必须来自真实关系）。
+          relations: Array.isArray(doc.relations) && doc.relations.length > 0 ? doc.relations : null,
+          relationsTotal: Number.isInteger(doc.relationsTotal) ? doc.relationsTotal : 0,
+          onWhyToggle: controllable ? () => setWhyOpen((prev) => (prev === doc.rel ? '' : doc.rel)) : null,
+          onOpenRelation: (rel, line) => {
+            const target = visibleDocs.find((item) => item.rel === rel) || { rel }
+            openPassage(target, Number.isInteger(line) ? { startLine: line, endLine: line } : null)
+          },
           life: info ? info.text : null,
           glyph: info,
           onGlyph: (target) => {
@@ -4471,7 +4859,10 @@ video.knit-preview-media{width:100%;background:#000}
         lensOpen ? h('div', { className: 'knit-lens-body' },
           coverageNode, recentNode, outsideNode, deltaNode) : null)
 
-      // 不同类型用不同量词：文档「篇」、代码「个」、媒体「个」、混排「项」。
+      // 不同类型用不同量词：文档「篇」、代码「个代码文件」、媒体「个媒体」、混排「项」。
+      // ⚠️ 2026-10-09 用户要求：**屏幕上只留阿拉伯数字**（`9` / `3 / 79`）——
+      //    量词本来就随档位变（同一位置换个档就换一种中文，读起来像两套东西）。
+      //    整句降级成 `title`（悬停仍读得到「9 个代码文件」），i18n 键不闲置。
       const countKey = kind === KIND_MEDIA
         ? (filtering ? 'count.media.filtered' : 'count.media')
         : kind === KIND_CODE
@@ -4479,9 +4870,66 @@ video.knit-preview-media{width:100%;background:#000}
           : kind === KIND_ALL
             ? (filtering ? 'count.all.filtered' : 'count.all')
             : (filtering ? 'count.filtered' : 'count')
+      // 可见文本 = 纯数字；整句（含量词）只出现在 title 里。
       const countText = filtering
+        ? `${visibleDocs.length} / ${state.total}`
+        : String(state.total ?? 0)
+      const countTitle = filtering
         ? t(countKey, { hit: visibleDocs.length, total: state.total })
         : t(countKey, { n: state.total })
+
+      /* ── v0.21 检索状态摘要（需求 §6.3；2026-10-09 用户规格重排）──────────
+         每一格都是**已经发生的事实**，不是估算：
+         · 收集 = `total` + `skipped`（`total` 是排除**之后**的候选数，加回被排掉的那些
+           才是扫描到的篇数 —— 面板头部的计数仍然只用 `total`，口径不变）；
+         · 排除 = 这一批里真的被排掉几篇（宿主按候选集算的 `skipped`，不是 excluded 的长度：
+           切到代码档时，被排除的那篇 Markdown 根本不在语料里，那时它没被排掉）；
+         · 候选 = 排除之后进入检索的篇数（就是 `state.total`，原来是那个没有名字的光数字）；
+         · BM25 词法检索 = 这一路是纯本地词法检索 + 排序（**零模型**，这句话本身就是产品承诺）；
+         · 关系 N 条 = 这一份包里一共带了几条关系证据（三层各条 relations 之和）；
+         · 固定 N = 有几篇被用户固定、因此**从三层移出**进了固定区（`pack.pinned` 的长度）；
+         · 入包 N = 三层现有条目数（固定区不算 —— 它不在包里）。
+         布局是**三组、单行、竖线分隔**：候选 ｜ 检索与调整 ｜ 入包。组内用中点。
+         ⚠️ 没有箭头、没有图标、没有色块（需求 §三）：顺序与分组本身就是信息。
+         ⚠️ 不显示任何分数 / 百分比 / 索引内部量（需求 §十二）。 */
+      const pack = state.context || null
+      const packCount = pack
+        ? ['primary', 'supporting', 'related'].reduce((sum, key) => sum + (Array.isArray(pack[key]) ? pack[key].length : 0), 0)
+        : 0
+      const relCount = pack
+        ? ['primary', 'supporting', 'related'].reduce((sum, key) => sum + (Array.isArray(pack[key])
+          ? pack[key].reduce((n, item) => n + (Array.isArray(item.relations) ? item.relations.length : 0), 0) : 0), 0)
+        : 0
+      const skipped = Number(state.control && state.control.skipped) || 0
+      const collected = state.total + skipped
+      const pipeCell = (text, strong) => h('span', { className: `knit-pipecell${strong ? ' strong' : ''}` }, text)
+      // 组内中点 / 组间竖线：都是文本节点，跟着同一行流排版（基线天然一致、换行不留孤线）。
+      const pipeDot = () => h('span', { className: 'knit-pipedot', 'aria-hidden': 'true' }, '·')
+      const pipeSep = () => h('span', { className: 'knit-pipesep', 'aria-hidden': 'true' }, '|')
+      const pinnedCount = pack && Array.isArray(pack.pinned) ? pack.pinned.length : 0
+      const pipeNode = h('div', { className: 'knit-pipe' },
+        pipeCell(t('pipe.collect', { n: collected })),
+        pipeDot(),
+        pipeCell(t('pipe.exclude', { n: skipped })),
+        pipeDot(),
+        pipeCell(t('pipe.candidates', { n: state.total })),
+        pipeSep(),
+        pipeCell(t('pipe.rank')),
+        pipeDot(),
+        pipeCell(t('pipe.relations', { n: relCount })),
+        pipeDot(),
+        pipeCell(t('pipe.pin', { n: pinnedCount })),
+        pipeSep(),
+        // 唯一略微加重的一格：它是这一行里被后续阶段消费的那个数字（需求 §三.8：
+        // 只提字重，不用品牌色、不做徽章）。
+        pipeCell(t('pipe.pack', { n: packCount }), true))
+      // 排除说明只列**还能找回来**的那些：宿主保留了记录（用户排除过就是排除过），
+      // 但文件已经删掉的不该给一个按下去什么都不会发生的「恢复」（需求 §6.4）。
+      // ⚠️ 判据是宿主给的 `exists`，**不能**拿 `state.docs` 去反查 ——
+      // 被排除的那一篇恰恰不在 `docs` 里（那正是「排除」的意思），反查恒为空。
+      const excludedList = (state.control && Array.isArray(state.control.excluded))
+        ? state.control.excluded.filter((item) => item.exists)
+        : []
 
       return h('div', {
         className: `knit-root${fullscreen ? ' fullscreen' : ''}`,
@@ -4499,7 +4947,8 @@ video.knit-preview-media{width:100%;background:#000}
             setNotice((await openLocalPath(state.hostRoot || state.root)) || '')
           },
         }, state.root || '—'),
-        h('div', { className: 'knit-count' }, countText),
+        // v0.21.x（2026-10-09）：计数只剩数字（量词在 title 里，悬停才读得到）。
+        h('div', { className: 'knit-count', title: countTitle }, countText),
         // v0.15：默认关的自查开关。开着才有 `&usage=1` —— 宿主也只在那一刻开始记账。
         h('button', {
           type: 'button',
@@ -4510,6 +4959,11 @@ video.knit-preview-media{width:100%;background:#000}
         }, t('usage.toggle')),
         h('button', { className: 'knit-btn', onClick: load, title: t('action.refreshNow') }, t('action.refresh'))),
       h('div', { className: 'knit-bar' },
+        /* v0.21.x（2026-10-09 用户规格）：三组一行 —— 排序 ｜ 类型 ｜ 搜索。
+           ① 排序与类型**不做成一个整体**：中间那根 `.knit-bar-sep` 就是边界，两个条件各管各的。
+           ② 搜索排最后、贴最右：它只过滤当前列表，不重置排序与类型（§三.3）。
+           ③ 六个选项彼此独立 —— 选「代码」再选「最新」= 最新的代码。
+           顺序即控件顺序，别再挪（细则在 CSS 那边的 .knit-bar / .knit-filter 注释里）。 */
         h('div', { className: 'knit-seg' },
           h('button', {
             className: `knit-seg-btn${sort === 'relevance' ? ' active' : ''}`,
@@ -4521,6 +4975,22 @@ video.knit-preview-media{width:100%;background:#000}
             onClick: () => pickSort('time'),
             title: t('sort.timeTitle'),
           }, t('sort.time'))),
+        // 排序组 / 类型组之间**就这一根线**（2026-10-09 用户规格 §二.2）。
+        h('span', { className: 'knit-bar-sep', 'aria-hidden': 'true' }),
+        h('div', { className: 'knit-types', role: 'tablist', 'aria-label': t('kind.title') },
+          // v0.19：四档「文档 / 代码 / 媒体 / 全部」。**没有第二层分类** ——
+          // 代码里不再按语言（JS / TS / Python…）分组（需求 §46：不给代码加视觉层级压迫）。
+          [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_ALL, 'kind.all']].map(([value, labelKey]) =>
+            h('button', {
+              type: 'button',
+              key: value,
+              role: 'tab',
+              'aria-selected': kind === value,
+              className: `knit-type-btn${kind === value ? ' active' : ''}`,
+              title: t('kind.title'),
+              onClick: () => pickKind(value),
+            }, t(labelKey)))),
+        // 搜索排最后（工具栏尾部）：它对**当前这一份列表**再过滤，不动排序与类型。
         h('input', {
           className: 'knit-filter',
           value: query,
@@ -4531,23 +5001,33 @@ video.knit-preview-media{width:100%;background:#000}
             if (event.key === 'Escape') { event.stopPropagation(); setQuery('') }
           },
         })),
-      h('div', { className: 'knit-types', role: 'tablist', 'aria-label': t('kind.title') },
-        // v0.19：四档「文档 / 代码 / 媒体 / 全部」。**没有第二层分类** ——
-        // 代码里不再按语言（JS / TS / Python…）分组（需求 §46：不给代码加视觉层级压迫）。
-        [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_ALL, 'kind.all']].map(([value, labelKey]) =>
-          h('button', {
-            type: 'button',
-            key: value,
-            role: 'tab',
-            'aria-selected': kind === value,
-            className: `knit-type-btn${kind === value ? ' active' : ''}`,
-            title: t('kind.title'),
-            onClick: () => pickKind(value),
-          }, t(labelKey)))),
-      // v0.15：开了才显示。v0.18：这一块是「Context Usage Lens」——
-      // 列表**上方**的观察层，不是弹窗、不是新页面、不是 Dashboard。
-      usageOn ? lensNode : null,
+      /* ── v0.21：检索状态摘要 + 排除说明（需求 §6.3）──────────────────────
+         两条都是**事实行**，都在列表上方、都只在相关序出现（那是唯一有「包」的视图）。
+      ⚠️ 它们的排位是**紧贴工具栏**的（2026-10-09 用户反馈）：观察层排在它们下面，
+         所以开关「使用情况」不会把这一行顶下去（详见下面的 Lens 注释）。
+         ① 状态摘要 `收集 137 · 排除 1 · 候选 136 | BM25 词法检索 · 关系 24 条 · 固定 1 | 入包 8`：
+            **分组与顺序本身就是这条设计要传达的信息** —— 排除发生在检索**之前**、固定发生在
+            排序**之后**。所以它不是装饰，也不是进度条，更没有流程图箭头（2026-10-09 用户规格）。
+         ② 排除说明：被排掉的那几篇 + 一个「恢复」。它说的是「这一批少了什么」，
+            空的时候**不出现、也不占位**。 */
+      relevance && contextView ? pipeNode : null,
+      relevance && excludedList.length > 0 ? h('div', { className: 'knit-excl' },
+        h('span', { className: 'knit-excl-what' },
+          t('control.excluded', { rel: excludedList.map((item) => item.rel).join('、') })),
+        h('button', {
+          className: 'knit-act',
+          type: 'button',
+          onClick: () => act('restore', excludedList[0].rel),
+        }, t('control.restore'))) : null,
       notice ? h('div', { className: 'knit-notice' }, notice) : null,
+      /* ── v0.18 的「Context Usage Lens」**排在最后**（2026-10-09 用户反馈）───────
+         它原来是紧随 `.knit-bar` 的：一开「使用情况」，整块观察层插在状态摘要**上面**，
+         把那一行数字顶下去 —— 用户原话「这一列…向下排，我觉得这列不用向下排，而是固定在原来的位置」。
+         所以顺序改成 **工具栏 → 状态摘要 → 排除说明 → 通知 → 观察层 → 列表**：
+         摘要这一行永远紧贴工具栏，位置不随开关变；观察层仍是「列表上方的观察层」，
+         而且比原来更贴近列表。⚠️ 别再把它挪回 `.knit-bar` 后面（有守卫钉着顺序）。
+         v0.15：开了才显示。不是弹窗、不是新页面、不是 Dashboard。 */
+      usageOn ? lensNode : null,
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——
       // 时间序、媒体档、「全部」都不受影响。

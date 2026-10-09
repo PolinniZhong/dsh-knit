@@ -91,7 +91,7 @@ export function loadClientModule(options = {}) {
         + 'sessionFileAddress, relTime, resolveRelative, pathImagesFor, clampRatio, splitRelPath, '
         + 'openKnitPanel, makeEntryButton, KnitGlyph, KnitTitle, KNIT_ICON_PATH, openLocalPath, '
         + 'requestPreview, fmtDuration, readKindPref, mediaUrl, isMedia, mediaLayoutFor, '
-        + 'nextIndexFor, docOptionId, planRowMotion, mergeGhostRows, motionAllowed, motionShift, '
+        + 'nextIndexFor, docOptionId, planRowMotion, mergeGhostRows, motionAllowed, settleEnterAnim, motionShift, '
         + 'rowLayoutPoint, applyRowFlips, '
         // v0.20 Deep Context Retrieval：命中片段的行号区间与代码行锚点的几何。
         + 'fmtRange, firstMatchOf, anchorBandFor, '
@@ -109,7 +109,11 @@ export function loadClientModule(options = {}) {
         + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX, '
         // v0.18 Context Usage Lens：纯函数与阈值（渲染层的东西仍走 DOM 断言）。
         + 'LIFE_GLYPH, lifeStatusOf, coverageOf, groupOutsideDocs, groupDelta, '
-        + 'COMPACT_PANEL_PX, MAX_OUTSIDE_SHOWN, MAX_DELTA_SHOWN, MAX_DELTA_GROUP, FLASH_MS }\n'
+        + 'COMPACT_PANEL_PX, MAX_OUTSIDE_SHOWN, MAX_DELTA_SHOWN, MAX_DELTA_GROUP, FLASH_MS, '
+        // v0.21 关系与控制：客户端只镜像了一个上限（面板每项最多投影几条关系）。
+        // 真正的截断在宿主做，客户端拿它写「共 N 条关系」那句话 —— 两个数字必须一致，
+        // `test/client.test.mjs` 有一条镜像守卫同时读两侧源码。
+        + 'REL_MAX }\n'
         + "    module.exports.inject = ['slots', 'locale']",
     )
 

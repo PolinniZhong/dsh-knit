@@ -652,3 +652,110 @@ test('v0.17 修订：面板开晚了也能补记 —— 开闸那一刻回填会
     await close()
   }
 })
+
+/**
+ * v0.21 上下文控制：固定 / 排除是**写动作**，而 Knit 原来的 HTTP 面是纯 GET
+ * ⇒ 新开了一条 `POST /knit/api/control`。写路由的三条防护在这里逐条验：
+ * ① 这条路径**只认 POST**（GET 同路径 405），别的路径仍然只认 GET（POST → 405）；
+ * ② 动作必须在白名单里（未知动作 / 缺动作 / 畸形 body → 400 `knit/bad-request`）；
+ * ③ `rel` 必须落在会话工作区里（绝对路径 / `..` / 空 → 400 `knit/missing-rel`）。
+ *
+ * ⚠️ 这一段用**自己的工作区**（而不是上面共享的 `PROJECT_ROOT`）：`controlRegistry`
+ * 是按 root 记状态的，共用根会让固定 / 排除漏进别的用例。
+ */
+test('HTTP 端到端：POST /api/control 只认白名单动作与工作区内的 rel', async () => {
+  const root = makeWorkspace([
+    ['README.md', '# 样本\n\n含关键词：相关性排序\n'],
+    ['docs/hub.md', '# hub\n\n含关键词：相关性排序\n'],
+    ['docs/leaf.md', '# leaf\n\n含关键词：相关性排序\n'],
+  ])
+  // ⚠️ `snapshotEvents()` 是**检索**那一侧的输入（对话 → 任务），
+  // 与 `emit()` 那条读证据路线是两件事 —— 这里要让 `mode` 是 `relevance`，
+  // 所以给的是前者。（`PROJECT_ROOT` 是共享的，这份会话必须指向自己的工作区。）
+  const session = { header: { cwd: root }, snapshotEvents: () => [userMessage(1, '请按相关性排序整理这些文档')] }
+  const { base, close } = await startKnitServer(session, 'cn')
+  const post = (payload) => fetch(`${base}/api/control?sessionId=cn`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  try {
+    const before = await (await fetch(`${base}/api/recent?sessionId=cn&sort=relevance&kind=doc`)).json()
+    assert.equal(before.mode, 'relevance')
+    const pack0 = await (await fetch(`${base}/api/context?sessionId=cn`)).json()
+    const inPack = ['primary', 'supporting', 'related']
+      .flatMap((tier) => pack0.context[tier]).map((item) => item.rel)
+    assert.ok(inPack.length >= 2, '样本工作区该产出至少两条上下文')
+    const target = inPack[0]
+    const other = inPack[1]
+
+    // ① 这条路只认 POST
+    let r = await fetch(`${base}/api/control?sessionId=cn`)
+    assert.equal(r.status, 405, '写路由不认 GET')
+    r = await fetch(`${base}/api/recent?sessionId=cn`, { method: 'POST' })
+    assert.equal(r.status, 405, '开了 POST 通道不等于放开别的路由')
+
+    // ② 未知动作 / 缺动作 / 畸形 body
+    r = await post({ action: 'delete', rel: target })
+    assert.equal(r.status, 400)
+    assert.equal((await r.json()).code, 'knit/bad-request')
+    r = await post({ rel: target })
+    assert.equal(r.status, 400)
+    assert.equal((await r.json()).code, 'knit/bad-request')
+    r = await fetch(`${base}/api/control?sessionId=cn`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{ 不是 json',
+    })
+    assert.equal(r.status, 400, '畸形 body 是 400，不是 500')
+
+    // ③ 越界 / 绝对路径 / 空 rel
+    for (const bad of ['../outside.md', '/etc/passwd', '', 'a/../../b.md']) {
+      r = await post({ action: 'pin', rel: bad })
+      assert.equal(r.status, 400, `rel=${JSON.stringify(bad)} 该被拒`)
+      assert.equal((await r.json()).code, 'knit/missing-rel')
+    }
+
+    // 合法动作：固定。没有 storage ⇒ 如实回 persisted:false
+    r = await post({ action: 'pin', rel: target })
+    assert.equal(r.status, 200)
+    let body = await r.json()
+    assert.equal(body.ok, true)
+    assert.equal(body.changed, true)
+    assert.equal(body.persisted, false, '没有 storage 就要说没有，不许假装落盘了')
+    assert.deepEqual(body.control.pinned.map((row) => row.rel), [target])
+
+    // 面板下一次请求就能读到这份状态，且被固定那篇从三层移进 `pinned`
+    body = await (await fetch(`${base}/api/recent?sessionId=cn&sort=relevance&kind=doc`)).json()
+    assert.deepEqual(body.control.pinned.map((row) => row.rel), [target])
+    assert.deepEqual(body.control.excluded, [])
+    assert.equal(body.control.skipped, 0)
+    assert.equal(body.control.persisted, false)
+    const pack = await (await fetch(`${base}/api/context?sessionId=cn`)).json()
+    assert.deepEqual(pack.context.pinned.map((item) => item.rel), [target])
+    assert.equal(pack.context.pinned[0].provenance, 'manual', '固定项的来源是「用户固定」')
+    const tiers = ['primary', 'supporting', 'related'].flatMap((tier) => pack.context[tier])
+    assert.equal(tiers.some((item) => item.rel === target), false, '固定项不许同时留在三层里')
+    for (const item of tiers) assert.equal(item.provenance, 'retrieval', '没被固定的行来源不变')
+
+    // 排除：`skipped` 报的是**这一批真的排掉几篇**，不是「状态里记了几条」
+    r = await post({ action: 'exclude', rel: other })
+    assert.equal(r.status, 200)
+    body = await r.json()
+    assert.deepEqual(body.control.pinned.map((row) => row.rel), [target],
+      '互斥只发生在同一篇上：排除别的文件不许顺手取消固定')
+    assert.deepEqual(body.control.excluded.map((row) => row.rel), [other])
+    const after = await (await fetch(`${base}/api/recent?sessionId=cn&sort=relevance&kind=doc`)).json()
+    assert.equal(after.control.skipped, 1)
+    assert.equal(after.docs.some((d) => d.rel === other), false)
+    assert.equal(after.total, before.total - 1)
+
+    // 恢复：状态清空、`skipped` 归零、那篇回到候选里
+    r = await post({ action: 'restore', rel: other })
+    assert.equal(r.status, 200)
+    assert.deepEqual((await r.json()).control.excluded, [])
+    const back = await (await fetch(`${base}/api/recent?sessionId=cn&sort=relevance&kind=doc`)).json()
+    assert.equal(back.control.skipped, 0)
+    assert.equal(back.docs.some((d) => d.rel === other), true)
+  } finally {
+    await close()
+  }
+})

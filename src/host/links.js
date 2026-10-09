@@ -35,6 +35,74 @@
 /** 解析一篇正文时最多认多少条候选，防御性上限（正常文档远低于此）。 */
 const MAX_REFS_PER_DOC = 500
 
+/** 行首偏移表 + 二分：把「字符下标」换成 1 起的行号（同一篇正文只建一次）。 */
+function startsOf(text) {
+  const starts = [0]
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1)
+  return starts
+}
+function lineAt(starts, idx) {
+  let lo = 0
+  let hi = starts.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (starts[mid] <= idx) lo = mid
+    else hi = mid - 1
+  }
+  return lo + 1
+}
+
+/**
+ * 与 `extractRefs()` **同一套规则、同一套顺序**，只是额外给出每一处提及的真实行号。
+ *
+ * v0.21 新增，唯一理由：关系投影要的是「第几行」（`{type, dir, other, line}`），
+ * 而证据必须能按 `other` + `line` 读回原文核验（需求 §6.8）。**不另写一套解析**。
+ *
+ * @param {string} text - 正文（原文）
+ * @param {{anyExt?: boolean}} [options] - 同 `extractRefs()`
+ * @returns {Array<{raw: string, line: number}>} 去重（保留首次出现），保持出现顺序
+ */
+export function extractRefsWithLines(text, options = {}) {
+  if (typeof text !== 'string' || text === '') return []
+  const anyExt = !!(options && options.anyExt === true)
+  const starts = startsOf(text)
+  const out = []
+  const seen = new Set()
+  const push = (whole, raw, at) => {
+    const v = String(raw || '').trim()
+    if (!v || seen.has(v)) return
+    if (out.length >= MAX_REFS_PER_DOC) return
+    // 外链不是本工作区的文档
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return
+    if (anyExt ? !/\.[A-Za-z0-9]+$/.test(v) : !/\.md$/i.test(v)) return
+    seen.add(v)
+    // 命中的是整个 match（含边界字符 / 反引号），路径在它里面的偏移要算上
+    const off = Math.max(0, whole.indexOf(String(raw)))
+    out.push({ raw: v, line: lineAt(starts, at + off) })
+  }
+
+  // ① 反引号：允许空格（`00_ Knit PRD/x.md` 这种目录名真实存在），不允许换行/反引号
+  for (const m of text.matchAll(/`([^`\n]+?)`/g)) push(m[0], m[1], m.index)
+  // ② Markdown 链接：取 () 里的路径，忽略其后的 #锚点
+  for (const m of text.matchAll(/\]\(\s*([^)\s]+?)(?:#[^)\s]*)?\s*\)/g)) push(m[0], m[1], m.index)
+  // ③ 裸路径：前面是行首/空白/中文括号，路径本身不含空格（有空格就得用反引号），
+  //    末尾用 `(?![\w.])` 挡住 `a.md.bak` 这类「更长但不是 .md」的字符串
+  //
+  //    ⚠️ 必须在**挖掉反引号与链接目标之后的副本**上跑。否则
+  //    `` `00_ Knit PRD/x.md` `` 里的 `PRD/x.md`（前面正好是空格）会被当成
+  //    一条独立候选 —— 这是测试抓出来的真实缺陷，不是假想。
+  const masked = text
+    .replace(/`[^`\n]*`/g, (s) => ' '.repeat(s.length))
+    .replace(/\]\([^)\n]*\)/g, (s) => ' '.repeat(s.length))
+  const BARE = anyExt
+    // v0.21：同样的「裸路径」写法，只是目标不再限定 `.md`（`documents` 要认代码路径）。
+    ? /(?:^|[\s(（])((?:[\w\u4e00-\u9fa5.@+-]+\/)*[\w\u4e00-\u9fa5.@+-]+\.[A-Za-z0-9]+)(?![\w.])/gm
+    : /(?:^|[\s(（])((?:[\w\u4e00-\u9fa5.@+-]+\/)*[\w\u4e00-\u9fa5.@+-]+\.md)(?![\w.])/gm
+  for (const m of masked.matchAll(BARE)) push(m[0], m[1], m.index)
+
+  return out
+}
+
 /**
  * 从正文里抽出**候选**引用（还没解析成 rel）。
  *
@@ -46,40 +114,13 @@ const MAX_REFS_PER_DOC = 500
  * **不含 `[[wikilink]]`** —— 真实语料 0 次，不做。
  *
  * @param {string} text - 正文（原文，**不是**小写化的 haystack）
+ * @param {{anyExt?: boolean}} [options] - v0.21：`anyExt` 把**目标**放开到「任何带扩展名的文件」
+ *   （只给关系层的 `documents` 用：md → 代码）。默认**一个字不改** —— v0.12 的引用图与
+ *   `test/code-context.test.mjs` 那条「代码只能被指向、不能当源」的守卫原样通过。
  * @returns {string[]} 去重后的候选项，保持出现顺序
  */
-export function extractRefs(text) {
-  if (typeof text !== 'string' || text === '') return []
-  const out = []
-  const seen = new Set()
-  const push = (raw) => {
-    const v = String(raw || '').trim()
-    if (!v || seen.has(v)) return
-    if (out.length >= MAX_REFS_PER_DOC) return
-    // 外链不是本工作区的文档
-    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return
-    if (!/\.md$/i.test(v)) return
-    seen.add(v)
-    out.push(v)
-  }
-
-  // ① 反引号：允许空格（`00_ Knit PRD/x.md` 这种目录名真实存在），不允许换行/反引号
-  for (const m of text.matchAll(/`([^`\n]+?)`/g)) push(m[1])
-  // ② Markdown 链接：取 () 里的路径，忽略其后的 #锚点
-  for (const m of text.matchAll(/\]\(\s*([^)\s]+?)(?:#[^)\s]*)?\s*\)/g)) push(m[1])
-  // ③ 裸路径：前面是行首/空白/中文括号，路径本身不含空格（有空格就得用反引号），
-  //    末尾用 `(?![\w.])` 挡住 `a.md.bak` 这类「更长但不是 .md」的字符串
-  //
-  //    ⚠️ 必须在**挖掉反引号与链接目标之后的副本**上跑。否则
-  //    `` `00_ Knit PRD/x.md` `` 里的 `PRD/x.md`（前面正好是空格）会被当成
-  //    一条独立候选 —— 这是测试抓出来的真实缺陷，不是假想。
-  const masked = text
-    .replace(/`[^`\n]*`/g, (s) => ' '.repeat(s.length))
-    .replace(/\]\([^)\n]*\)/g, (s) => ' '.repeat(s.length))
-  const BARE = /(?:^|[\s(（])((?:[\w\u4e00-\u9fa5.@+-]+\/)*[\w\u4e00-\u9fa5.@+-]+\.md)(?![\w.])/gm
-  for (const m of masked.matchAll(BARE)) push(m[1])
-
-  return out
+export function extractRefs(text, options = {}) {
+  return extractRefsWithLines(text, options).map((hit) => hit.raw)
 }
 
 /** rel 用 `/` 连接（`index.js` 保证），所以这里也按 `/` 取目录，不碰 `node:path`。 */
@@ -125,13 +166,15 @@ export function createIndex(rels) {
  * @param {string} raw - 候选项
  * @param {object} index - `createIndex()` 的产物
  * @param {string} [referrerRel] - 引用方的 rel；不传则跳过第 1 步
+ * @param {{anyExt?: boolean}} [options] - v0.21：与 `extractRefs()` 同一个显式开关（默认只认 `.md`）
  * @returns {string|null}
  */
-export function resolveRef(raw, index, referrerRel) {
+export function resolveRef(raw, index, referrerRel, options = {}) {
+  const anyExt = !!(options && options.anyExt === true)
   const v = String(raw || '').trim()
   if (!v || !index || !(index.relSet instanceof Set)) return null
   if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return null
-  if (!/\.md$/i.test(v)) return null
+  if (anyExt ? !/\.[A-Za-z0-9]+$/.test(v) : !/\.md$/i.test(v)) return null
 
   // 去掉 ./ 前缀（`./docs/A.md` 是常见写法，但不是本工作区的 rel）
   const clean = v.replace(/^\.\//, '')
@@ -170,14 +213,21 @@ const CACHE = new Map()
 const INFLIGHT = new Map()
 
 /**
- * 图签名：变了才重建。用「篇数 + 最大 mtime + 是否被扫描上限截断」——
- * 三个都便宜（`list()` 本身已经按 mtime 缓存了元信息），且足以发现增删改。
+ * 图签名：变了才重建。
+ *
+ * v0.21（D6）修掉一个真缺陷：原来的键是「篇数 + 最大 mtime + 是否被截断」，
+ * **不含候选集身份** —— 同一进程里连跑两个 query，只要候选数相同、最大 mtime 还落在
+ * 同一个文件上，第二个 query 就会拿到第一个 query 的图，**关系全部落空**（实测复现）。
+ * 现在键 = 每个候选的 `rel` + `mtimeMs`，排序后拼接（候选换了要重建；候选没换但内容改了也要重建）。
+ *
+ * 不用哈希：碰撞会让关系**静默错配**，而 Knit 的全部价值建立在「可核验」上；
+ * 拼一个 ≤1000 项的字符串，成本远低于这条路径上已经付掉的「读几十个文件的 head」。
  */
 function signatureOf(listed) {
   const docs = (listed && listed.docs) || []
-  let max = 0
-  for (const d of docs) if (d.mtimeMs > max) max = d.mtimeMs
-  return `${docs.length}:${max}:${listed && listed.truncated ? 1 : 0}`
+  const parts = docs.map((d) => `${d.rel}\u0000${d.mtimeMs}`)
+  parts.sort()
+  return `${parts.join('\n')}\u0000${listed && listed.truncated ? 1 : 0}`
 }
 
 /**

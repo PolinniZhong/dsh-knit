@@ -282,9 +282,11 @@ test('context: 混合包的条目投影与 v0.18 逐字相同（代码不引入�
   })
 
   const item = pack.primary[0]
+  // v0.21 给条目加了 `provenance`（来源三值）—— 这是**唯一**新增的固定字段，
+  // 且它是给「为什么在这里」用的，不是给排序用的（关系/来源都不参与分层）。
   assert.deepEqual(
     Object.keys(item).sort(),
-    ['kind', 'mtimeMs', 'reason', 'rel', 'source', 'summary', 'title'],
+    ['kind', 'mtimeMs', 'provenance', 'reason', 'rel', 'source', 'summary', 'title'],
     'Code Context 不许往包条目里塞新字段 —— 有的话 UI 与工具就得同步改两遍',
   )
   // 内部字段一个都不许漏出去。

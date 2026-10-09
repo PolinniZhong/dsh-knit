@@ -19,105 +19,20 @@
  * 超了就**先别接 UI**，回去做 `index.js` 的三条优化（全文小写体缓存 / 缓存上界 /
  * `TF_CAP` 早退）—— **不许**用「只扫前 N 个文件」这种悄悄降召回的做法达标。
  *
- * ── 四类文件（需求 §18 点名的 small / medium / large text / large code）──
+ * ── 语料工厂不在这里 ─────────────────────────────────
  *
- *   小 Markdown  ~1 KB   55%     中等 Markdown ~16 KB  25%
- *   大 Markdown  ~128 KB 10%     大代码        ~64 KB  10%
+ * `makeScaleWorkspace` / `timeWorkspace` 住在 `test/deep-corpus.mjs` —— 因为守着同一个
+ * 门槛的 `test/deep-scale.test.mjs` 必须能随 npm 包一起跑（`tools/` 不随包发布，
+ * v0.20.0 就是因为这个漏了一条包装缺陷，见 `tools/clean-room-test.mjs`）。
+ * 这里只 re-export 旧路径，用法不变。
  *
  * 用法：`node knit/tools/deep-benchmark.mjs`
  * 依赖：无（只用 Knit 自己的源码 + Node 标准库）。**不进 `npm test`** —— 它是基准；
  * 门槛由 `test/deep-scale.test.mjs` 用一个小一号的语料守着（见那个文件头的说明）。
  */
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { SIZES, GATES, makeScaleWorkspace, timeWorkspace } from '../test/deep-corpus.mjs'
 
-import { scan, collectDocs } from '../src/host/index.js'
-
-/** 合成语料的规模档位。 */
-export const SIZES = [100, 500, 1000]
-
-/** R1 的两条硬门槛。 */
-export const GATES = { synthetic1000Ms: 1500, realMs: 1200 }
-
-/** 四类文件的占比（按索引取模分配，保证任何 N 下四类都在）。 */
-const MIX = [
-  { kind: 'small-md', share: 55, bytes: 1 * 1024 },
-  { kind: 'medium-md', share: 25, bytes: 16 * 1024 },
-  { kind: 'large-md', share: 10, bytes: 128 * 1024 },
-  { kind: 'large-code', share: 10, bytes: 64 * 1024 },
-]
-
-/** 造一段定长文本（中文按 3 字节算，够接近就行 —— 这是量级基准，不是字节精确测试）。 */
-function filler(bytes, seed) {
-  const line = `第 ${seed} 段：这一段正文用于把文件撑到目标大小，与任何查询词都无关。`
-  const need = Math.max(1, Math.floor(bytes / (line.length * 3)))
-  return new Array(need).fill(line).join('\n')
-}
-
-/** 按占比决定第 i 个文件属于哪一类。 */
-function kindOf(i, n) {
-  let acc = 0
-  const pos = (i / n) * 100
-  for (const m of MIX) {
-    acc += m.share
-    if (pos < acc) return m
-  }
-  return MIX[0]
-}
-
-/** 造一个 N 篇的合成工作区；返回 { root, files, cleanup }。 */
-export function makeScaleWorkspace(n, label = 'knit-bench') {
-  const root = mkdtempSync(join(tmpdir(), `${label}-`))
-  const files = 0
-  for (let i = 0; i < n; i += 1) {
-    const m = kindOf(i, n)
-    const rel = m.kind === 'large-code' ? `src/mod${i}.mjs` : `docs/page${i}.md`
-    const body = m.kind === 'large-code'
-      ? `${filler(m.bytes, i)}\nexport function handler${i}(input) {\n  return input\n}\n`
-      : `# 页面 ${i}\n\n${filler(m.bytes, i)}\n`
-    const abs = join(root, rel)
-    mkdirSync(join(abs, '..'), { recursive: true })
-    writeFileSync(abs, body)
-  }
-  return { root, files: n, cleanup: () => rmSync(root, { recursive: true, force: true }) }
-}
-
-/** 跑一次「冷扫 + 热扫」，返回各阶段耗时。 */
-export async function timeWorkspace(root, query = 'handler') {
-  const heap0 = process.memoryUsage().heapUsed
-
-  const t0 = process.hrtime.bigint()
-  const collected = await collectDocs(root)
-  const t1 = process.hrtime.bigint()
-
-  const payload = await scan(root, 400, { sort: 'relevance', query, kind: 'context' })
-  const t2 = process.hrtime.bigint()
-
-  const again = await scan(root, 400, { sort: 'relevance', query, kind: 'context' })
-  const t3 = process.hrtime.bigint()
-
-  const ms = (a, b) => Number(b - a) / 1e6
-  const heap1 = process.memoryUsage().heapUsed
-
-  return {
-    collectMs: ms(t0, t1),
-    coldMs: ms(t0, t2),
-    warmMs: ms(t2, t3),
-    totalMs: ms(t0, t2),
-    heapMB: (heap1 - heap0) / 1024 / 1024,
-    counts: {
-      docs: collected.docs.length,
-      code: collected.code.length,
-      media: collected.media.length,
-      scanned: collected.docs.length + collected.code.length + collected.media.length,
-      truncated: collected.truncated,
-      codeTruncated: collected.codeTruncated,
-    },
-    ranked: payload.docs.length,
-    matched: again.docs.filter((d) => Array.isArray(d.matches) && d.matches.length > 0).length,
-  }
-}
+export { SIZES, GATES, makeScaleWorkspace, timeWorkspace }
 
 /** 把一行结果打成表里的样子。 */
 function row(label, r) {

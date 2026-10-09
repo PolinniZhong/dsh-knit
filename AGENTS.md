@@ -35,7 +35,7 @@
 - **静态资源也要内联**：图标 `path` 直接写在代码里（`KNIT_ICON_PATH`），加载期读不到文件。
   源文件在 `knit/assets/` —— **改图标必须两处一起改**，`test/icon.test.mjs` 会核对两者逐字一致
 - ⚠️ **整个 CSS 在一个模板串里（`const CSS = \`…\`），注释里不能出现反引号** —— 一个反引号就会
-  把模板提前截断，客户端半边整个加载失败（踩过两回，`node --check` 看不出来）
+  把模板提前截断，客户端半边整个加载失败（踩过四回，`node --check` 看不出来）
 
 ---
 
@@ -447,7 +447,8 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：开闸那一刻 `backfillFeedback()` 的回填（顺序：先 `noteSnapshot` 再 `ingestEvents`）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
 | `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只许活在分类层 |
 | `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch、噪声路径 |
-| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：需求 §21 的 12 个用例 + 媒体反例、四指标（DeepHitRate / PassageHit@1 / PassageRecall / LongDocNoiseRate）、R1 规模门槛（1000 文件 ≤ 1.5 s）、R2 载荷预算（面板 ≤16 KB / 工具 ≤1.4×） |
+| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：需求 §21 的 12 个用例 + 媒体反例、四指标（DeepHitRate / PassageHit@1 / PassageRecall / LongDocNoiseRate）、R1 规模门槛（1000 文件 ≤ 1.5 s）、R2 载荷预算（面板 ≤16 KB / 工具 ≤1.4×）。**语料工厂在 `test/deep-corpus.mjs`（v0.20.1 起必须随包发布；`tools/deep-benchmark.mjs` 只是它的 CLI 外壳）** |
+| `test/relations.test.mjs` + `test/control.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认、无行号）、`references`/`documents` 与反向 `in` 边、截断顺序、四条端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、持久化只写差量、无 storage 降级 |
 
 ---
 
@@ -460,14 +461,15 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── package.json                 dsh.bundle.patch + dsh.client + scripts.test（**逐文件枚举**）
 ├── cordis.patch.yml             挂进 plugin tree 的 insert 行
 ├── assets/                      图标源文件（path 已内联进 client.js）
-├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）
+├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
 │                                + context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8.9）/ market-recheck / context-feedback-eval（§6.11）/
-│                                deep-benchmark / **agents-budget（指令文件预算闸门）** 等
+│                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
+│                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        641 项，分工见 §9.3
+└── test/                        697 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

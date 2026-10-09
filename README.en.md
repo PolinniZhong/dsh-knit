@@ -146,6 +146,11 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | **Sorted by relevance to the current conversation** (BM25 + IDF, fully local, no model) | ✅ |
 | **The `knit_docs` tool for the agent**: the model can look up this project's most relevant documents itself | ✅ |
 | **Document lifecycle** (v0.17): each recommended document is shown as `Unread / Read / Updated after read / Re-read after update`, alongside the most recent read, how many reads fell outside the pack (expandable to which ones), and the latest context change | ✅ |
+| **Relation evidence** (v0.21): every row carries `retrieval` / `relation` / `pinned`; "why" expands **line-level evidence** (references / imports / tests / documents, with the other file and the line number — at most 3 per item in the panel, 2 through the tool). Every one of them can be grepped back to its original line: not a word of the reasoning is invented | ✅ |
+| **Pin / exclude** (v0.21): pinning moves an item into its own section at the top (unnumbered — the three tiers keep their numbering); excluding takes effect **before retrieval** (the counts and the status summary move together, and it is undoable); with host storage it **survives restarts**, without it the panel says "this session only (not persisted)" instead of pretending | ✅ |
+| **Retrieval status summary** (v0.21.x): one honest line in the panel header — `collected · excluded · candidates ｜ BM25 lexical retrieval · relations · pinned ｜ in pack` (mid-dots inside a group, one thin rule between groups, no arrows); it follows the task, the kind tab, pins and exclusions | ✅ |
+| **Toolbar in one row** (v0.21.x): `Relevance / Newest` (sort) ｜ one light-grey rule ｜ `Docs / Code / Media / All` (kind) ｜ the filter box at the far right, width-adaptive (180–240px in a normal panel; when the panel narrows it shrinks first, the groups are never squeezed); the six options are independent — switching kind does not reset the sort or the query | ✅ |
+| **Header count** (v0.21.x): digits only (`9`, or `3 / 79` while filtering) — the quantifier changes with the kind, so it stays off screen; hovering still gives the full phrase (`9 code files`) | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans **documents and code** in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist` / `build` / `out` / `coverage`) | ✅ |
 | Each row shows H1 title (or filename) + relative time + first-paragraph summary | ✅ |
@@ -317,6 +322,110 @@ Current task -> Workspace Retrieval -> Document + Code Candidates
   back to plain text silently.
 - **No second engine**: no second retrieval path, no second lifecycle, no second store, no new
   dependencies, no AST, no LSP, no embedding, no model call, no network, no IDE.
+
+---
+
+## Relations and context control (v0.21)
+
+Ranking answers "which documents look alike". This version answers two other questions: **"why is
+this one here?"** and **"what about the ones I want to keep or block myself?"** (the original v0.21
+and the original v0.22 were merged into one version here.)
+
+### Relations are an explanation, not a second ranking stage
+
+Every relation needs **evidence you can grep back to the source**. There are exactly four kinds:
+
+| Kind | What the evidence is | Example |
+|---|---|---|
+| `references` | one Markdown file referencing another | `README.md` line 81 mentions `docs/guide.md` |
+| `documents` | Markdown naming a code path | a design note's line 12 mentions `src/host/index.js` |
+| `imports` | `import … from` / `require(…)` in code, **line by line** | `test/deep-scale.test.mjs:22` → `../tools/deep-benchmark.mjs` |
+| `tests` | test ↔ subject by filename convention (**the only kind without a line number**) | `context-manager.ts` ↔ `context-manager.test.ts` |
+
+- At most **3 relations per item** in the panel and **2** through `knit_docs`; when it has to
+  truncate it says "N relations in total" rather than hiding them. The order shown is the priority:
+  `references` > `imports` > `tests` > `documents`.
+- `←` = the other file mentions this one, `→` = this one mentions the other; **the line number
+  belongs to the file that does the mentioning**.
+- **Relations never take part in ranking**: switch them off and the three tiers hold exactly the same
+  members in the same order (there are tests watching this, relation by relation).
+- No AST, no LSP, no Tree-sitter, no call graph, no dependency graph, no symbol index. A path written
+  inside a comment does **not** count as a relation, and code can only be *pointed at*, never act as a
+  source of references — that has been an assertion since v0.19 and is unchanged.
+
+### "Source" is exactly three words
+
+In relevance mode each row carries one low-key label: **retrieval** (it matched the current task's
+keywords) / **relation** (it was pulled in by a reference) / **pinned** (you put it there). No score,
+no percentage, no colour scale; in the flat list and under **Newest** none of them appears at all.
+
+> ⚠️ Honest boundary: in a real workspace with enough candidates the three tiers are **always filled
+> by keyword-matched documents first**, so the "relation" label is rare — that is a measured result,
+> not an omission. The value of relations is in the **"why"** column: open it and you get line-level
+> evidence (kind + other file + line N + open), where "open" previews the real text around that line
+> (±2 lines, highlighted).
+>
+> The evidence **expands downwards**: opening it pushes the rows below down, closing it puts them
+> back. (v0.21.x fixed an overflow here — the entry animation used `fill:'both'`, which keeps pinning
+> the row height after the animation finishes; the settle step has to `cancel()` it first.)
+
+### Pin / exclude
+
+- **Where the controls are** (v0.21.x): the title row keeps only "number · marker · title · time";
+  the `source` word and `pin` / `exclude` sit together at the **right end of the evidence row**
+  (order `pin → exclude → retrieval`), **hidden by default** — they appear when you hover that row,
+  when the keyboard cursor is on it, or when focus enters it. They use `visibility`, not `opacity:0`,
+  so hidden controls really leave the tab order, add no height and cause no sideways jump. All three
+  entries are plain text buttons, no icons.
+- **Pin**: the row moves into a "Pinned context" section at the very top and its `provenance` becomes
+  `manual`. **This is not a ranking intervention** — the pinned section is unnumbered and the `01…0N`
+  numbering of the three tiers does not change.
+- **Exclude**: it is filtered out **before retrieval** (the header count and the status summary move
+  at the same time) and a low-key line with an "undo" entry stays above the list. "Undo" only appears
+  when the item is really still in the workspace (switching to the Code tab will not misreport a
+  Markdown file as "gone").
+- **It survives restarts** as far as the host allows: given `ctx.storage`'s `kv`, pin and exclude are
+  written to `~/.dsh/storages/knit_control.json` (**per workspace**; key = workspace path + relative
+  path); without it they degrade to memory and the panel **says** "this session only (not persisted)"
+  instead of pretending. Two real-machine defects were fixed here: a duplicated plugin load could
+  fight over the storage handle (one unit, one live handle — they now share one registry), and
+  `persisted` used to claim "remembered" the moment a store appeared, whereas it should report the
+  **result** rather than the capability — it now commits to nothing until there is evidence, and
+  reports a write failure in the **same response**.
+
+### The retrieval status summary in the header
+
+One line of fact in the panel header:
+`collected N · excluded N · candidates N | BM25 lexical retrieval · relations N · pinned N | in pack N`.
+The three groups are the reading order: **workspace candidates** (how many were scanned, how many
+this batch really ruled out, how many went on into retrieval), **retrieval and adjustment** (this
+path is plain local BM25, followed by how many relation evidence items are in the pack and how many
+items were pinned out of the tiers) and **the result** (the items currently in the three tiers).
+Mid-dots inside a group, **one thin rule between the three groups only**, and **no arrows** — the old
+`↓` / `→` chain drew an **already finished** pipeline as a flow chart and read like a progress bar; it
+was deleted outright on 2026-10-09.
+Every cell follows the task, the kind tab, pins and exclusions; it only reports, it takes no
+interaction. It sits **directly under the toolbar** and does not move when you toggle things: opening
+the Usage Lens puts the lens **below** this line (render order = toolbar → status summary → exclusion
+note → notice → lens → list).
+
+### The toolbar row (v0.21.x)
+
+`Relevance / Newest` (sort) | one light-grey rule | `Docs / Code / Media / All` (kind) | the filter
+box (far right).
+
+- **Sort and kind are two conditions, not one segmented control**: that `.knit-bar-sep` (1px,
+  `border-l3`, `aria-hidden`) is the boundary. The kind group used to sit on its own row; its selected
+  state is still the v0.14 **underline tab** — it did not fall back to a grey-filled button.
+- **The filter box sits at the tail of the toolbar** (it filters the current list further, which is
+  the toolbar convention): `flex:1 1 180px` + `max-width:240px` + `margin-left:auto` puts it at
+  180–240px against the right edge in a normal panel, and `min-width:0` makes it **shrink first** when
+  the panel narrows. The sort and kind groups are both `flex:none`: they are **never squeezed**.
+- **The three conditions are independent**: pick Code and then Newest and you get the newest code; the
+  query only filters the current scope and neither resets the sort nor gets reset by switching kind or
+  sort (`sort` / `kind` / `query` are three separate pieces of state).
+- No icons, no loud pills; the other entries use secondary text, the selected one an underline plus
+  the primary text colour.
 
 ---
 

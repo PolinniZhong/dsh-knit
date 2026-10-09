@@ -3,6 +3,124 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.21.0] - 2026-10-08
+
+> **Relations & Context Control** —— **原 v0.21 与 原 v0.22 合并成一个版本**（用户 2026-10-08 拍板：
+> 两件事在实现上是同一条链路上的前后两环，分两版只会让「关系」先当摆设）。这一版回答两个问题：
+> **「这一篇为什么在这里？」** 与 **「我自己想留住 / 挡掉的那几篇呢？」**
+> —— 前者给**有行号、能 grep 回原文**的关系证据（引用 / 导入 / 测试 / 文档），后者给**固定与排除**，
+> 而且真的活过重启。
+> 硬约束一条没松：**零模型 / 零网络 / 零新依赖 / 无构建步骤**。
+> 两条边界是刻意的：关系**是投影，不是第二个排序阶段**（`rankByRelevance()` 一行未改）；
+> 不做调用图 / 依赖图 / 符号索引（没有 AST / LSP / Tree-sitter），Git provenance 推迟
+> （每文件一次 `git log` 在 1000 文件规模上是秒级到十秒级，与 R1 门槛冲突）。
+
+### 变化
+
+- **新增 `src/host/relations.js`（零 I/O 的纯逻辑）**。只做四类**有证据**的关系，
+  数组顺序即截断优先级：`references`（Markdown 里引用了另一篇 Markdown）、
+  `documents`（Markdown 里写到了某个代码路径）、`imports`（代码里的 `import … from` / `require(…)`，
+  **逐行正则**，含行号）、`tests`（文件名约定上的测试与被测方，**唯一不带行号的一类** ——
+  证据是文件名这条可核验的路径事实，不是某一行文字，所以如实不给行号，而不是编一个）。
+  导出 `MAX_RELATIONS_PER_ITEM = 3` / `MAX_TOOL_RELATIONS_PER_ITEM = 2` / `RELATION_TYPES` /
+  `importsOf` / `resolveSpec` / `testsOf` / `buildRelationFacts` / `relationsOf` / `resetRelationCache`。
+  每条边**两端各登记一次**，`line` 属于**提及所在的那个文件**（`dir: 'in'` 时行号读的是对方那一篇）。
+  同一 `(type, dir, other)` 去重取最小行号；对端**不在本批候选集**里就不产生边（不硬凑）。
+- **`src/host/links.js` 三处修改**：① 新增 `extractRefsWithLines()`（与 `extractRefs` **同一套正则、
+  同一套顺序**，只多给行号；`extractRefs` 现在是它 `.map()` 的结果，一处真源）；② 引用目标放开到
+  「已索引的文件」（`{anyExt: true}`），**源仍然只有 Markdown** ——
+  `test/code-context.test.mjs` 里那条「代码只能被指向、不能当源」的守卫原意一个字没改；
+  ③ **修掉一个既有缺陷**：引用图缓存的签名原本只是「篇数 + 最大 mtime + 是否截断」，
+  **不含候选集身份**，同一进程里连跑两个候选数相同、最大 mtime 落在同一文件的 query 会**串图**
+  （实测复现，第二个 query 的关系全落空）。现在签名是逐篇 `rel\u0000mtimeMs` 排序后的精确键，
+  不用哈希（碰撞会让关系静默错配），`test/links.test.mjs` 有回归用例。
+- **`src/host/context.js`：`provenance` 三值**（`retrieval` / `relation` / `manual`）。
+  ⚠️ 字段名**不叫 `source`** —— `source` 从 v0.14 起指的是**文件角色**
+  （`impl` / `test` / `config` / `design` / `doc`），两者同时出现在一条记录上，不能混。
+  三条既有断言（`test/context.test.mjs` / `test/context-eval.test.mjs` / `test/code-context.test.mjs`）
+  已按新键加强。包内条目还会带 `relations`（最多 3 条）与 `relationsTotal`（真实总数）；
+  **没有关系、也没被截断时这两个键根本不出现**（空数组是纯噪音，9 条要白花一百多字节）。
+- **`src/host/index.js`**：`buildContextFor()` 组装完包后投影关系，并多一个
+  `withRelations: false` 开关 —— 它唯一的用途是让「关系不改变任何一层的成员与顺序」这条
+  可以被**同一次调用**直接证伪（`test/relations.test.mjs` 的端到端守卫就这么写的）。
+  新路由 **`POST /knit/api/control`**（`{action, rel}`，四个动作 `pin` / `unpin` / `exclude` / `restore`）
+  是**唯一的写通道**；排除在检索之前生效（`stats.controlSkipped`），固定是排名的下游
+  （`applyPinOverride()`：从三层移出、进 `pinned` 区、`provenance: 'manual'`，**零新 I/O**）。
+  `/api/recent` 另外回报 `control = {pinned, excluded, skipped, persisted}`，
+  其中每个被排除项带 `exists`（「这篇现在还在工作区里吗」——「恢复」按钮只在它真可能回来时给）。
+- **新增 `src/host/control.js`（纯逻辑 + 可选持久化，不 import 任何官方包）**。
+  `ctx.storage` 拿得到就用 `kv` 落盘（`unit: knit_control`，表 `pinned` / `excluded`，
+  `layout: 'single'`、键 = `` `${root}\u0000${rel}` ``，按工作区隔离），拿不到就退化成内存态。
+  写路径**只写差量**，且**串行**。
+  - 两条真机缺陷在这一版修掉（都是**先取证再改**）：① 插件被重复加载时，每次加载都会新建一份
+    登记表，而存储单元「一个进程只有一个活句柄」，于是被模块级变量留下的**最后一个**实例恰好是
+    打不开存储的那个 ⇒ 共享那份登记表挂在**后端对象**上（`Symbol.for('dsh-knit.control')`），
+    同一进程里的后续加载直接复用；② `persisted` 原本在拿到 `kv` 的那一刻就报 `true`
+    （报的是**能力**，不是**结果**），现在**证据到之前一律 `false`**：读成功、或这一次写真的成功，
+    才转 `true`；写失败在**同一次响应**里就说出来。面板因此可以诚实地写「本会话有效（未持久化）」。
+- **`src/host/tool.js`：`knit_docs` 每个条目最多 2 条关系**（`relations` / `relationsTotal` 进 schema，
+  `provenance` 进 `required`），渲染成一行 `relations: references ← docs/x.md:12; imports → src/y.js:3`
+  （`←` = 对方提到本条目，`→` = 本条目提到对方；`tests` 不带行号）。**只给事实，不写理由文案** ——
+  理由由既有的 `Why:` 行承担。被固定的条目出现在 `pinned` 分区且 `provenance: manual`；
+  被排除的条目**完全不出现**。
+- **面板（`src/client/client.js`）**：相关模式的每一行有一个**弱化的来源词**（`检索` / `关系` / `用户固定`，
+  只有这三个词，没有分数没有百分比）；**2026-10-09 布局改造**：标题行只留「序号 · 标记 · 标题 · 时间」，
+  来源词与 `固定` / `排除` 一起搬到**证据行右端**，顺序 `固定 → 排除 → 检索`，**默认 `visibility:hidden`**
+  （鼠标悬停该项 / 键盘光标 / 焦点进入才显形 —— 用 `visibility` 而不是 `opacity:0`，隐藏时**真的退出键盘焦点序**，
+  且不占额外高度、不引起横向跳动），证据文本留在左边、过长可截断而操作永不被挤掉；
+  **没有命中段也没有理由的条目仍留一条只含右侧操作的空行**（不写占位文字）；三个入口都是纯文字按钮、无图标；
+  **同日按体验反馈**：三个入口的字号提到与命中段同级（10px → 11px；行高仍由证据行决定，不增高），
+  悬停热区左右各加 4px（用等量负外边距把宽度收回 ⇒ 行的宽度与词间距都不变）；
+  **同日工具栏重排（2026-10-09 第二条规格）**：`相关 / 最新`（排序）｜一根浅灰竖线｜
+  `文档 / 代码 / 媒体 / 全部`（类型）｜搜索框靠最右且宽度自适应 —— 类型组从独立一行搬进工具栏
+  （`.knit-types` 不再自带左右内边距），`.knit-filter` 用 `flex:1 1 180px` + `max-width:240px`
+  + `min-width:0`（常规面板 180–240px、封顶后靠 `margin-left:auto` 贴右、面板窄了先缩它），
+  两组都是 `flex:none` ⇒ **前面的按钮永不被挤**；六个选项彼此独立（切类型不动排序与搜索词，反之亦然）；
+  「为什么」展开**行级证据**（最多 3 条，
+  每条 = 类型标签 + 对方文件 + 第 N 行 + 打开，点开就地预览到那一行；超过 3 条如实写「共 N 条关系」）；
+  被排除项消失并在上方留一行弱化说明 + 「恢复」；头部一条**检索状态摘要** ——
+  **单行、三组、竖线分隔**：`收集 N · 排除 N · 候选 N | BM25 词法检索 · 关系 N 条 · 固定 N | 入包 N`
+  （工作区候选 → 检索与调整 → 最终结果；组内中点、组间一根细竖线，**一个箭头都没有** —— 原来那串
+  `↓` / `→` 把一条**已经完成**的管线画成了流程图，2026-10-09 用户裁定删除；那个没有名字的光数字
+  「→ N」现在叫「候选 N」）。**每一格都是已经发生的事实**，口径逐格钉在守卫里；
+  没有图标 / 胶囊 / 色块 / 装饰边框，也**不承担任何交互**（它只负责展示信息）。
+  **同日第三条反馈（2026-10-09）**：这一行**紧贴工具栏**、**位置不随开关变** —— 观察层（「使用情况」）
+  从摘要上面挪到它的下面，渲染顺序固定为 工具栏 → 状态摘要 → 排除说明 → 通知 → 观察层 → 列表
+  （守卫钉着「开关前后摘要的位置一模一样」）。
+  **同日第四条反馈（2026-10-09）**：头部那格计数**只留阿拉伯数字**（`9` / 过滤时 `3 / 79`）——
+  量词本来随档位变（文档「篇」/ 代码「个代码文件」/ 媒体「个媒体」/ 混排「项」），
+  同一位置换个档就换一种中文 ⇒ 整句降级到 `title`（悬停仍读得到「9 个代码文件」），
+  `count` / `count.code…` 八条词条照旧在用。
+  **同日第五条反馈（2026-10-09）**：点开「检索」长出来的行级证据原来是**压在下一行上面**的 ——
+  DocRow 的入场补间用 `fill:'both'`，播完之后**仍然**按入场那一刻量到的高度钉着这一行
+  （`el.style.height=''` 清不掉补间效果），于是证据不把下面的行挤下去、而是溢出到它上面；
+  现在收尾统一走 `settleEnterAnim(el, anim)`：先 `cancel()` 注销补间、再清那两行内联样式。
+  守卫 = `test/client.test.mjs` 的「行级证据是向下延展」那条（替身没有 DOM ⇒ 喂纯对象 + 钉住调用点）。
+  **固定不是排序干预**：固定区不编号，三层 `01…0N` 的编号一个都不变。
+- **打包修复（即 v0.20.1 的内容，已在本版树里）**：语料工厂搬进 `test/deep-corpus.mjs`，
+  `tools/deep-benchmark.mjs` 变成 CLI 外壳 —— 因为 `tools/` **不在 `package.json` 的 `files` 白名单**里，
+  registry 上那份 tarball 里 `npm test` 是 638 pass / 1 fail（3 条 R1 规模门槛用例）。
+  **不变式保住了：`tools/` 仍然不进包**。新增 **`tools/clean-room-test.mjs`**：真打 `npm pack` →
+  解包到临时目录 → 断言 `package/tools/` 只有白名单那两个文件 → 在解包目录里跑 `npm test` ⇒
+  非全绿就非零退出。它是**发版前**闸门（v0.20.0 的清单只在发完之后查，太晚）。
+  ⚠️ 它必须带 `--cache`，否则会撞 `~/.npm/_cacache/tmp` 的权限（那个目录属于 root）。
+
+### 实测
+
+- `cd knit && npm test` → **697/697**（28 个测试文件；v0.20.0 的 641 条**一条未删、未放宽、未 skip**，
+  v0.21 净增 56 条：关系 / 控制 / 跨面 + 布局与动效收尾守卫）。
+- `node tools/clean-room-test.mjs` → `dsh-knit-0.21.0.tgz` · 56 个文件 · 解包目录 **697 pass / 0 fail** ⇒ exit 0
+  （版本号改成 `0.21.0` 当天复跑；改名之前那次是 `dsh-knit-0.20.0.tgz`，文件数与结论相同）。
+- 关系投影的载荷（按 `{type, dir, other, line}` 四字段序列化）：**≈252 B/项**
+  （两组真实任务各 9 项、合计 4539 B 关系投影）；面板总载荷实测 **7857 B / 9 项**（门槛 16000 B）。
+- 真机（`curl` 打运行中的 DSH，工作区 `08_Knit`）：三层逐条 `provenance: retrieval` 且
+  `relations` 恰好 3 条（`relationsTotal` 实测 11 / 7 / 24 / 22 / 33 / 66 / 12 / 18 / 8，截断说明里的数字是真的）；
+  固定 `README.md` ⇒ 包里多出 `pinned` 分区、`provenance: manual`、原层里消失；
+  排除 `03_发布/真机验收清单.md` ⇒ `skipped: 1`、被排除项**不出现**、`excluded[].exists: true`；
+  **重启 DSH 后读回**：`persisted: true`，介质 `~/.dsh/storages/knit_control.json`（475 B，按工作区隔离）。
+- `src/host/tool.js` 与面板**同源**：同一条任务下，面板每项关系的前 2 条与工具侧逐字相同
+  （`test/tool.test.mjs` 的跨面守卫，把工具里的截断拿掉即变红）。
+
 ## [0.20.0] - 2026-10-07
 
 > **Deep Context Retrieval**。核心体验从「任务 → 相关文件」升级为

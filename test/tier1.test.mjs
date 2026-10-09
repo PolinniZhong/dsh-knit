@@ -454,7 +454,7 @@ test('过滤：输入即缩小列表并显示命中计数', async () => {
   let nodes = await mounted.renderAgain(true)
 
   assert.equal(byClass(nodes, 'knit-doc').length, 3, '初始 3 篇')
-  assert.equal(textByClass(nodes, 'knit-count'), '3 篇')
+  assert.equal(textByClass(nodes, 'knit-count'), '3', 'v0.21.x：计数只剩阿拉伯数字')
 
   const input = byClass(nodes, 'knit-filter')[0]
   assert.ok(input, '应有过滤输入框')
@@ -462,7 +462,7 @@ test('过滤：输入即缩小列表并显示命中计数', async () => {
   nodes = await mounted.renderAgain()
 
   assert.equal(byClass(nodes, 'knit-doc').length, 1, '应只剩竞品分析')
-  assert.equal(textByClass(nodes, 'knit-count'), '1 / 3 篇', '应显示命中计数')
+  assert.equal(textByClass(nodes, 'knit-count'), '1 / 3', '应显示命中计数（只有数字）')
 })
 
 test('过滤：能按摘要和路径匹配，大小写不敏感', async () => {

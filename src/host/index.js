@@ -21,6 +21,14 @@ import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
 import { registerKnitDocsTool } from './tool.js'
 // v0.12：引用关系。`links.js` **不反过来 import 本文件**（依赖由这里注入），所以没有环。
 import { buildLinkGraph, linksOf } from './links.js'
+// v0.21：关系事实表（谁提到谁）。**同步、零 I/O** —— 只吃记录上现成的 `head`。
+import { buildRelationFacts } from './relations.js'
+// v0.21：上下文控制层（固定 / 排除）。**纯逻辑 + 可选持久化**：本文件负责把
+// `ctx.storage`（拿得到才有）递给它，它自己不 import 任何官方包。
+import {
+  createControlRegistry, applyPinOverride, excludedSet, sharedControlRegistry,
+  CONTROL_ACTIONS,
+} from './control.js'
 // v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
 // ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
@@ -176,6 +184,13 @@ export const ERROR_CODES = {
   notFoundRoute: 'knit/not-found-route',
   loopbackOnly: 'knit/loopback-only',
   methodNotAllowed: 'knit/method-not-allowed',
+  /**
+   * v0.21：写控制状态那一条路由（`POST /api/control`）的畸形输入。
+   *
+   * ⚠️ 这是**开发者可见、用户不可见**的码：面板只会发合法动作，
+   * 所以它不进客户端词典（`test/i18n.test.mjs` 的 `notUserFacing` 白名单里有它）。
+   */
+  badRequest: 'knit/bad-request',
   internal: 'knit/internal',
 }
 
@@ -835,6 +850,14 @@ function publicDoc(doc) {
  *   含 `raw` 与 `matchedTerms`），是给 `buildContextFor()` 用的**内部输入**。
  *   HTTP 路由必须走 `publicScanPayload()`（`test/host.test.mjs` 有守卫）。
  */
+/**
+ * 进程内的固定 / 排除状态（v0.21）。
+ *
+ * `apply(ctx)` 里若拿得到 `ctx.storage` 就换成**带持久化**的那份；拿不到时这份内存态
+ * 照常工作，只是活不过这次进程 —— 面板必须把这件事说出来（`control.persisted`）。
+ */
+let controlRegistry = createControlRegistry(null)
+
 export async function scan(root, limit, options = {}) {
   // v0.19 修订：**扫的是展开符号链接后的那份路径**。
   // 每条记录里的 `path`（`publicDoc()` 原样下发给客户端）就是「打开 / 定位」时
@@ -877,6 +900,29 @@ export async function scan(root, limit, options = {}) {
   } else {
     pool = collected.docs
     truncated = collected.truncated
+  }
+
+  // v0.21（D7）：**排除发生在检索之前**。用户排掉的文件根本不进候选集 ——
+  // 于是它不参与排序、不计入 `matched`、不出现在任何一层，也不进工具输出。
+  // 这一步是「用户的话比排序算法更硬」的唯一实现点，所以放在最前面。
+  // 显式传入的 `excluded` 优先（测试与内部调用用），否则问进程内的控制状态。
+  const excluded = options.excluded instanceof Set
+    ? options.excluded
+    : excludedSet(controlRegistry.controlOf(root))
+  let controlSkipped = 0
+  /** 被排除的 rel 里，**工作区里真的还有**的那些（面板据此决定给不给「恢复」）。
+   *  按 `collected`（**尚未按 kind 过滤**）判：切到代码档时那篇被排除的 Markdown
+   *  只是不在本档语料里，文件并没有消失，不该把「恢复」也一起收掉。
+   *  面板要的是「这一篇我还能不能找回来」，不是「它在这档里吗」。 */
+  let controlAlive = null
+  if (excluded.size > 0) {
+    const before = pool.length
+    pool = pool.filter((doc) => !excluded.has(doc.rel))
+    controlSkipped = before - pool.length
+    controlAlive = new Set()
+    for (const doc of collected.docs.concat(collected.code, collected.media)) {
+      if (excluded.has(doc.rel)) controlAlive.add(doc.rel)
+    }
   }
 
   const wantRelevance = options.sort === 'relevance'
@@ -969,7 +1015,7 @@ export async function scan(root, limit, options = {}) {
     // v0.19 扫描计数（需求 §50 要报的那几个数：见到的 / 准入的 / 被排除的 / 生成噪声）
     // 加上 `corpusSize`（本档语料的实际大小，即 `allDocs.length`）。
     // **内部输入**，由 `publicScanPayload()` 剥掉 —— HTTP 响应形状一个键都不加。
-    stats: { ...collected.stats, scanMs: collected.scanMs, corpusSize: ordered.length },
+    stats: { ...collected.stats, scanMs: collected.scanMs, corpusSize: ordered.length, controlSkipped, controlAlive },
   }
 }
 
@@ -1045,9 +1091,10 @@ async function linkGraphFor(root, withLinks, byRel) {
  * `ranked` 为空时**不读盘**（媒体档 / 时间序走的就是这条），直接返回空包。
  *
  * @param {string} root - 工作区根
- * @param {{ranked?: Array<object>, topic?: string, task?: string, total?: number, withLinks?: boolean}} [options] -
+ * @param {{ranked?: Array<object>, topic?: string, task?: string, total?: number, withLinks?: boolean, withRelations?: boolean}} [options] -
  *   `ranked` 是 `scan()` 里的全量名次（含 `raw` 与 `matchedTerms`）；
- *   `task` 是当前任务的**原文引用**，原样透传给 `buildContext()`，这里不生成也不改写
+ *   `task` 是当前任务的**原文引用**，原样透传给 `buildContext()`，这里不生成也不改写；
+ *   `withRelations: false` 关掉 v0.21 的关系投影（默认开）
  * @returns {Promise<object>} Context Pack
  */
 export async function buildContextFor(root, options = {}) {
@@ -1063,7 +1110,21 @@ export async function buildContextFor(root, options = {}) {
   }
 
   const graph = await linkGraphFor(root, options.withLinks !== false, byRel)
-  return buildContext({ ranked, topic: options.topic || '', task, total, graph })
+  // v0.21：关系事实表。与引用图**分开**算（图只吃 Markdown，关系要认 md→代码、代码→代码、
+  // 测试↔被测），也分开缓存。候选集是**整批名次**，不是「已进包的条目」——
+  // 一条 `in` 边的源可能没进包（比如 AGENTS.md 引用 Primary），那正是要展示的「为什么」。
+  // `withRelations: false` 是**关掉关系投影**的开关（默认开）。有了它，「关系不改变任何一层」
+  // 这句话才能被一条测试直接证伪（同一次调用、只差这一个选项）。
+  const facts = options.withRelations === false ? null : buildRelationFacts(byRel, { root })
+  const pack = buildContext({
+    ranked, topic: options.topic || '', task, total, graph,
+    relations: facts ? facts.incident : null,
+  })
+  // v0.21（D7）：**固定发生在装配之后**。被固定的条目从三层**移出**、进入独立的
+  // 「固定上下文」区（`pack.pinned`，来源 `manual`）—— 三层的连续编号规则因此一个字不动。
+  // 条目只从这一包现成的行里取，零新 I/O；固定了一篇但这一批里没有它，**不硬凑**。
+  // 显式传入的 `control` 优先（测试用），否则问进程内的控制状态 —— 与 `scan()` 同一条口径。
+  return applyPinOverride(pack, options.control || controlRegistry.controlOf(root))
 }
 
 /**
@@ -1370,6 +1431,64 @@ function sessionOf(webCtx, sessionId) {
 function isLoopback(address) {
   if (!address) return false
   return address === '::1' || address === '127.0.0.1' || address.startsWith('::ffff:127.')
+}
+
+/**
+ * 读一个 JSON 请求体（v0.21 **唯一**用到它的地方是 `POST /api/control`）。
+ *
+ * 上限 8 KiB：控制状态是几个相对路径，没有理由收大包。畸形 JSON / 超限 / 读失败
+ * 一律 `null`，由调用方翻成 `knit/bad-request` —— 这里不抛。
+ *
+ * @param {import('node:http').IncomingMessage} req - 请求对象
+ * @returns {Promise<object|null>} 解析结果或 null
+ */
+function readJsonBody(req, limit = 8192) {
+  return new Promise((resolve) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) {
+        resolve(null)
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (size === 0) {
+        resolve({})
+        return
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        resolve(null)
+      }
+    })
+    req.on('error', () => resolve(null))
+  })
+}
+
+/**
+ * `rel` 是否是一个**落在这个工作区内**的相对路径（v0.21 的写路由用）。
+ *
+ * ⚠️ 与 `readDocument()` 的区别：这里**不看文件是否存在**，也不读一个字节。
+ * 控制状态存的是一个不透明字符串，写路由不暴露任何读原语；一个不存在的 rel
+ * 最多是「标了一篇不在工作区里的文件」，它永远不会出现在任何一层的行里
+ * （两层都在 `scan()` 之后，而 `scan()` 只吐真实收集到的文件）。
+ * 越界 / 绝对路径 / 空串仍然一律拒绝 —— 拒绝的理由是「别把工作区外的路径存进来」。
+ *
+ * @param {string} root - 工作区根
+ * @param {string} rel - 工作区相对路径
+ * @returns {boolean} 是否放行
+ */
+function relInside(root, rel) {
+  if (typeof rel !== 'string' || rel.length === 0 || rel.length > 1024) return false
+  if (rel.startsWith('/') || rel.includes('\0')) return false
+  const base = resolve(root)
+  const abs = resolve(base, rel)
+  return abs !== base && abs.startsWith(base + sep)
 }
 
 /**
@@ -1694,6 +1813,36 @@ const auditBridge = {
 }
 
 /**
+ * 从 `ctx.storage` 上取一份带 `kv` facet 的后端（v0.21）。
+ *
+ * ⚠️ `backend.get(name)` 名字不存在时**会抛** `backend-not-found`（不是返回 undefined，
+ * 见 `dsh-storage` 的 `BackendRegistry`），所以每一步都在 try 里。任何一步不齐
+ * 都返回 `null` ⇒ 控制层退回内存态并如实说 `persisted: false` —— 那是**正常降级**，
+ * 不是异常分支（D8）。
+ *
+ * @param {object} storage - `ctx.storage`（hub）
+ * @returns {object|null} 后端或 null
+ */
+function controlBackendOf(storage) {
+  try {
+    const registry = storage && storage.backend
+    if (!registry || typeof registry.get !== 'function') return null
+    const named = typeof registry.names === 'function' ? registry.names() : []
+    for (const candidate of ['json', ...named]) {
+      try {
+        const backend = registry.get(candidate)
+        if (backend && backend.kv && typeof backend.kv.open === 'function') return backend
+      } catch {
+        // 这个后端没注册 —— 试下一个
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 宿主插件体：等 webServer / sessions 到位后挂只读路由。
  * @param {import('@deepseek-ai/cordis').Context} ctx - 宿主根上下文
  * @returns {void}
@@ -1712,7 +1861,14 @@ export function apply(ctx) {
         sendJson(res, 403, { ok: false, code: ERROR_CODES.loopbackOnly })
         return
       }
-      if (req.method !== 'GET') {
+      // v0.21：整个 HTTP 面**仍然只读**，只有一条写动作 —— 固定 / 排除。
+      // 它改的也只是 Knit 自己的控制状态，从不碰工作区里的任何文件。
+      const path = (req.url || '/').split('?')[0]
+      const isControl = path === `${ROUTE_PREFIX}/api/control`
+      // 写通道只有这一条，且**只认 POST**：别的路由仍然是纯 GET。
+      // （写成「非 GET 一律 405，除非是 control 的 POST」会让 `GET /api/control`
+      // 掉进写分支里报 400 —— 那是「方法不对」不是「请求不对」。）
+      if (req.method !== (isControl ? 'POST' : 'GET')) {
         sendJson(res, 405, { ok: false, code: ERROR_CODES.methodNotAllowed })
         return
       }
@@ -1722,6 +1878,31 @@ export function apply(ctx) {
       const root = workspaceRootOf(webCtx, sessionId)
 
       try {
+        if (isControl) {
+          // 只认 `{action, rel}`；动作白名单在 `control.js` 里（一处真源）。
+          // `root` 由 sessionId 解析 —— 工作区**不能由请求指定**，与其余路由同一条纪律。
+          const body = await readJsonBody(req)
+          const action = body && typeof body.action === 'string' ? body.action : ''
+          const rel = body && typeof body.rel === 'string' ? body.rel : ''
+          if (!CONTROL_ACTIONS.includes(action)) {
+            sendJson(res, 400, { ok: false, code: ERROR_CODES.badRequest })
+            return
+          }
+          if (!relInside(root, rel)) {
+            sendJson(res, 400, { ok: false, code: ERROR_CODES.missingRel })
+            return
+          }
+          const result = await controlRegistry.act(root, action, rel)
+          sendJson(res, 200, {
+            ok: true,
+            action,
+            rel,
+            changed: result.changed,
+            persisted: result.persisted,
+            control: result.control,
+          })
+          return
+        }
         if (url.pathname === `${ROUTE_PREFIX}/api/recent`) {
           const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100)
           const sort = url.searchParams.get('sort') === 'relevance' ? 'relevance' : 'time'
@@ -1738,6 +1919,28 @@ export function apply(ctx) {
           // v0.14：相关模式下顺带给出任务上下文分层。
           // ⚠️ 带上 `context` 是**可选**的（老客户端忽略它），而 `docs` 一字未动。
           body.context = await contextPayload(root, payload, sort, kind)
+          // v0.21：面板要显示「固定了什么 / 排除了什么」（含恢复按钮），而这两份
+          // 是**用户动作的原始记录**，不是 Context Pack 的投影 —— 固定项本身在
+          // `context.pinned` 里，这里给的是状态本身。`skipped` 是**这一批**里真的被
+          // 排掉了几篇：管道条要的是如实计数，不是 `excluded.length`（切到代码档时，
+          // 被排除的那篇 Markdown 根本不在语料里）。
+          {
+            // 先等首访装载落定：`persisted` 是**已证明**的意思，不许在证据到之前先点头
+            // （真机验收实测过：不等它就会在写失败时回一句 `true`）。
+            await controlRegistry.ready(root)
+            const state = controlRegistry.controlOf(root)
+            const alive = payload.stats && payload.stats.controlAlive
+            body.control = {
+              pinned: state.pinned,
+              // `exists` = 这一篇现在还在工作区里吗。记录一律保留（用户排除过的就是排除过的），
+              // 但「恢复」按钮只在它真的还可能回来时给 —— 否则按下去什么都不会发生。
+              excluded: state.excluded.map((item) => ({
+                rel: item.rel, at: item.at, exists: alive ? alive.has(item.rel) : false,
+              })),
+              skipped: Number(payload.stats && payload.stats.controlSkipped) || 0,
+              persisted: controlRegistry.persisted,
+            }
+          }
           // v0.15：面板把「使用情况」开关打开后，请求会带 `usage=1` —— 那一刻开始记账。
           // v0.17 修订：开闸的同时**回填**这个会话已经发生的事件（闸门开晚时，
           // 前面那些真实发生过的读不该被显示成「未读」——那是假话，见 `backfillFeedback`）。
@@ -1853,9 +2056,24 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/control (POST)`)
       return () => unregister()
     }, 'dsh-knit: host route')
+  })
+
+  // ── v0.21：固定 / 排除的持久化（D8）───────────────────────────────
+  //
+  // 独立的一次 `ctx.inject`，理由与下面那次完全一样：`storage` 缺席时这个回调
+  // **根本不跑**（cordis 的 inject 语义：服务不齐就静默不加载），而面板路由与
+  // agent 工具照常工作 —— 只是控制状态活不过这次进程。这正是要的降级路径。
+  ctx.inject(['storage'], (storageCtx) => {
+    const backend = controlBackendOf(storageCtx.storage)
+    // ⚠️ 必须走 `sharedControlRegistry`：DSH 会在同一进程里把插件加载很多次，而
+    // kv 单元只允许一个活句柄 —— 每次加载各开一次的话，只有第一次开得成，而模块级
+    // 变量被最后一次加载覆盖 ⇒ 活跃实例恰恰是 `persisted: false` 的那个。
+    const shared = sharedControlRegistry(backend)
+    if (shared) controlRegistry = shared
+    console.log(`[${name}] control storage: ${shared ? 'json backend attached' : 'memory-only'}`)
   })
 
   // ── v0.7：把同一个排序结果也交给模型 ──────────────────────────────
