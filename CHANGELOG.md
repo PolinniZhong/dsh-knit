@@ -121,6 +121,11 @@
 - `src/host/tool.js` 与面板**同源**：同一条任务下，面板每项关系的前 2 条与工具侧逐字相同
   （`test/tool.test.mjs` 的跨面守卫，把工具里的截断拿掉即变红）。
 
+> ✅ **2026-10-09 已发布**：轻量 tag `v0.21.0` = 发布提交 `af7a9a39995d080381217e7f84121f17e15445d5`；npm `latest = 0.21.0`、`gitHead` = 同一个提交、共 **18 个**版本；registry 真包 **56 文件 / 637 155 B tarball / 1 870 085 B 解包 / shasum `a536984cfd908c8f1a3b117f1e4c0062e1d619a6`**；OIDC 可信发布 + provenance（`/slsa.dev/provenance/v1`，workflow run `37875191973`，19 s）；GitHub Release 正文取自本节（前置「更新后必须重启 DSH」与「新增写动作 `POST /knit/api/control`」两条），`publishedAt 2026-10-09T02:39:05Z`。
+> **解包净室自测 697/0**（v0.20.0 那条 `tools/` 包装缺陷不复现；判据 = 真 `npm pack` 产物解包后跑 `npm test`）。
+>
+> ⚠️ **这一行不在已发布的 tarball 里** —— 它在 publish 成功之后才写进来（下次 `npm view` 看到的是这份仓库里的文件）。
+
 ## [0.20.0] - 2026-10-07
 
 > **Deep Context Retrieval**。核心体验从「任务 → 相关文件」升级为
