@@ -387,7 +387,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   **悬停弹只读浮层偷看，点击才进右边栏**；浮层是自己画的，不碰框架（不会推开布局）。
   浮层上限 `PEEK_LIMIT = 5`，请求 `/knit/api/recent?sessionId=…&limit=5&sort=<相关/最新>`，
   `sort` 跟面板偏好（默认「相关」= 当前 Context Pack 前 5 条）。
-  ⚠️ 会话 id 走**座位 props 的 `sessionId`**，不要读 `sessions.list` 快照的 `current`（§8.1）。
+  ⚠️ 会话 id 走**座位 props 的 `sessionId`**，不要读 `sessions.list` 快照的 `current`（§8）。
   ⚠️ **浮层只有「头 + 列表」两层**：列表下面那条横线与「点击打开面板」页脚 2026-10-01 已删除
   （用户：「我觉得都可以删掉，有点多余了」），`peek.openPanel` 两个文案键也一并删了 —— 别再画回来。
 - 点头部那行工作区路径 → 用系统文件管理器打开项目文件夹（`remote.session.openWorkspacePath`）。
@@ -399,7 +399,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 ### 7.6 明确没做的
 
-接管 `.md` 资源路由（用户明确否决，要保留官方产物卡）；产物卡「更多」菜单加项（官方没留座位，见 §8.3）；
+接管 `.md` 资源路由（用户明确否决，要保留官方产物卡）；产物卡「更多」菜单加项（官方没留座位，见 §8）；
 编辑 / 大纲 TOC / 多工作区（第三梯队，见规划文档）。
 
 ---
@@ -441,9 +441,9 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/peek.test.mjs` | 悬停浮层：延迟显示/收起、点击开面板、**不等列表即时响应**、会话 id 取座位 props |
 | `test/eval.test.mjs` + `test/eval/` | **排序质量回归**：21 个用例，断言新引擎显著优于冻结的 v0.5.2 基线。⚠️ `eval/legacy.mjs` 是冻结基线，**不要删** |
 | `test/label.test.mjs` | **话题标签可读性**：真词必须出现 + 旧碎片必须不出现；标签词必须是输入的子串 |
-| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、用对话 vs 用 query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**§15 跨面集成守卫（同一条任务下 `knit_docs` 的命中段与面板载荷逐条一致 —— 两侧各有一条取回 `matches` 的补偿路径，单面测试各自都是绿的）** |
-| `test/harness.mjs` | 最小 React / window / fetch 替身（**改它要格外小心，见 §8.1**） |
-| `test/fixture.mjs` | **样本工作区工厂**（`os.tmpdir()` + `utimes` 定死 mtime）。**新增依赖目录布局的测试时，样本一律从这里要**（§8.7） |
+| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、用对话 vs 用 query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**需求 §15 跨面集成守卫（同一条任务下 `knit_docs` 的命中段与面板载荷逐条一致 —— 两侧各有一条取回 `matches` 的补偿路径，单面测试各自都是绿的）** |
+| `test/harness.mjs` | 最小 React / window / fetch 替身（**改它要格外小心，见 §8**） |
+| `test/fixture.mjs` | **样本工作区工厂**（`os.tmpdir()` + `utimes` 定死 mtime）。**新增依赖目录布局的测试时，样本一律从这里要**（§8） |
 | `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：开闸那一刻 `backfillFeedback()` 的回填（顺序：先 `noteSnapshot` 再 `ingestEvents`）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
 | `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只许活在分类层 |
 | `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch、噪声路径 |
@@ -465,7 +465,7 @@ knit/                            ← 插件本体（**路径不能动**，见文
 │                                + context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
-│                                preview-ranking（§8.9）/ market-recheck / context-feedback-eval（§6.11）/
+│                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
