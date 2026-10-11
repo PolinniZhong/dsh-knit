@@ -432,23 +432,24 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/host.test.mjs` | 解析、越界防护、相关性引擎、会话事件提取、**符号链接工作区的 canonical `hostRoot` / `path`**（DSH 只认 realpath） |
 | `test/host-http.test.mjs` | 真回环端口的 HTTP 端到端：`/raw` 200、**Range 206**、安全响应头、白名单与越界、`/links` 入/出度与不泄漏内部字段 |
 | `test/links.test.mjs` | **链接解析层**：三种引用写法、反引号遮蔽、锚点剥离、`a.md.bak` 不被误咬、**无 `[[wikilink]]`**、歧义同名 ⇒ `null`、入/出度互逆、缓存不重读、`linksOf` 的 404 / 排序 / 上限 |
-| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段守卫**（片段行、三层行合并 `matches`、metadata 合成一行、点整行锚点、横带减半、i18n、**Markdown 文本锚点**）、**v0.20 语法高亮守卫**（逐 token 走官方高亮器、颜色只来自 `--shiki-*`、只给命中段前后各 60 行上色且窗口 ≤ 800 行、无命中段一个 token 都不上色、无高亮器时静默回落） |
+| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段 / 语法高亮守卫**（细则见 §7.4） |
 | `test/tier1.test.mjs` | 相对路径图片、高度与全屏、键盘导航、过滤 |
 | `test/entry.test.mjs` | 入口按钮、宿主解析、list 语义 |
 | `test/i18n.test.mjs` | 中英双语、占位符、错误码翻译、词典键对齐、无表情符号 |
 | `test/icon.test.mjs` | 图标渲染、尺寸、**配色跟随官方主文本色令牌（不写死 `#000` / `#fff`）**、与 assets 源文件一致、四处统一 |
-| `test/path.test.mjs` | 点工作区路径开文件夹、**点预览头路径在文件管理器中显示并选中**、**打开 / 定位一律用 canonical 路径**，界面仍显示会话原本那条 |
+| `test/path.test.mjs` | 点工作区路径开文件夹、**点预览头路径在文件管理器中显示并选中**、**打开 / 定位一律用 canonical 路径**（界面仍显示会话原本那条） |
 | `test/peek.test.mjs` | 悬停浮层：延迟显示/收起、点击开面板、**不等列表即时响应**、会话 id 取座位 props |
 | `test/eval.test.mjs` + `test/eval/` | **排序质量回归**：21 个用例，断言新引擎显著优于冻结的 v0.5.2 基线。⚠️ `eval/legacy.mjs` 是冻结基线，**不要删** |
 | `test/label.test.mjs` | **话题标签可读性**：真词必须出现 + 旧碎片必须不出现；标签词必须是输入的子串 |
-| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、用对话 vs 用 query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**需求 §15 跨面集成守卫（同一条任务下 `knit_docs` 的命中段与面板载荷逐条一致 —— 两侧各有一条取回 `matches` 的补偿路径，单面测试各自都是绿的）** |
+| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、用对话 vs 用 query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**需求 §15 跨面集成守卫（同一条任务下工具侧与面板载荷逐条一致）** |
 | `test/harness.mjs` | 最小 React / window / fetch 替身（**改它要格外小心，见 §8**） |
 | `test/fixture.mjs` | **样本工作区工厂**（`os.tmpdir()` + `utimes` 定死 mtime）。**新增依赖目录布局的测试时，样本一律从这里要**（§8） |
-| `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：开闸那一刻 `backfillFeedback()` 的回填（顺序：先 `noteSnapshot` 再 `ingestEvents`）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
+| `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：`backfillFeedback()` 的回填顺序（见 §6.11 第 2 条）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
 | `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只许活在分类层 |
 | `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch、噪声路径 |
-| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：需求 §21 的 12 个用例 + 媒体反例、四指标（DeepHitRate / PassageHit@1 / PassageRecall / LongDocNoiseRate）、R1 规模门槛（1000 文件 ≤ 1.5 s）、R2 载荷预算（面板 ≤16 KB / 工具 ≤1.4×）。**语料工厂在 `test/deep-corpus.mjs`（v0.20.1 起必须随包发布；`tools/deep-benchmark.mjs` 只是它的 CLI 外壳）** |
+| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：需求 §21 的 12 个用例 + 媒体反例、四指标（DeepHitRate / PassageHit@1 / PassageRecall / LongDocNoiseRate）、R1 规模门槛（1000 文件 ≤ 1.5 s）、R2 载荷预算（面板 ≤16 KB / 工具 ≤1.4×）。**语料工厂在 `test/deep-corpus.mjs`（必须随包发布；`tools/deep-benchmark.mjs` 只是 CLI 外壳）** |
 | `test/relations.test.mjs` + `test/control.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认、无行号）、`references`/`documents` 与反向 `in` 边、截断顺序、四条端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、持久化只写差量、无 storage 降级 |
+| `test/index-store.test.mjs` + `test/index-incremental.test.mjs` | **v0.22 增量索引**：持久层 16 项（键含 root 指纹、`per-record` 键形状、`mtime+size` 筛子 + `headHash` 复核、版本 / 指纹不符或无存储 ⇒ 空 Map + `reason` 不抛、遗留键**有界清理**（≤32））与端到端 15 项（重启后复用、改一个只重读 1 篇、增删改名不留过期项、同 `mtime+size` 的改写被抽验抓住、相关序不装载索引） |
 
 ---
 
@@ -462,14 +463,14 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── cordis.patch.yml             挂进 plugin tree 的 insert 行
 ├── assets/                      图标源文件（path 已内联进 client.js）
 ├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
-│                                + context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
+│                                + index-store.js（v0.22 索引持久层）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        697 项，分工见 §9.3
+└── test/                        728 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

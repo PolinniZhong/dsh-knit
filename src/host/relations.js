@@ -255,13 +255,23 @@ export function buildRelationFacts(candidates, options = {}) {
     const text = typeof doc.head === 'string' ? doc.head : ''
     if (isMd(rel)) {
       // 只有 Markdown 能当 `references` / `documents` 的**源**（D5）：源这一侧不放开关。
-      for (const ref of extractRefsWithLines(text, { anyExt: true })) {
+      //
+      // v0.22 修法 ①：`doc.refs.any` 就是 `extractRefsWithLines(text, { anyExt: true })`
+      // 的产物（读盘/索引还原那一刻算好的），有它就不必再扫一遍首部 —— 这也正是
+      // 「重启后不重新推导关系」的实现。`text` 只作为没有 `refs` 时的回落。
+      const refs = doc.refs && Array.isArray(doc.refs.any)
+        ? doc.refs.any
+        : extractRefsWithLines(text, { anyExt: true })
+      for (const ref of refs) {
         const other = resolveRef(ref.raw, index, rel, { anyExt: true })
         if (!other || other === rel) continue
         edge(rel, isMd(other) ? 'references' : 'documents', other, ref.line)
       }
     } else {
-      for (const imp of importsOf(text)) {
+      const imports = doc.refs && Array.isArray(doc.refs.imports)
+        ? doc.refs.imports
+        : importsOf(text)
+      for (const imp of imports) {
         const other = resolveSpec(imp.spec, rel, index)
         if (!other || other === rel) continue
         edge(rel, 'imports', other, imp.line)

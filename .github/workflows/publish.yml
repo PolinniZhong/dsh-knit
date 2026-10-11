@@ -40,7 +40,7 @@ jobs:
       # 本仓库零依赖、也没有 lockfile ⇒ 不能用 npm ci
       - run: npm install --no-audit --no-fund
 
-      # 发版前的门：697 项必须全绿
+      # 发版前的门：728 项必须全绿
       - run: npm test
 
       # 推 tag 触发时，挡一下「tag 与 package.json 版本不一致」

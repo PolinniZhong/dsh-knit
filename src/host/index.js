@@ -15,20 +15,26 @@
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { createReadStream, realpathSync, statSync } from 'node:fs'
-import { join, relative, resolve, sep } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { extractKeywords, rankByRelevance, topicLabel } from './relevance.js'
 import { registerKnitDocsTool } from './tool.js'
 // v0.12：引用关系。`links.js` **不反过来 import 本文件**（依赖由这里注入），所以没有环。
-import { buildLinkGraph, linksOf } from './links.js'
-// v0.21：关系事实表（谁提到谁）。**同步、零 I/O** —— 只吃记录上现成的 `head`。
-import { buildRelationFacts } from './relations.js'
+// v0.22 修法 ①：这里多用了一个 `extractRefsWithLines` —— 它把「抽取引用」这件事
+// 从「每次装配上下文的消费者各抽一遍」提前到「读盘那一次抽一遍，结果进索引」。
+import { buildLinkGraph, extractRefsWithLines, linksOf } from './links.js'
+// v0.21：关系事实表（谁提到谁）。**同步、零 I/O** —— 只吃记录上现成的 `refs` / `head`。
+// v0.22 修法 ①：`importsOf` 同样提前到读盘时执行，结果进索引的 `refs.imports`。
+import { buildRelationFacts, importsOf } from './relations.js'
 // v0.21：上下文控制层（固定 / 排除）。**纯逻辑 + 可选持久化**：本文件负责把
 // `ctx.storage`（拿得到才有）递给它，它自己不 import 任何官方包。
 import {
   createControlRegistry, applyPinOverride, excludedSet, sharedControlRegistry,
   CONTROL_ACTIONS,
 } from './control.js'
+// v0.22：增量上下文索引的持久层。**不参与排序、不缓存正文** —— 它只回答
+// 「这个文件的头部指纹和上次一样吗」。存储拿不到时它自己降级成空 Map。
+import { sharedIndexStore, headHashOf, refsShapeOk } from './index-store.js'
 // v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
 // ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
@@ -212,6 +218,63 @@ const cache = new Map()
 /** 缓存里正文的总字节数（配合 `MAX_CACHE_BYTES` 淘汰）。 */
 let cacheBodyBytes = 0
 
+/* ── v0.22 增量索引 ────────────────────────────────────────────────
+ *
+ * 审计结论（`Knit-v0.22-Phase0-审计.md` §2）：上面的 `cache` 已经兑现了「未变化文件不
+ * 重读、不重解析」和「改一个文件只重处理该文件」—— 暖扫 `readFile = 0`。它**缺**的是
+ * 跨进程：进程一没，缓存即空，重启后第一次扫描要把 700 个文件全部重读重解析。
+ *
+ * 所以这一版**不动检索算法**，只在 `cache` 外围加两件事：
+ *   1. 持久层 `indexStore`（`index-store.js`）：把每个文件的内容指纹与派生的标题/摘要
+ *      存进 DSH 自己的存储，让**重启后**能跳过读盘与解析；
+ *   2. 目录级 memo `dirMemo`：目录 mtime 未变就跳过 `readdir`（实测暖扫耗时**全部**是
+ *      `readdir + stat`，而 `collectDocs` 占扫描总耗时 104%–122%）。
+ *
+ * ⚠️ 三条不许破的边界：
+ *   · `mtimeMs + size` **不是**唯一证据 —— 必须再核 `headHash`（提示词 §4）。
+ *   · 树绝不因为「维护缓存」而遍历两遍 —— 目录 memo 只省 `readdir`，不改遍历顺序，
+ *     `MAX_DIRS` / `MAX_DEPTH` / `SCAN_BUDGET_MS` 的作用范围一字不动。
+ *   · 索引里**没有正文**（裁决 A）⇒ 正文永远来自当次读取，不可能陈旧。
+ */
+
+/** 进程内的增量索引 store（`apply()` 拿到 `ctx.storage` 时换成持久化的那份）。 */
+let indexRegistry = null
+
+/**
+ * 一轮扫描里「核过指纹的」记录数上限。
+ *
+ * 提示词 §5⑤ 要求「reconciliation 只读取变化项，必要时**分批**执行避免阻塞主交互」。
+ * 这个数字就是「分批」的粒度：坏掉的第一条会被立刻重读，其余未变化条目每轮抽查这么多，
+ * 于是整个工作区在一段窗口内被核完，而单轮扫描的额外读盘有界。
+ */
+const INDEX_VERIFY_PER_PASS = 8
+
+/**
+ * 本轮生效的抽验预算（默认 `INDEX_VERIFY_PER_PASS`）。
+ *
+ * 它可调，只为一件事：**证伪**。把预算设成 0，对账一次都不跑 ⇒ 「靠索引复用之后
+ * 没人核指纹」这件事必须能被测试抓出来（提示词 §18：新增守卫必须能够证伪）。
+ * 生产路径没有任何地方改它。
+ */
+let indexVerifyBudget = INDEX_VERIFY_PER_PASS
+
+/** 目录 → `{mtimeMs, md, code, media, dead, stats}`；目录 mtime 未变则跳过 `readdir`。 */
+const dirMemo = new Map()
+
+/** 已装载持久索引的工作区根 → `Map<rel, 记录>`（值只在扫描时读，不长期留存）。 */
+const indexRels = new Map()
+
+/** 已核过指纹的记录（`${hostRoot}\u0000${rel}`）—— 抽验是「没核过的优先」。 */
+const indexVerified = new Set()
+
+/** 抽验游标（每个 hostRoot 一个）—— 保证「分批」是轮转的，不是每次盯前几条。 */
+const indexVerifyCursor = new Map()
+
+/** 每个 hostRoot 最近一轮扫描被解析过的记录数（基准脚本用它断言「只重处理变化的文件」）。 */
+const indexStats = new Map()
+
+/* ── /v0.22 ──────────────────────────────────────────────────────── */
+
 /**
  * 写缓存并做容量淘汰（v0.20）。
  *
@@ -318,22 +381,87 @@ export function parseMarkdown(head, fileName) {
 }
 
 /**
- * 读一个 Markdown 文件的元信息，命中缓存则跳过读盘。
- * @param {string} absPath - 绝对路径
- * @returns {Promise<object|null>} 解析结果（含小写 haystack 与原文首部 head），读失败返回 null
+ * 从**已在内存里的首部**抽出索引要存的引用/导入列表（v0.22 修法 ①）。
+ *
+ * 为什么提前到这里做：引用图（`buildLinkGraph()`）与关系投影（`buildRelationFacts()`）
+ * 各自都要「原首部 → 候选引用」，而它们**互相不知道对方也抽过一遍**。把这一遍放进
+ * 读盘那一刻，结果同时进内存条目与索引记录，于是：进程内两个消费者各取所需、
+ * 重启后从索引直接取 —— 抽取次数从「每个消费者每轮一次」降到「每个文件每次读盘一次」。
+ *
+ * ⚠️ 两套 Markdown 口径都算、都存（见 `index-store.js` 模块头第 1 条）：
+ * `md` = `extractRefs()` 的默认口径（只认 `.md` 目标，引用图用），
+ * `any` = `anyExt: true`（还认 md→代码，关系投影用）。**不能只存一套再过滤** ——
+ * 两者各有自己的 `MAX_REFS_PER_DOC = 500` 截断点，近似会在引用极多的文件上改变目标集合。
+ *
+ * @param {string} head - 文件首部（已在内存里）
+ * @param {boolean} isCode - 代码走 `importsOf()`，Markdown 走引用抽取
+ * @returns {{md?: Array<object>, any?: Array<object>, imports?: Array<object>}} 抽取结果
  */
-async function readDoc(absPath) {
-  let st
-  try {
-    st = await stat(absPath)
-  } catch {
-    return null
+function refsForHead(head, isCode) {
+  const text = typeof head === 'string' ? head : ''
+  if (isCode) return { imports: importsOf(text) }
+  return {
+    md: extractRefsWithLines(text),
+    any: extractRefsWithLines(text, { anyExt: true }),
   }
-  if (!st.isFile()) return null
+}
 
-  const hit = cache.get(absPath)
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit
+/**
+ * v0.22：一份**完整的**索引记录 → `readDoc()` 形状的缓存条目。
+ *
+ * 「索引里存了什么」与「条目里能还原什么」是同一件事，这里就把它写死：
+ *
+ *   · `title` / `summary` / `refs` → 索引里各存一份（`refs` = 抽取后的引用/导入列表，见修法 ①）。
+ *   · `body`（整篇正文）→ **索引里没有，也永远不会有**。调用方（`readDoc`）因此
+ *     只在「这一轮不需要正文」时用这份还原结果（时间序扫描），相关检索仍然读盘。
+ *     这条分工就是裁决 A 的落实：正文不可能陈旧。
+ *
+ * ⚠️ 字段必须与 `readDoc()` 里的条目**逐字对齐**。少一个 `hayBody`，相关检索就会
+ * 在「条目看起来命中缓存」与「打分读到 undefined」之间产生静默的空结果。
+ *
+ * @param {object} record - 索引记录
+ * @returns {object} 缓存条目形状（`body` 为空串）
+ */
+function restoreFromIndex(record) {
+  return {
+    mtimeMs: record.mtimeMs,
+    size: record.size,
+    headHash: record.headHash,
+    title: record.title,
+    summary: record.summary,
+    // v0.22 修法 ①：索引里**没有原文首部**，只有抽取结果。所以还原出来的条目
+    // `head` 是空串、`refs` 带着关系投影与引用图需要的一切。谁要是还从 `head`
+    // 读内容，重启后就会**静默**拿到空串 —— 两个消费者因此都优先读 `refs`。
+    head: '',
+    refs: record.refs,
+    body: '',
+    bodyBytes: 0,
+    bodyTruncated: false,
+    // v0.22：还原出来的条目**没有正文**。`hydrateBodies()` 靠这一位决定补不补，
+    // 相关检索因此不会拿到一份「看着像命中、其实是空串」的正文去打分。
+    bodyReady: false,
+    hayTitle: String(record.title).toLowerCase(),
+    haySummary: String(record.summary).toLowerCase(),
+    hayBody: '',
+  }
+}
 
+/**
+ * `readDoc()` 的读盘那一半（v0.22 从原函数里原样拆出，逻辑一字未改）。
+ *
+ * ⚠️ v0.22 起这就是**唯一**的文档读取路径：原来那个「先查缓存再决定读不读」的包装
+ * 已经并进 `collectDocs()` 的逐条判定里（缓存 / 索引 / 重读三选一，见那里的注释）。
+ * 留两份判定只会漂移 —— 所以包装函数被删掉了，这里只负责「读 + 解析」。
+ *
+ * @param {string} absPath - 绝对路径
+ * @param {object} st - 已取得的 stat 结果
+ * @returns {Promise<object|null>} 解析结果，读失败返回 null
+ */
+async function readDocFromDisk(absPath, st, options = {}) {
+  // v0.22 修法 ①：抽取结果可以不要。`hydrateBodies()` 补正文时条目上已经有
+  // 索引带来的 `refs`（同一份内容算出来的同一个结果），再抽一遍纯属白烧 CPU ——
+  // 实测在 16KB 首部的语料上是每文件两次正则扫描。
+  const wantRefs = options.refs !== false
   let head = ''
   let body = ''
   let bodyBytes = 0
@@ -358,8 +486,18 @@ async function readDoc(absPath) {
     size: st.size,
     title,
     summary,
+    // v0.22：内容指纹（对上面那段**已在内存里**的头部算，不额外读盘）。
+    // 它是「mtime+size 之外的第二道证据」—— 见 `Knit-决策记录.md` 裁决 A。
+    headHash: headHashOf(head),
+    // v0.22：正文已在手上（这条路径刚刚整读过）。
+    bodyReady: true,
+    // v0.22 修法 ①：抽取结果随读盘一起算出来 —— 进索引的就是它（原文首部不进索引）。
+    // `wantRefs: false` 是给「条目上已经有一份同一个内容算出来的 refs」的调用方用的
+    // （`hydrateBodies()` 补正文时就是这种情况），省掉每文件两次正则扫描。
+    ...(wantRefs ? { refs: refsForHead(head, false) } : {}),
     // ⚠️ 原文首部**留在缓存里**（v0.14）：上下文装配要用它抽引用关系。
     // 它已经在内存里了 —— 再读一遍盘才是浪费。`publicDoc()` 不会把它发出去。
+    // 修法 ① 之后 `refs` 是首选、`head` 只是**同进程内的**兜底。
     head,
     // v0.20：正文（截到上限）也留在缓存里 —— 片段切分与全文打分的输入。
     // 语义上 `head` 是「首部」（引用关系用，16KB），`body` 是「全文」，
@@ -378,11 +516,11 @@ async function readDoc(absPath) {
 }
 
 /**
- * 读一个**代码文件**参与检索所需的头部（v0.19），命中缓存则跳过读盘。
+ * 读一个**代码文件**参与检索所需的头部（v0.19）。
  *
- * 与 `readDoc` 共用同一张 `cache`（键是绝对路径，一个路径只可能是文档或代码之一），
- * 并复用同一套 `haystack` 形状 —— 这正是「不给代码建第二套检索」在数据层面的落实：
- * `relevance.js` 一个字节都不用改，它看到的仍是它一直在看的 `{title, summary, body}`。
+ * 与 `readDocFromDisk()` 共用同一套 `haystack` 形状 —— 这正是「不给代码建第二套检索」
+ * 在数据层面的落实：`relevance.js` 一个字节都不用改，它看到的仍是它一直在看的
+ * `{title, summary, body}`。
  *
  * haystack 的字段语义在这里被**重新指派**（需求 §13：代码不复用 Markdown 的语义）：
  *
@@ -393,22 +531,16 @@ async function readDoc(absPath) {
  * 于是 `FIELD_WEIGHTS` 现成的 4 / 2 / 1 恰好等于
  * 「filename × 4 / path × 2 / content × 1」，排序器零改动。
  *
+ * ⚠️ v0.22：这就是**唯一**的代码读取路径（原因同 `readDocFromDisk()`）。
+ * 它**必须**知道 `rel` —— haystack 的 `summary` 槽放的正是相对路径的目录部分。
+ *
  * @param {string} absPath - 绝对路径
  * @param {string} root - 工作区根
+ * @param {object} st - 已取得的 stat 结果
  * @returns {Promise<object|null>} 解析结果，读失败返回 null
  */
-async function readCode(absPath, root) {
-  let st
-  try {
-    st = await stat(absPath)
-  } catch {
-    return null
-  }
-  if (!st.isFile()) return null
-
-  const hit = cache.get(absPath)
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit
-
+async function readCodeFromDisk(absPath, root, st, options = {}) {
+  const wantRefs = options.refs !== false
   let head = ''
   let body = ''
   let bodyBytes = 0
@@ -434,6 +566,11 @@ async function readCode(absPath, root) {
   const entry = {
     mtimeMs: st.mtimeMs,
     size: st.size,
+    // v0.22：内容指纹 + 「正文已在手上」，口径与 `readDocFromDisk` 一致。
+    headHash: headHashOf(head),
+    bodyReady: true,
+    // v0.22 修法 ①：代码侧抽的是 import 语句（`importsOf()` 的 `{spec, line}`）。
+    ...(wantRefs ? { refs: refsForHead(head, true) } : {}),
     head,
     body,
     bodyBytes,
@@ -453,13 +590,34 @@ async function readCode(absPath, root) {
 }
 
 /**
- * 广度优先扫出工作区里的文档、代码与媒体文件（v0.19）。
+ * `stat` 的「拿不到就是没有」版本（v0.22）。
+ *
+ * 目录 memo 的判据是目录 mtime，而 `stat` 失败（权限、刚被删）不是一个可以让扫描
+ * 崩掉的理由 —— 失败一律当 `null`，调用方据此走原路径重新 `readdir`。
+ *
+ * @param {string} path - 绝对路径
+ * @returns {Promise<object|null>} stat 结果或 null
+ */
+async function statOrNull(path) {
+  try {
+    return await stat(path)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 广度优先扫出工作区里的文档、代码与媒体文件（v0.19；v0.22 加目录级 memo）。
  *
  * 一次遍历同时收三类，目录预算与时间预算共享；三类各自有数量上限，
  * 截图再多也不会把文档名额挤光，代码再多也不会（见 `MAX_CODE`）。
  *
  * **扫描只做「目录元数据 → 分类 → 准入」**：这里不读任何文件内容，
  * 正文读取留给 `collectDocs`（bounded，见 `readCode`）。
+ *
+ * v0.22：目录自己的 mtime 与上一轮逐字相同 ⇒ 跳过这一层的 `readdir`，改用缓存的
+ * 分类结果。**它省的是 syscall，不是正确性** —— 缓存的是「这一层有什么、各自算哪类」，
+ * 重新入队、计数、配额三条规则一字未改（见审计文档 §3 结论 4 与 §5 R3）。
  *
  * @param {string} root - 工作区根（会话 cwd）
  * @returns {Promise<{md: string[], code: string[], media: Array<{abs:string, kind:string}>,
@@ -474,6 +632,16 @@ async function collectEntries(root) {
   const code = []
   /** @type {Array<{abs:string, kind:string}>} */
   const media = []
+  /**
+   * 同一轮扫描内的去重集合（v0.22）。
+   *
+   * 目录 memo 让**同一层**可能被两条路径各命中一次（父目录缓存里已经有子目录清单，
+   * 子目录自己也命中 memo），不去重的话列表长度会随目录层级虚增。集合是本轮内幂等的
+   * 唯一保证 —— 它的作用域**只有这一轮**，不进任何持久结构。
+   */
+  const mdSeen = new Set()
+  const codeSeen = new Set()
+  const mediaSeen = new Set()
   const deadline = startedAt + SCAN_BUDGET_MS
   /** @type {Array<{dir:string,depth:number}>} */
   const queue = [{ dir: root, depth: 0 }]
@@ -497,6 +665,60 @@ async function collectEntries(root) {
     const { dir, depth } = queue.shift()
     visited += 1
 
+    // ── v0.22：目录没变就不重新 `readdir` ──────────────────────────────
+    //
+    // 判据只有一条 —— 目录自身的 mtime 与上一轮**逐字相同**。APFS 实测（审计文档 §3
+    // 结论 4）：新增 / 删除文件只更新**直接父目录**的 mtime，且**不向上传播** ⇒ 这个
+    // 判据不会漏掉「某个子目录里多了个文件」，因为那一层自己的 mtime 变了。
+    //
+    // ⚠️ 它只决定「要不要重新 `readdir`」，**不改变遍历顺序**：命中的目录照样把缓存的
+    // 子目录重新入队，于是 `MAX_DIRS` / `MAX_DEPTH` / `SCAN_BUDGET_MS` 的作用范围一字不动。
+    // （旧实测否掉的是 cap-aware **剪枝** —— 提前 break 不遍历，那会让语料变小，见 §5 R3。）
+    const snapshot = await statOrNull(dir)
+    if (snapshot) {
+      const memo = dirMemo.get(dir)
+      if (memo && memo.mtimeMs === snapshot.mtimeMs) {
+        // 计数照旧累加：缓存省的是 `readdir`，不是「这个工作区里有什么」。
+        for (const key of Object.keys(stats)) stats[key] += memo.stats[key] || 0
+        // 两份列表都受**当前**配额约束，且必须**去重**：同一轮扫描里 A 命中了目录 memo、
+        // B 也命中了，它们缓存的是各自那一层，`B` 的子目录在 `A` 的记录里也会出现一次。
+        // 去重集合是「同一轮内幂等」的保证 —— 少了它，列表长度会随目录层级虚增。
+        for (const abs of memo.md) {
+          if (md.length >= MAX_DOCS) break
+          if (mdSeen.has(abs)) continue
+          mdSeen.add(abs)
+          md.push(abs)
+        }
+        for (const abs of memo.allCode) {
+          if (code.length >= MAX_CODE) break
+          if (codeSeen.has(abs)) continue
+          codeSeen.add(abs)
+          code.push(abs)
+        }
+        for (const item of memo.allMedia) {
+          if (media.length >= MAX_MEDIA) break
+          if (mediaSeen.has(item.abs)) continue
+          mediaSeen.add(item.abs)
+          media.push({ abs: item.abs, kind: item.kind })
+        }
+        if (depth < MAX_DEPTH) {
+          for (const sub of memo.dirs) queue.push({ dir: sub, depth: depth + 1 })
+        }
+        continue
+      }
+    }
+    const mtimeMs = snapshot ? snapshot.mtimeMs : null
+    /** 本目录**自己**发现的子目录与文件（不含更深层）—— 缓存的就是这一小份。 */
+    const local = {
+      dirs: [], md: [], allCode: [], allMedia: [],
+      stats: {
+        mdSeen: 0, mdAdmitted: 0,
+        codeSeen: 0, codeAdmitted: 0, codeExcluded: 0,
+        mediaSeen: 0, mediaAdmitted: 0,
+        generated: 0, ignored: 0,
+      },
+    }
+
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
@@ -510,6 +732,7 @@ async function collectEntries(root) {
         if (depth >= MAX_DEPTH) continue
         if (SKIP_DIRS.has(entry.name)) continue
         if (entry.name.startsWith('.')) continue
+        if (mtimeMs !== null) local.dirs.push(abs)
         queue.push({ dir: abs, depth: depth + 1 })
       } else if (entry.isFile()) {
         const info = classifyFile(entry.name)
@@ -519,20 +742,61 @@ async function collectEntries(root) {
         if (isContextKind(info.kind)) {
           if (info.kind === KIND_DOC) {
             stats.mdSeen += 1
-            if (md.length < MAX_DOCS) { md.push(abs); stats.mdAdmitted += 1 }
+            local.stats.mdSeen += 1
+            if (mtimeMs !== null) local.md.push(abs)
+            if (md.length < MAX_DOCS && !mdSeen.has(abs)) {
+              mdSeen.add(abs)
+              md.push(abs)
+              stats.mdAdmitted += 1
+              local.stats.mdAdmitted += 1
+            }
           } else {
             stats.codeSeen += 1
-            if (code.length < MAX_CODE) { code.push(abs); stats.codeAdmitted += 1 } else stats.codeExcluded += 1
+            local.stats.codeSeen += 1
+            if (mtimeMs !== null) local.allCode.push(abs)
+            if (code.length < MAX_CODE && !codeSeen.has(abs)) {
+              codeSeen.add(abs)
+              code.push(abs)
+              stats.codeAdmitted += 1
+              local.stats.codeAdmitted += 1
+            } else {
+              stats.codeExcluded += 1
+              local.stats.codeExcluded += 1
+            }
           }
         } else if (info.kind === KIND_IMAGE || info.kind === KIND_VIDEO) {
           stats.mediaSeen += 1
-          if (media.length < MAX_MEDIA) { media.push({ abs, kind: info.kind }); stats.mediaAdmitted += 1 }
+          local.stats.mediaSeen += 1
+          if (mtimeMs !== null) local.allMedia.push({ abs, kind: info.kind })
+          if (media.length < MAX_MEDIA && !mediaSeen.has(abs)) {
+            mediaSeen.add(abs)
+            media.push({ abs, kind: info.kind })
+            stats.mediaAdmitted += 1
+            local.stats.mediaAdmitted += 1
+          }
         } else if (info.kind === KIND_GENERATED) {
           // 生成/噪声产物：**数一下，但一个都不准入**（需求 §6 §7）。
           stats.generated += 1
+          local.stats.generated += 1
         } else {
           stats.ignored += 1
+          local.stats.ignored += 1
         }
+      }
+    }
+
+    // 只有拿到 mtime 的目录才入 memo：`mtimeMs === null` 意味着这次 `stat` 失败，
+    // 而「失败」绝不能变成一条「以后都不用再看」的记录。上限与解析缓存同量级，
+    // 超出按插入序淘汰最早的（与 `cacheSet` 同一条 FIFO 纪律）。
+    if (mtimeMs !== null) {
+      dirMemo.set(dir, {
+        mtimeMs, dirs: local.dirs, md: local.md,
+        allCode: local.allCode, allMedia: local.allMedia, stats: local.stats,
+      })
+      while (dirMemo.size > MAX_CACHE_ENTRIES) {
+        const oldest = dirMemo.keys().next()
+        if (oldest.done) break
+        dirMemo.delete(oldest.value)
       }
     }
   }
@@ -581,41 +845,369 @@ async function readMediaMeta(root, { abs, kind }) {
 }
 
 /**
+ * 清掉**全部**进程内派生状态（v0.22；与 `relations.js` 的 `resetRelationCache()` 同定位）。
+ *
+ * 仅供测试：用例之间必须能拿到一个「刚重启」的插件，而模块级状态在同一个进程里是共享的。
+ * 生产路径一次都不会调用它。
+ *
+ * @returns {void}
+ */
+export function resetIndexMemory() {
+  cache.clear()
+  cacheBodyBytes = 0
+  dirMemo.clear()
+  indexRels.clear()
+  indexVerified.clear()
+  indexVerifyCursor.clear()
+  indexStats.clear()
+  indexRegistry = null
+  indexVerifyBudget = INDEX_VERIFY_PER_PASS
+}
+
+/**
+ * 装一次插件存储（`apply()` 拿到 `ctx.storage` 时换掉内存版；测试也走它）。
+ * @param {{createIndexStore?: Function}} store - 索引存储实例；传 `null` 退回「没有存储」
+ * @returns {void}
+ */
+export function setIndexRegistry(store) {
+  indexRegistry = store || null
+}
+
+/**
+ * 最近一轮扫描的索引计数（v0.22）。
+ *
+ * 验收要求「不能只说更快」，所以这些**计数**要和墙钟一起报出来：
+ * 这一轮真正读盘的候选数、靠索引复用的条数、写回的差量条数。
+ * 它只有计数，没有文件名、没有正文、没有用户数据 —— 因此可以安全地进基准报告。
+ *
+ * @param {string} root - canonical 工作区根
+ * @returns {{readFiles:number, reused:number, put:number, del:number,
+ *            persisted:boolean, reason:string}|null} 计数或 null
+ */
+export function indexStatsFor(rawRoot) {
+  const held = indexStats.get(hostPathOf(rawRoot))
+  return held ? { ...held } : null
+}
+
+/**
+ * 索引存储当前是否**已被证明**可用（`persisted` 只在读或写成功之后才是 true）。
+ * @returns {{persisted:boolean, reason:string}} 状态
+ */
+export function indexStorageStatus() {
+  return indexRegistry
+    ? { persisted: indexRegistry.persisted, reason: indexRegistry.reason }
+    : { persisted: false, reason: 'no-storage' }
+}
+
+/**
+ * 调本轮抽验预算（v0.22）。**只为证伪**：设成 0 时对账一次都不跑，测试据此证明
+ * 「指纹核对」这道守卫真的在起作用；生产代码不调用它。
+ *
+ * @param {number} budget - 非负整数；非法值退回默认 `INDEX_VERIFY_PER_PASS`
+ * @returns {number} 生效之后的预算
+ */
+export function setIndexVerifyBudget(budget) {
+  const n = Number(budget)
+  indexVerifyBudget = Number.isFinite(n) && n >= 0 ? Math.trunc(n) : INDEX_VERIFY_PER_PASS
+  return indexVerifyBudget
+}
+
+/** 抽验标记的键（`hostRoot` 与 `rel` 之间用 NUL，避免路径里出现这个组合）。 */
+const verifyKey = (root, rel) => `${root}\u0000${rel}`
+
+/**
+ * 把一个工作区的索引读进内存（每个 root 只读一次）。
+ *
+ * 读一次就够：这一轮扫描内的所有判定都以这份快照为准，写回走差量。
+ * 存储不可用时 `read()` 自己返回空 Map —— 这条路径与「索引为空」完全同形，
+ * 检索因此**不需要**知道存储坏没坏（提示词 §5③ 的降级要求）。
+ *
+ * @param {string} root - canonical 工作区根
+ * @returns {Promise<Map<string, object>>} rel → 记录
+ */
+async function ensureIndexRels(root) {
+  const held = indexRels.get(root)
+  if (held) return held
+  const map = indexRegistry ? await indexRegistry.read(root) : new Map()
+  indexRels.set(root, map)
+  return map
+}
+
+/**
+ * 从「靠索引复用」的记录里挑出本轮要**核指纹**的那几条（v0.22）。
+ *
+ * 两条纪律：
+ *   · **有界** —— 最多 `INDEX_VERIFY_PER_PASS` 条，与语料规模无关，于是单轮扫描的
+ *     额外读盘是常数级的，不会把一次用户可见的检索拖慢。
+ *   · **公平** —— 优先挑「这个进程里还没核过」的，游标轮转推进；全核过一遍之后
+ *     从头再核，于是对账是**持续**的，不是启动时一次性走过场。
+ *
+ * @param {string} root - canonical 工作区根
+ * @param {Array<{abs:string, rel:string, isCode:boolean, record:object}>} reused - 复用清单
+ * @returns {Array<{abs:string, rel:string, isCode:boolean, record:object}>} 本轮要核的
+ */
+function sampleForVerify(root, reused) {
+  if (reused.length === 0) return []
+  const take = Math.min(indexVerifyBudget, reused.length)
+  const cursorKey = `verify\u0000${root}`
+  const cursor = (indexVerifyCursor.get(cursorKey) || 0) % reused.length
+  const out = []
+  for (let i = 0; i < reused.length && out.length < take; i += 1) {
+    const item = reused[(cursor + i) % reused.length]
+    if (indexVerified.has(verifyKey(root, item.rel))) continue
+    out.push(item)
+  }
+  // 全部核过了（进程活得够久）⇒ 从游标处再核一遍，保持持续对账。
+  if (out.length === 0) {
+    for (let i = 0; i < take; i += 1) out.push(reused[(cursor + i) % reused.length])
+  }
+  indexVerifyCursor.set(cursorKey, (cursor + take) % reused.length)
+  return out
+}
+
+/**
+ * 一条已解析记录 → 可持久化的索引记录。
+ *
+ * 存的是**抽取后的 `refs`**，不是原文首部（v0.22 修法 ①，见 `index-store.js` 模块头）：
+ * `buildRelationFacts()` / `buildLinkGraph()` 要的只是「这份文件提到了哪些路径」，
+ * 存 16KB 原文会让索引体积 ≈ 源码体积，而 `KvUnit` 只有 `loadAll()` ⇒ 每次用索引
+ * 都要为加载一份和源码一样大的 JSON 付钱（实测让默认的相关检索重启后慢 1.31×）。
+ *
+ * @param {object} entry - `readDoc()` / `readCode()` 的条目
+ * @param {string} rel - 工作区相对路径
+ * @returns {object} 索引记录
+ */
+function recordFor(entry, rel) {
+  return {
+    rel,
+    mtimeMs: entry.mtimeMs,
+    size: entry.size,
+    headHash: entry.headHash,
+    title: entry.title,
+    summary: entry.summary,
+    refs: entry.refs,
+  }
+}
+
+/**
+ * 算一份 rel → 记录的快照，并与装载进来的旧索引比对出差量。
+ *
+ * 三种变化各有各的动作，**都在这里**：
+ *   · 新增 / 更新 → `put`（只写这一条）
+ *   · 少了的（被删 / 被移出准入范围 / 被 Git 切分支切没了）→ `del`（只删这一条）
+ *   · 没变的 → 两边都不出现，一个字节都不写
+ *
+ * 删除必须有界：一轮扫描只抽验 `INDEX_VERIFY_PER_PASS` 条**没在本轮语料里出现**的旧记录
+ * （游标轮转，见 `sweepStale`）—— 否则「1000 个文件全删掉」会把删除量变成一次 O(N) 的写风暴。
+ *
+ * @param {string} root - canonical 工作区根
+ * @param {Map<string, object>} next - 本轮算出的 rel → 记录
+ * @param {Map<string, object>} before - 装载进来的旧索引
+ * @returns {{put: Array<object>, del: string[]}} 差量
+ */
+function indexDiff(root, next, before) {
+  const put = []
+  const del = []
+  for (const [rel, record] of next) {
+    const old = before.get(rel)
+    if (old && old.headHash === record.headHash
+      && old.mtimeMs === record.mtimeMs && old.size === record.size) continue
+    put.push(record)
+  }
+  // 本轮语料里根本没有的旧记录：抽验删除（游标轮转，保证「分批」是公平的）。
+  const stale = []
+  for (const rel of before.keys()) {
+    if (!next.has(rel)) stale.push(rel)
+  }
+  if (stale.length > 0) {
+    let cursor = indexVerifyCursor.get(root) || 0
+    if (cursor >= stale.length) cursor = 0
+    const take = Math.min(INDEX_VERIFY_PER_PASS, stale.length)
+    for (let i = 0; i < take; i += 1) {
+      del.push(stale[(cursor + i) % stale.length])
+    }
+    indexVerifyCursor.set(root, (cursor + take) % stale.length)
+  }
+  return { put, del }
+}
+
+/**
+ * 把一批记录里缺少正文的那些**按需**补齐（v0.22）。
+ *
+ * 为什么必须有这一步：索引里**没有正文**（裁决 A），而从索引还原出来的条目
+ * `body` 是空串。时间序列表不需要正文（`publicDoc()` 本来就不下发它），但
+ * **相关检索需要** —— 文件级 BM25 打分的输入是整篇小写正文。
+ *
+ * 所以相关路径照旧读正文，「跳过读盘」这一版只在时间序路径上成立，这是**如实记下的代价**，
+ * 不是遗漏。补齐仍然是有界的：只补真的会参与打分的那批（`pool` 已按 kind 切好）。
+ *
+ * @param {Array<object>} list - 条目（原地升级）
+ * @param {string} root - 工作区根
+ * @returns {Promise<number>} 真正补了几条
+ */
+async function hydrateBodies(list, root) {
+  let hydrated = 0
+  for (const doc of list) {
+    if (doc.bodyReady) continue
+    // 条目上已经有 `refs`（索引复用来的）时明说不要重算 —— 省掉两次正则扫描，
+    // 而结果本来就一模一样。没有 `refs` 时才让它顺带算出来。
+    const wantRefs = !(doc.refs && typeof doc.refs === 'object')
+    const meta = doc.kind === KIND_CODE
+      ? await readCodeFromDisk(doc.path, root, { mtimeMs: doc.mtimeMs, size: doc.size }, { refs: wantRefs })
+      : await readDocFromDisk(doc.path, { mtimeMs: doc.mtimeMs, size: doc.size }, { refs: wantRefs })
+    if (!meta) continue
+    doc.head = meta.head
+    // v0.22 修法 ①：整读时顺带算出的抽取结果也要跟着升级 —— 否则「索引复用来的
+    // `refs`」与「刚读出来的 `head`」会在同一个条目上不一致（关系用旧的、引用图用新的）。
+    if (meta.refs) doc.refs = meta.refs
+    doc.body = meta.body
+    doc.bodyBytes = meta.bodyBytes
+    doc.bodyTruncated = meta.bodyTruncated
+    doc.haystack = { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody }
+    doc.bodyReady = true
+    cacheSet(doc.path, meta)
+    hydrated += 1
+  }
+  return hydrated
+}
+
+/**
  * 扫出工作区里全部文档、代码与媒体的元信息（各自按 mtime 倒序）。
  *
  * 三类共用一次目录遍历（`collectEntries`），但**只有文档与代码会读正文头部**
  * ——媒体永远只 stat（视频可能上百 MB）。
+ *
+ * v0.22：每条候选先过一遍「有没有资格不读盘」——顺序是
+ *   ① 进程内缓存命中（mtime+size）→ 直接复用，一次盘都不读；
+ *   ② 持久索引里有记录且 mtime+size 一致 → **只读头部核指纹**（≤16KB），核过就还原；
+ *   ③ 其余 → 老老实实整读 + 重解析。
+ * 第 ② 步是这一版唯一新增的一致性问题：「同 mtime、同 size、内容变了」必须在核过指纹后
+ * 才敢复用，而提示词 §4 明确禁止把 mtime/size 当作唯一证据。
  *
  * @param {string} root - 工作区根
  * @returns {Promise<{docs: Array<object>, code: Array<object>, media: Array<object>,
  *                    truncated: boolean, codeTruncated: boolean, mediaTruncated: boolean,
  *                    stats: object, scanMs: number}>}
  */
-export async function collectDocs(root) {
+export async function collectDocs(rawRoot, options = {}) {
+  // v0.22：**索引一律按 canonical 工作区根记账**。
+  //
+  // 为什么必须在这里归一，而不是只靠调用方：`scan()` 自己有 `hostPathOf()`（展开符号
+  // 链接），但 `collectDocs()` 是导出函数，工具与测试会**直接用工作区原路径**调它。
+  // 两边都用原路径分别记账的话，同一个工作区会留下两份内存状态，而**存储里
+  // 同一个键会被两个不同的 `root` 值轮流覆盖** —— 于是「跨工作区隔离」的过滤条件
+  // 会随最后一次写入摇摆，索引时灵时不灵，且完全不报错。
+  // `hostPathOf()` 在路径不存在时兜底返回原值，所以这里不会把「打不开」升级成异常。
+  const root = hostPathOf(rawRoot)
+  // v0.22 修法 ②（2026-10-10）：**要正文的扫描不查索引**。
+  //
+  // 索引省下的是「读盘 + 解析正文」，而相关检索（BM25）无论如何都要拿到全部正文
+  // —— `rankByRelevance()` 的 `avgdl` / `df` 都是正文的函数（裁决 A）。于是那条路上
+  // 复用来的记录会被 `hydrateBodies()` 立刻整读补回正文，净效果是**多付一次索引装载**：
+  // 每条记录一个文件 open + read + `JSON.parse`，实测 600 条约 60–75 ms，而且这个成本
+  // 与记录里的载荷大小**几乎无关**（见 `Knit-v0.22-实现与基准报告.md` §4.5）。
+  // 判据因此不是「有没有索引」，而是**这一轮到底用不用得着正文** —— 只有调用方知道，
+  // 于是由它显式传 `{ index: false }`；不传仍然查索引（低层 API 不替调用方做这个决定）。
+  const useIndex = options.index !== false
   const found = await collectEntries(root)
   const docs = []
   // v0.20：被 `MAX_BODY_BYTES` 截掉尾巴的文件数。**只是计数**，用来在规模报告里
   // 诚实说出「有多大比例的文件没有全量参与打分」，不参与任何排序。
   let bodyTruncated = 0
 
+  // v0.22：装载索引 + 逐条「读盘 / 还原」判定。整段就是上面的 ①②③。
+  // `useIndex === false` 时给一张空表：下面的 `resolve()` 因此逐条走 ③（整读 + 重解析），
+  // 而**不装载、不对账、不写回** —— 正是修法 ② 要的那条口径。
+  const index = useIndex ? await ensureIndexRels(root) : new Map()
+  const nextIndex = new Map()
+  let readFiles = 0
+
+  /**
+   * 一条候选的取数判定（文档与代码共用；`isCode` 只决定读盘时走哪个解析器）。
+   * @param {string} abs - 绝对路径
+   * @param {string} rel - 工作区相对路径
+   * @param {object} st - 已取得的 stat
+   * @param {boolean} isCode - 是否代码
+   * @returns {Promise<object|null>} 条目
+   */
+  /** 本轮靠**进程内 `cache`** 复用的条数（v0.20 就有的能力，与索引复用分开报）。 */
+  let cached = 0
+
+  const resolve = async (abs, rel, st, isCode) => {
+    const key = verifyKey(root, rel)
+    const hit = cache.get(abs)
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+      // ① 进程内已解析过，且 mtime+size 未变 —— 一次盘都不读。
+      //    ⚠️ 它与 `reused`（靠索引还原）**分开计数**：v0.20/v0.21 就已经做到了
+      //    「同一进程内不重读」，而 v0.22 的收益在**跨进程重启**。混在一起报，
+      //    就会把旧能力算进这一版的成绩里。
+      indexVerified.add(key)
+      cached += 1
+      return hit
+    }
+    const stored = index.get(rel)
+    const plausible = !!stored
+      && typeof stored.headHash === 'string' && stored.headHash.length > 0
+      // v0.22 修法 ①：`refs` 必须真的在里面。v2 记录（存的是 `head`）与 v1 记录
+      // 都过不了这一关 ⇒ 当「没有可用记录」处理 ⇒ 本轮回退读盘并重建，
+      // 迁移不需要任何专用代码。少这一条，重启后关系投影会**静默少掉**。
+      && refsShapeOk(stored.refs)
+      && stored.mtimeMs === st.mtimeMs && stored.size === st.size
+    if (plausible) {
+      // ② 元信息一致 ⇒ **正文与头部都不读**，直接用索引还原。
+      //
+      //    这里就是这一版的立论：`mtime + size` 当**快速筛子**用（提示词 §4 允许），
+      //    而「筛过之后凭什么信」由两件事回答 ——
+      //      a) 每条记录都带 `headHash`，内容一旦变化，下一次抽验必然发现；
+      //      b) 每轮扫描抽验 `INDEX_VERIFY_PER_PASS` 条（`verifySampled()`），
+      //         把「同 mtime 同 size 的编辑」这类伪造在一个有界窗口内抓出来。
+      //    两者合起来才是「mtime/size 不是唯一证据」的落实 —— 不是让每次扫描都重读一遍
+      //    头部（那等于没省），而是**读到的那一份永远能被指纹复核**。
+      indexVerified.add(key)
+      reused.push({ abs, rel, isCode, record: stored })
+      return restoreFromIndex(stored)
+    }
+    // ③ 没有可用记录（或元信息就变了）—— 整读 + 重解析，并重算指纹。
+    indexVerified.add(key)
+    const meta = isCode
+      ? await readCodeFromDisk(abs, root, st)
+      : await readDocFromDisk(abs, st)
+    if (!meta) return null
+    readFiles += 1
+    return meta
+  }
+
+  /** 本轮「靠索引复用」的候选 —— 抽验的对象。 */
+  const reused = []
+
   for (const abs of found.md) {
-    const meta = await readDoc(abs)
+    const st = await statOrNull(abs)
+    if (!st || !st.isFile()) continue
+    const rel = relative(root, abs).split(sep).join('/')
+    const meta = await resolve(abs, rel, st, false)
     if (!meta) continue
     if (meta.bodyTruncated) bodyTruncated += 1
     docs.push({
       kind: KIND_DOC,
       path: abs,
-      rel: relative(root, abs).split(sep).join('/'),
+      rel,
       name: abs.split(sep).pop(),
       title: meta.title,
       summary: meta.summary,
       size: meta.size,
       mtimeMs: meta.mtimeMs,
+      headHash: meta.headHash,
+      // v0.22 修法 ①：抽取后的引用列表（索引里存的就是它）。内部字段，不下发。
+      refs: meta.refs,
       // 原文首部：`buildContextFor()` 抽引用关系用（v0.14）。内部字段，不下发。
+      // 索引复用来的条目这里是空串 —— 消费方必须优先读 `refs`。
       head: meta.head,
       // v0.20：整篇正文随记录走 —— 片段切分与 `matches` 的输入。
       // 它是**内部字段**：`publicDoc()` 不转发正文，只转发派生出的行号与摘要。
       body: meta.body,
+      bodyReady: !!meta.bodyReady,
+      bodyBytes: meta.bodyBytes,
+      bodyTruncated: meta.bodyTruncated,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
@@ -626,24 +1218,86 @@ export async function collectDocs(root) {
   // 这不是「第二套数据模型」，就是同一套模型里多了一类 kind。
   const code = []
   for (const abs of found.code) {
-    const meta = await readCode(abs, root)
+    const st = await statOrNull(abs)
+    if (!st || !st.isFile()) continue
+    const rel = relative(root, abs).split(sep).join('/')
+    const meta = await resolve(abs, rel, st, true)
     if (!meta) continue
     if (meta.bodyTruncated) bodyTruncated += 1
     code.push({
       kind: KIND_CODE,
       path: abs,
-      rel: relative(root, abs).split(sep).join('/'),
+      rel,
       name: abs.split(sep).pop(),
       title: meta.title,
       summary: meta.summary,
       size: meta.size,
       mtimeMs: meta.mtimeMs,
+      headHash: meta.headHash,
+      refs: meta.refs,
       head: meta.head,
       body: meta.body,
+      bodyReady: !!meta.bodyReady,
+      bodyBytes: meta.bodyBytes,
+      bodyTruncated: meta.bodyTruncated,
       haystack: { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody },
     })
   }
   code.sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+  // v0.22：**有界对账**。抽验「靠索引复用」的那些记录 —— 读头部、比指纹；对不上就
+  // 重读重解析并**就地改正刚刚交出去的那条记录**。每轮只抽 `INDEX_VERIFY_PER_PASS` 条，
+  // 游标轮转，于是整个工作区在一段有界的窗口内被核完，而单轮扫描的额外读盘是常数级的
+  // （提示词 §5⑤「必要时分批执行避免阻塞主交互」）。
+  const byRel = new Map()
+  for (const doc of docs) byRel.set(doc.rel, doc)
+  for (const doc of code) byRel.set(doc.rel, doc)
+  const sampled = sampleForVerify(root, reused)
+  let verified = 0
+  let repaired = 0
+  for (const item of sampled) {
+    if (!item) continue
+    let head = null
+    try {
+      const buf = await readFile(item.abs)
+      // ⚠️ 代码的头部口径是 `CODE_HEAD_BYTES`（8KB），文档是 `HEAD_BYTES`（16KB）。
+      // 用错长度算出来的指纹**永远对不上**（会让索引对代码彻底失效且不报错），
+      // 所以这一行必须与 `readDocFromDisk` / `readCodeFromDisk` 里那行逐字一致。
+      head = buf.subarray(0, item.isCode ? CODE_HEAD_BYTES : HEAD_BYTES).toString('utf8')
+    } catch {
+      continue
+    }
+    readFiles += 1
+    verified += 1
+    if (headHashOf(head) === item.record.headHash) continue
+    // 指纹不符 —— 元信息骗了我们。重读重解析，并改正这条记录。
+    const fresh = await statOrNull(item.abs)
+    if (!fresh || !fresh.isFile()) continue
+    const meta = item.isCode
+      ? await readCodeFromDisk(item.abs, root, fresh)
+      : await readDocFromDisk(item.abs, fresh)
+    if (!meta) continue
+    readFiles += 1
+    repaired += 1
+    const doc = byRel.get(item.rel)
+    if (!doc) continue
+    doc.head = meta.head
+    doc.refs = meta.refs
+    doc.title = meta.title
+    doc.summary = meta.summary
+    doc.size = meta.size
+    doc.mtimeMs = meta.mtimeMs
+    doc.headHash = meta.headHash
+    // ⚠️ 内容变了，抽取结果必然跟着变 —— 漏了这一个字段，修好的记录会把**旧引用**
+    // 写回索引，重启后关系与引用图就静默少了东西（而且看不出错）。
+    if (meta.refs) doc.refs = meta.refs
+    doc.body = meta.body
+    doc.bodyReady = true
+    doc.bodyBytes = meta.bodyBytes
+    doc.bodyTruncated = meta.bodyTruncated
+    doc.haystack = { title: meta.hayTitle, summary: meta.haySummary, body: meta.hayBody }
+    cacheSet(item.abs, meta)
+  }
 
   const media = []
   for (const item of found.media) {
@@ -651,6 +1305,49 @@ export async function collectDocs(root) {
     if (meta) media.push(meta)
   }
   media.sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+  // 这一轮算出的索引：**从刚刚交出去的记录本身**生成，所以抽验修好的那几条自动是正确值。
+  for (const doc of docs) nextIndex.set(doc.rel, recordFor(doc, doc.rel))
+  for (const doc of code) nextIndex.set(doc.rel, recordFor(doc, doc.rel))
+
+  // v0.22：把这一轮算出来的索引写回存储。**只写差量**（新增/更新那几条 + 抽验出的删除），
+  // fire-and-forget：写失败只影响「下次重启」，不影响本次结果，所以不 await
+  // —— 不为维护缓存去阻塞一次用户可见的检索（提示词 §4 最后一条）。
+  if (useIndex && indexRegistry) {
+    const diff = indexDiff(root, nextIndex, index)
+    indexRels.set(root, nextIndex)
+    indexStats.set(root, {
+      candidates: nextIndex.size,
+      readFiles,
+      cached,
+      reused: reused.length,
+      verified,
+      repaired,
+      put: diff.put.length,
+      del: diff.del.length,
+      skipped: false,
+      persisted: indexRegistry.persisted,
+      reason: indexRegistry.reason,
+    })
+    if (diff.put.length > 0 || diff.del.length > 0) {
+      indexRegistry.write(root, diff)
+    }
+  } else {
+    indexStats.set(root, {
+      candidates: nextIndex.size,
+      readFiles,
+      cached,
+      reused: reused.length,
+      verified,
+      repaired,
+      put: 0,
+      del: 0,
+      // 「这一轮没查索引」与「这个进程没有存储」是两件事，读数不能混成同一个 0。
+      skipped: !useIndex,
+      persisted: false,
+      reason: useIndex ? 'no-storage' : 'index-skipped',
+    })
+  }
 
   return {
     docs,
@@ -866,7 +1563,41 @@ export async function scan(root, limit, options = {}) {
   // ⚠️ `rel` 用同一个 base 算，所以相对路径一字不变；对外的 `root` 仍是会话
   // 原本那条（界面显示用），canonical 的那份单独放在 `hostRoot`。
   const hostRoot = hostPathOf(root)
-  const collected = await collectDocs(hostRoot)
+
+  // v0.22 修法 ②：**先算出这一轮要不要正文，再决定查不查索引**（2026-10-10）。
+  //
+  // 判据只有一条：`mode === 'relevance'` —— 排序改成「相关」**并且**真的抽到了关键词。
+  // 那时 `rankByRelevance()` 必须拿到全部正文，索引复用在那种情形下是净开销（见
+  // `collectDocs()` 里的长注释）。时间序（含「按相关排序但一个关键词都没抽到」）
+  // 完全吃索引里的 `title` / `summary` / 有界正文派生字段 —— 那才是索引的收益点。
+  // 这一段原来在 `collectDocs()` 之后；挪上来只为把 `mode` 先算出来，判定规则一字未动。
+  const wantRelevance = options.sort === 'relevance'
+  const sessionId = options.sessionId || ''
+  let keywords = NO_KEYWORDS
+  let mode = 'time'
+  let matched = []
+  // 当前任务的**原文引用**（SDD §12）。只在「对话驱动」这条路上有值：
+  // 显式 query 路径下模型自己知道在问什么，把 query 当「任务」是编的。
+  let task = ''
+
+  if (wantRelevance) {
+    // 调用方给了明确的 query（v0.7 的 agent 工具走这条路）：把它当成**一条最新的消息**，
+    // 于是走的是完全相同的抽取与门槛规则，不引入第二条抽取路径。
+    // 不进 convCache —— 那个缓存按 session seq 键控，塞 query 进去会互相污染。
+    const explicitQuery = typeof options.query === 'string' ? options.query.trim() : ''
+    if (explicitQuery) {
+      keywords = extractKeywords([explicitQuery], 30)
+    } else {
+      const conv = conversationFor(options.session, sessionId)
+      keywords = conv.keywords
+      task = conv.task
+    }
+    // 没有对话可依据时老实退回时间序，而不是假装排了个序
+    mode = keywords.length > 0 ? 'relevance' : 'time'
+  }
+
+
+  const collected = await collectDocs(hostRoot, { index: mode !== 'relevance' })
 
   // 默认 doc：旧版客户端 / 悬停浮层不带 kind，行为与「只列 Markdown」时完全一致。
   //
@@ -925,34 +1656,16 @@ export async function scan(root, limit, options = {}) {
     }
   }
 
-  const wantRelevance = options.sort === 'relevance'
-  const sessionId = options.sessionId || ''
-  let keywords = NO_KEYWORDS
-  let mode = 'time'
-  let matched = []
-  // 当前任务的**原文引用**（SDD §12）。只在「对话驱动」这条路上有值：
-  // 显式 query 路径下模型自己知道在问什么，把 query 当「任务」是编的。
-  let task = ''
-
-  if (wantRelevance) {
-    // 调用方给了明确的 query（v0.7 的 agent 工具走这条路）：把它当成**一条最新的消息**，
-    // 于是走的是完全相同的抽取与门槛规则，不引入第二条抽取路径。
-    // 不进 convCache —— 那个缓存按 session seq 键控，塞 query 进去会互相污染。
-    const explicitQuery = typeof options.query === 'string' ? options.query.trim() : ''
-    if (explicitQuery) {
-      keywords = extractKeywords([explicitQuery], 30)
-    } else {
-      const conv = conversationFor(options.session, sessionId)
-      keywords = conv.keywords
-      task = conv.task
-    }
-    // 没有对话可依据时老实退回时间序，而不是假装排了个序
-    mode = keywords.length > 0 ? 'relevance' : 'time'
-  }
-
   let ordered
   let topic = ''
   if (mode === 'relevance') {
+    // v0.22：相关检索必须拿到**正文**（打分、片段、逐词字频都读它）。从索引还原出来的
+    // 条目没有正文（裁决 A），这里按需补齐 —— 只补真的会参与打分的那批，而且是整读。
+    //
+    // ⚠️ 放在 `rankByRelevance()` **之前**，不是之后：没有正文的条目会让 BM25 的
+    // `avgdl` 与 `df` 一起偏小，名次与「索引开/关」两份结果就对不上了。顺序在这里是
+    // 正确性问题，不是性能问题。
+    await hydrateBodies(pool, hostRoot)
     // 一个 `now` 贯到底（打分与片段用同一个时间基准）—— 同一批输入两次跑出的
     // 结果因此逐字相同（§20 的确定性要求）。
     const now = Date.now()
@@ -1074,7 +1787,12 @@ async function linkGraphFor(root, withLinks, byRel) {
       }),
       read: async (_root, rel) => {
         const entry = byRel.get(rel)
-        if (!entry || typeof entry.head !== 'string') return { ok: false }
+        if (!entry) return { ok: false }
+        // v0.22 修法 ①：索引复用来的条目没有原文首部（`head` 是空串），所以
+        // **正常不会走到这里** —— `links.js` 优先吃条目上的 `refs.md`（抽取结果），
+        // 只有那条路没有时才回来要文本。保留这条分支是给「列表方与读取方不是同一份数据」
+        // 的调用方用的（单测的假条目就是这种）。
+        if (typeof entry.head !== 'string') return { ok: false }
         return { ok: true, text: entry.head }
       },
     })
@@ -2074,6 +2792,16 @@ export function apply(ctx) {
     const shared = sharedControlRegistry(backend)
     if (shared) controlRegistry = shared
     console.log(`[${name}] control storage: ${shared ? 'json backend attached' : 'memory-only'}`)
+
+    // ── v0.22：增量索引的持久化 ─────────────────────────────────────
+    //
+    // 与上面共用**一个** `ctx.storage` 后端，但**各开各的 kv 单元**（`knit_index`）：
+    // 索引的写量与形状和控制状态完全不同（`per-record` + 每条一个文件），混在一个单元里
+    // 会让「改一个文件」变成重写整份控制状态。同一条 `sharedIndexStore()` 理由，
+    // 见 `index-store.js`。
+    const store = sharedIndexStore(backend)
+    if (store) setIndexRegistry(store)
+    console.log(`[${name}] index storage: ${store ? 'attached' : 'memory-only'}`)
   })
 
   // ── v0.7：把同一个排序结果也交给模型 ──────────────────────────────

@@ -255,23 +255,36 @@ export async function buildLinkGraph(root, io) {
     let skipped = 0
 
     for (const doc of docs) {
+      // v0.22 修法 ①：条目/索引里已经带了抽取结果就直接用 —— `doc.refs.md` 正是
+      // `extractRefs()`（默认口径、只认 `.md` 目标）的产物，连 `io.read()` 都不用调。
+      // 没有它时才回落去要文本（旧调用方与单测的假条目走这条路）。
+      const cachedRefs = doc.refs && Array.isArray(doc.refs.md) ? doc.refs.md : null
       let text = ''
-      try {
-        const r = await io.read(root, doc.rel)
-        if (!r || r.ok !== true) {
+      if (!cachedRefs) {
+        try {
+          const r = await io.read(root, doc.rel)
+          if (!r || r.ok !== true) {
+            skipped += 1
+            continue
+          }
+          text = r.text || ''
+        } catch {
           skipped += 1
           continue
         }
-        text = r.text || ''
-      } catch {
-        skipped += 1
-        continue
       }
       parsed += 1
       const targets = new Set()
-      for (const raw of extractRefs(text)) {
-        const rel = resolveRef(raw, index, doc.rel)
-        if (rel && rel !== doc.rel) targets.add(rel)
+      if (cachedRefs) {
+        for (const hit of cachedRefs) {
+          const rel = resolveRef(hit.raw, index, doc.rel)
+          if (rel && rel !== doc.rel) targets.add(rel)
+        }
+      } else {
+        for (const raw of extractRefs(text)) {
+          const rel = resolveRef(raw, index, doc.rel)
+          if (rel && rel !== doc.rel) targets.add(rel)
+        }
       }
       out.set(doc.rel, targets)
     }

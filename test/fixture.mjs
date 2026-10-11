@@ -71,3 +71,53 @@ function trackForCleanup(dir) {
     LIVE_DIRS.clear()
   })
 }
+
+/* ── 存储替身（v0.22 的增量索引需要一份「能重启」的介质）───────── */
+
+/**
+ * 一个最小的假 `kv` 后端，形状与 `dsh-storage` 的 JSON 后端一致
+ * （`open(descriptor)` → `loadAll / putRecord / deleteRecord`）。
+ *
+ * `medium` 与后端实例**分开**，于是「重启」= 同一份 medium + 一个全新的后端，
+ * 而 `duplicate-mount`（同名 unit 在**同一个**后端里开两次）也能如实复现。
+ *
+ * @param {{tables?: object}} [medium] - 介质（省略则新建一份空的）
+ * @param {{failOpen?: boolean, brokenLoad?: boolean}} [options] - 故障注入
+ * @returns {object} 假后端（含 `medium` / `writes` / `descriptors`）
+ */
+export function fakeStorageBackend(medium = { tables: {} }, options = {}) {
+  const opened = new Set()
+  const writes = []
+  const descriptors = []
+  const unitOf = (name) => ({
+    loadAll: async () => {
+      if (options.brokenLoad) throw new Error('malformed-medium')
+      return { unit: { name, version: 1 }, global: {}, tables: medium.tables }
+    },
+    putRecord: async (table, key, value) => {
+      writes.push(['put', table, key])
+      medium.tables[table] = medium.tables[table] || {}
+      medium.tables[table][key] = value
+    },
+    deleteRecord: async (table, key) => {
+      writes.push(['del', table, key])
+      if (medium.tables[table]) delete medium.tables[table][key]
+    },
+    setGlobal: async () => {},
+    close: async () => { opened.delete(name) },
+  })
+  return {
+    medium,
+    writes,
+    descriptors,
+    kv: {
+      open: async (descriptor) => {
+        descriptors.push(descriptor)
+        if (options.failOpen) throw new Error('medium-unavailable')
+        if (opened.has(descriptor.name)) throw new Error('duplicate-mount')
+        opened.add(descriptor.name)
+        return unitOf(descriptor.name)
+      },
+    },
+  }
+}

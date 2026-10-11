@@ -739,7 +739,7 @@ v0.17 的信息都在，但**摞在一行字和几个折叠块里**，读不出�
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 697 项，零依赖，不需要先 npm install
+npm test          # 728 项，零依赖，不需要先 npm install
 node tools/clean-room-test.mjs   # 发版前闸门：npm pack → 解包 → 在解包目录里再跑一遍测试
 ```
 
@@ -765,10 +765,11 @@ knit/
 │   ├── host/passage.js   # 内容片段层：切分 / 片段打分 / 行号映射（纯函数，零 I/O）
 │   ├── host/context.js   # 上下文装配：Context Pack 三层（纯函数，零 I/O）
 │   ├── host/control.js   # 固定 / 排除：纯逻辑 + 可选 ctx.storage 持久化
+│   ├── host/index-store.js # 增量索引持久层：per-record KV + 头部指纹 + 降级 + 遗留键清理（v0.22）
 │   ├── host/feedback.js  # 使用反馈：读时归因 / Context Epoch / Delta（纯逻辑，只读事件流）
 │   ├── host/tool.js      # agent 文档工具 knit_docs（手写 ToolDefinition）
 │   └── client/client.js  # 双宿主注册 + 面板 UI
-└── test/                 # 697 项测试
+└── test/                 # 728 项测试
     ├── eval/             # 检索质量评测：语料 + 用例 + 冻结的 v0.5.2 基线 + Deep Context 四指标
     └── context/          # 上下文分层评测：24 篇语料 + 12 条任务型用例
 ```

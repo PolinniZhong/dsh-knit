@@ -1,6 +1,6 @@
 {
   "name": "dsh-knit",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "type": "module",
   "description": "Task-aware workspace context retrieval and lifecycle tracking for DeepSeek Harness. Finds the documents, source files and media most relevant to the current conversation, organises them into a Context Pack (primary / supporting / related) in the sidebar with inline preview, and tracks which of them were actually read and what changed afterwards. Zero model calls, zero network, nothing leaves the machine.",
   "main": "./src/host/index.js",
@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "agents:budget": "node tools/agents-budget.mjs",
-    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs test/links.test.mjs test/relations.test.mjs test/control.test.mjs test/security.test.mjs test/context.test.mjs test/context-eval.test.mjs test/feedback.test.mjs test/context-delta.test.mjs test/context-feedback-eval.test.mjs test/context-effectiveness.test.mjs test/document-lifecycle.test.mjs test/classification.test.mjs test/code-context.test.mjs test/deep-context.test.mjs test/deep-eval.test.mjs test/deep-scale.test.mjs"
+    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs test/links.test.mjs test/relations.test.mjs test/control.test.mjs test/security.test.mjs test/context.test.mjs test/context-eval.test.mjs test/feedback.test.mjs test/context-delta.test.mjs test/context-feedback-eval.test.mjs test/context-effectiveness.test.mjs test/document-lifecycle.test.mjs test/classification.test.mjs test/code-context.test.mjs test/deep-context.test.mjs test/deep-eval.test.mjs test/deep-scale.test.mjs test/index-store.test.mjs test/index-incremental.test.mjs"
   },
   "dsh": {
     "bundle": {
