@@ -1,8 +1,8 @@
 {
   "name": "dsh-knit",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "type": "module",
-  "description": "Task-aware workspace context retrieval and lifecycle tracking for DeepSeek Harness. Finds the documents, source files and media most relevant to the current conversation, organises them into a Context Pack (primary / supporting / related) in the sidebar with inline preview, and tracks which of them were actually read and what changed afterwards. Zero model calls, zero network, nothing leaves the machine.",
+  "description": "Workspace context retrieval for DeepSeek Harness: ranks documents, source files and media by relevance to the current conversation into a sidebar Context Pack with inline preview. Lexical and fully local by default — zero model calls, zero network. Optional hybrid mode is off by default and needs a provider you configure; a remote provider receives file titles and summaries (not bodies). Loopback stays local.",
   "main": "./src/host/index.js",
   "exports": {
     ".": "./src/host/index.js",
@@ -56,6 +56,8 @@
     "context-pack",
     "workspace-context",
     "context-retrieval",
+    "hybrid-retrieval",
+    "semantic-retrieval",
     "context-lifecycle",
     "task-context",
     "images",

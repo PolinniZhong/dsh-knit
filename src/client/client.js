@@ -35,8 +35,6 @@ window.__ModuleLoader__.load({
       'count.code.filtered': '{hit} / {total} 个代码文件',
       'count.media': '{n} 个媒体',
       'count.media.filtered': '{hit} / {total} 个媒体',
-      'count.all': '{n} 项',
-      'count.all.filtered': '{hit} / {total} 项',
       'action.refresh': '刷新',
       'path.openTitle': '在文件管理器中打开',
       'peek.empty': '这个工作区里还没有 Markdown 文档。',
@@ -47,7 +45,6 @@ window.__ModuleLoader__.load({
       'sort.relevanceTitle': '按与当前对话的相关性排序（纯本地关键词匹配，不调模型）',
       'sort.timeTitle': '按文件修改时间倒序',
 
-      'kind.all': '全部',
       'kind.doc': '文档',
       // v0.19：「代码」这一档。文案口径刻意保持朴素 —— 不写「代码知识库 / AI Code
       //   Intelligence / 智能代码分析」。Knit 只是把**当前任务真正需要的**代码文件
@@ -172,7 +169,7 @@ window.__ModuleLoader__.load({
       // v0.21.x（2026-10-09 用户规格）：排除之后的候选数原来是一个**光数字**（只有
       // 「→ 79」），现在给它一个名字 —— 状态摘要里每一格都必须能独立读懂。
       'pipe.candidates': '候选 {n}',
-      'pipe.rank': 'BM25 词法检索',
+      'pipe.rank': 'BM25 检索',
       // ⚠️ 「关系 N 条」说的是**这一份包里带了几条关系证据**（三层各条 relations 之和），
       // 不是工作区里的关系总数、也不是候选数（那两类数字宿主另有字段，这里不展示）。
       'pipe.relations': '关系 {n} 条',
@@ -190,9 +187,9 @@ window.__ModuleLoader__.load({
       'sem.mode.hybrid': '混合',
       'sem.mode.lexicalTitle': '词法检索：BM25 + IDF，纯本地、零模型调用（默认）',
       'sem.mode.hybridTitle': '混合检索（实验）：在词法候选之外补充语义候选；需要先配置 provider',
-      // 2026-10-11：检索模式改成**搜索框右端的小下拉** —— 这两个是按钮上的短标签（带一个 ⌄）。
-      'sem.mode.lexicalShort': '词法⌄',
-      'sem.mode.hybridShort': '混合⌄',
+      // ⚠️ 2026-10-13：原来的 sem.mode.lexicalShort / hybridShort 两个**短标签键已删除** ——
+      // 检索方式的可见文案改成状态行的 pipe.rank / pipe.rankHybrid（实际生效的模式），
+      // 键留着只会变成没人渲染的死键（i18n 的键集对齐守卫也查不出「定义了但没人用」）。
       // 菜单里两个选项的副文案（长解释收进菜单，工具栏不再挤第三组）
       'sem.mode.lexicalOption': '词法检索',
       'sem.mode.hybridOption': '混合检索 · 实验',
@@ -371,8 +368,6 @@ window.__ModuleLoader__.load({
       'count.code.filtered': '{hit} / {total} code files',
       'count.media': '{n} media',
       'count.media.filtered': '{hit} / {total} media',
-      'count.all': '{n} items',
-      'count.all.filtered': '{hit} / {total} items',
       'action.refresh': 'Refresh',
       'path.openTitle': 'Open in file manager',
       'peek.empty': 'No Markdown documents in this workspace yet.',
@@ -383,7 +378,6 @@ window.__ModuleLoader__.load({
       'sort.relevanceTitle': 'Sort by relevance to the current conversation (local keyword matching, no model call)',
       'sort.timeTitle': 'Sort by file modified time, newest first',
 
-      'kind.all': 'All',
       'kind.doc': 'Docs',
       'kind.code': 'Code',
       // 2026-10-06: user picked 「媒体」 for the tab + the "All" section title, so English
@@ -488,7 +482,7 @@ window.__ModuleLoader__.load({
       'pipe.collect': '{n} collected',
       'pipe.exclude': '{n} excluded',
       'pipe.candidates': '{n} candidates',
-      'pipe.rank': 'BM25 lexical retrieval',
+      'pipe.rank': 'BM25 retrieval',
       'pipe.relations': '{n} relations',
       'pipe.pin': '{n} pinned',
       'pipe.pack': '{n} in pack',
@@ -500,8 +494,6 @@ window.__ModuleLoader__.load({
       'sem.mode.hybrid': 'Hybrid',
       'sem.mode.lexicalTitle': 'Lexical retrieval: BM25 + IDF, fully local, no model call (default)',
       'sem.mode.hybridTitle': 'Hybrid retrieval (experimental): adds semantic candidates on top of lexical ones; needs a configured provider',
-      'sem.mode.lexicalShort': 'lexical⌄',
-      'sem.mode.hybridShort': 'hybrid⌄',
       'sem.mode.lexicalOption': 'Lexical retrieval',
       'sem.mode.hybridOption': 'Hybrid retrieval · experimental',
       'sem.mode.lexicalDesc': 'Default: keeps the current BM25 + IDF ranking.',
@@ -811,7 +803,6 @@ window.__ModuleLoader__.load({
      */
     const KIND_CODE = 'code'
     const KIND_MEDIA = 'media'
-    const KIND_ALL = 'all'
 
     /**
      * v0.19：分类层给的「生成产物」档（`.map` / `*.min.js` / `package-lock.json` …）。
@@ -1029,9 +1020,10 @@ body[data-ds-dark-theme] .knit-root{
        外框、.knit-seg 内部竖线、.knit-filter。CSS 里统一写 0.5px（与官方 .wSkVaW_header 的 .5px 同值）。
    ⚠️ 选中态只改**底色 + 字重 600**（不是 700），hover 只改底色 —— 不许 scale / translate /
       box-shadow（md §五）。暗色下靠 --knit-active-bg 这个 token，不写死颜色。
-   ⚠️ 2026-10-09（v0.21.x 用户规格）：这一行现在是**三组一行**，顺序就是控件顺序，
-      别再挪 —— ① 排序「相关 / 最新」（灰底分段控件）② 一条浅灰竖线
-      ③ 类型「文档 / 代码 / 媒体 / 全部」（下划线页签）④ 搜索框（排尾、贴右、宽度自适应）。
+   ⚠️ 2026-10-09（v0.21.x 用户规格）/ 2026-10-12（v0.23.1 用户裁决）：这一行是
+      **两组 + 一个右对齐容器**，顺序就是控件顺序，别再挪 —— ① 排序「相关 / 最新」（灰底分段控件）
+      ② 一条浅灰竖线 ③ 类型「文档 / 代码 / 媒体」（下划线页签，**三档**）
+      ④ .knit-bar-right：检索模式小下拉（只在相关档出现）+ 搜索框（贴右、宽度自适应、唯一可伸缩项）。
       那根竖线是**边界**，不是把六个选项连成一个整体：排序与类型是两个互不干扰的条件，
       搜索只过滤当前范围、不重置它们（用户规格 §三.3）。 */
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
@@ -1061,10 +1053,10 @@ body[data-ds-dark-theme] .knit-root{
   font-size:13px;background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
   border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 .knit-semcfg-note{flex:1 1 100%;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#9aa0a6)}
-/* 排序组与类型组之间**就这一根线**（用户规格 §二.2：中间用一条浅灰竖线与排序区隔开）。
-   色号取 .knit-seg 外框、.knit-filter 描边同一个 border-l3 ⇒ 三处一样淡；粗细写 1px ——
-   0.5px 的竖线在高分屏上会淡到看不见，它不是描边而是分隔。纯装饰：aria-hidden。 */
-.knit-bar-sep{flex:none;width:1px;height:16px;background:var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+/* 排序组与类型组之间**不再有竖线**（2026-10-12 用户裁决：「最新跟文档之间那条竖线可以去掉」）——
+   那根线的节点、类名与 CSS 规则**整体删除**，两组现在只靠 .knit-bar 的 gap 分隔。
+   留档：从前那根线取 .knit-seg 外框 / .knit-filter 描边同一个 border-l3（三处一样淡）、
+   粗细 1px（0.5px 在高分屏上看不见）、纯装饰 aria-hidden —— 这些理由随它一起作废。 */
 .knit-seg{display:inline-flex;flex:none;border-radius:10px;overflow:hidden;
   border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
 .knit-seg-btn{height:28px;padding:0 15px;cursor:pointer;font-size:13px;font-weight:400;
@@ -1081,29 +1073,63 @@ body[data-ds-dark-theme] .knit-root{
    v0.23（2026-10-11 用户裁决）：描边从 input 挪到**外层容器** —— 因为检索模式那个小下拉
    就贴在容器右端（中间一条细左线），两者共用一圈描边才像一个整体控件。
    焦点态挪到 :focus-within（输入框与下拉谁拿到焦点，外框都亮）—— 行为与原来一致。 */
-.knit-searchwrap{display:flex;align-items:center;flex:1 1 180px;min-width:0;max-width:240px;margin-left:auto;
+/* v0.23.1：右侧两个控件的**右对齐容器** —— 检索模式在搜索框左边。
+   margin-left:auto 从搜索框移交到这里；容器自身可缩（min-width:0），
+   里面**只有搜索框**是 flex:1 1 的可伸缩项 ⇒ 窄屏先缩搜索框。
+   ⚠️ 这段注释里不许出现反引号 —— 整个 CSS 在一个模板串里。 */
+.knit-bar-right{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0;justify-content:flex-end}
+.knit-searchwrap{display:flex;align-items:center;flex:1 1 180px;min-width:0;max-width:240px;
   border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));border-radius:10px;
   transition:border-color .16s ease}
 .knit-searchwrap:focus-within{border-color:var(--knit-accent)}
 .knit-filter{flex:1 1 auto;min-width:0;height:28px;padding:0 12px;border:none;border-radius:10px;font-size:13px;
   background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);outline:none}
-/* 检索模式：搜索框右端的小下拉。**只在相关档出现**，不出现时搜索框自己占满，
-   没有空位、也没有置灰的禁用态。 */
-.knit-retmode{position:relative;flex:none}
-.knit-retmode-btn{height:28px;padding:0 10px;cursor:pointer;font-size:12px;font-weight:400;white-space:nowrap;
-  border:none;border-left:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
-  background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6)}
-.knit-retmode-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
-  color:var(--dsw-alias-label-primary,#e8eaed)}
-.knit-retmode-btn[aria-expanded="true"]{background:var(--knit-active-bg,rgba(255,255,255,.085));
-  color:var(--dsw-alias-label-primary,#e8eaed)}
-.knit-retmenu{position:absolute;right:0;top:32px;z-index:20;width:272px;padding:6px;text-align:left;
+/* v0.24（2026-10-12 用户裁决 + Demo 参考）：检索方式做成状态行里**可点的状态格**。
+   外观（2026-10-12 第三次裁决，用户：「UI 视觉参考命中段那种来修改」）：
+   **逐条对齐 .knit-hit（命中段）那套** —— 这是同一份视觉语言的复用，不是新造一个控件：
+   · 底 = --knit-chip-bg（三档灰底里最深那档，命中段同源；比行选中那档深一点）；
+   · 圆角 6px、内边距 1px 6px、描边一根都没有（与命中段逐字同值）；
+   · 字色 = 次级灰，hover / 键盘焦点 → 主文本色 + 下划线（命中段同款提示）；
+   · **字号 / 行高 / 字重与命中段逐字同值**（font:inherit + font-size:11px + line-height:15px、
+     不设 font-weight ⇒ 跟随所在行）：2026-10-13 用户裁决「字号与背景胶囊修改成命中段一样」。
+     ⚠️ 这一格因此比它所在的状态行（10.5px）**大 0.5px** —— 那是有意的：它是这一行里唯一的可点控件，
+     与命中段同一档，才让人一眼认出「这两处是同一类东西」。 */
+.knit-pipe-method-wrap{position:relative;flex:none}
+.knit-pipe-method{display:inline-flex;align-items:center;flex:none;white-space:nowrap;cursor:pointer;
+  padding:1px 6px;border:0;outline:none;border-radius:6px;
+  background:var(--knit-chip-bg,rgba(255,255,255,.12));
+  font:inherit;font-size:11px;line-height:15px;
+  color:var(--dsw-alias-label-secondary,#61666b)}
+/* 悬停只提亮颜色；**下划线给包文字的那一层**，不给按钮本身 ——
+   父级的 text-decoration 会传播到全部子节点、子级又无法取消，
+   所以写在按钮上会让箭头 › 也一起被划上（2026-10-13 用户裁决）。 */
+.knit-pipe-method:hover,.knit-pipe-method:focus-visible{color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-pipe-method:hover .knit-pipe-method-label,
+.knit-pipe-method:focus-visible .knit-pipe-method-label{text-decoration:underline}
+.knit-pipe-method[aria-expanded="true"]{color:var(--dsw-alias-label-primary,#e8eaed)}
+/* 箭头：与「最近读取」行最右端那个 › 同一套视觉语言（同字形），基础态旋转 90° 变成「朝下」。
+   ⚠️ 展开态用 **横向翻转 scaleX(-1)**，不是对调角度、也不是 scaleY(-1)（2026-10-13 用户裁决：
+      「修改成横向翻转……默认箭头向下，交互展开箭头向上」）。
+      · 对调成 rotate(-90deg) ⇒ 箭头在 0.14s 里**原地转 180°**（像风车），读起来是「在转」；
+      · **scaleY(-1) 是空操作** —— › 这个字形本来就沿水平轴对称，上下镜像后一模一样，
+        矩阵算出来仍是朝下（曾经写错过一次，被用户当场抓到，现在有几何守卫盯着）；
+      · scaleX(-1) 才是「同一个字形左右翻个面」：先把 › 镜像成 ‹，再转 90° ⇒ 朝上。
+   ⇒ 关=朝下、开=朝上，过程是横向翻转。 */
+.knit-pipe-method-go{display:inline-block;margin-left:3px;font-size:12px;line-height:1;
+  transform:rotate(90deg);transition:transform .14s ease}
+.knit-pipe-method[aria-expanded="true"] .knit-pipe-method-go{transform:rotate(90deg) scaleX(-1)}
+@media (prefers-reduced-motion:reduce){.knit-pipe-method-go{transition:none}}
+.knit-retmenu{position:absolute;left:0;top:22px;z-index:20;width:272px;padding:6px;text-align:left;
   background:var(--dsw-alias-bg-base,#151517);border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
   border-radius:10px;box-shadow:0 10px 26px rgba(0,0,0,.28)}
-.knit-retmenu-item{display:block;width:100%;text-align:left;cursor:pointer;padding:8px 9px;border-radius:8px;
+/* 菜单里那两个可选项：**沿用命中段那套**（2026-10-12 用户裁决「对，就这样修改」）——
+   圆角 6px（命中段同值）、选中态底 = --knit-chip-bg（命中段那档）；
+   菜单**面板本身**仍是浮层（bg-base + l3 描边 + 阴影 + 10px 圆角）：浮层必须读起来像浮层，
+   把它也压成灰胶囊就没有层级了。 */
+.knit-retmenu-item{display:block;width:100%;text-align:left;cursor:pointer;padding:8px 9px;border-radius:6px;
   border:none;background:transparent;color:var(--dsw-alias-label-primary,#e8eaed)}
 .knit-retmenu-item:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
-.knit-retmenu-item.active{background:var(--knit-active-bg,rgba(255,255,255,.085))}
+.knit-retmenu-item.active{background:var(--knit-chip-bg,rgba(255,255,255,.12))}
 .knit-retmenu-item strong{display:block;font-size:12.5px;font-weight:600}
 .knit-retmenu-item span{display:block;margin-top:3px;font-size:11px;line-height:1.5;
   color:var(--dsw-alias-label-secondary,#9aa0a6)}
@@ -1111,7 +1137,7 @@ body[data-ds-dark-theme] .knit-root{
   border-top:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
   color:var(--dsw-alias-label-secondary,#9aa0a6)}
 .knit-retmenu-cfg{display:block;width:100%;text-align:left;cursor:pointer;padding:7px 9px;border:none;
-  background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);font-size:12px}
+  border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);font-size:12px}
 .knit-retmenu-cfg:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
 .knit-filter::placeholder{color:var(--dsw-alias-label-caption,#80868b)}
 /* v0.15「使用情况」→ v0.18「Context Usage Lens」：**列表上方的一块轻量观察层**。
@@ -1702,7 +1728,7 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    2px 下划线表达，页签条本身不画线（也不是「下划线悬空」：它画在自己的文字下面）。
    ⚠️ 排序切换（.knit-seg-btn，Design §18）是**另一个控件**，它保持灰底不变。
    ⚠️ 2026-10-09（v0.21.x 用户规格）：这一组从**自己一行**搬进了 .knit-bar，排在排序组
-   右边、与它之间隔一根 .knit-bar-sep。于是这里**不再自带左右 12px 内边距**（那是
+   右边（2026-10-12 起中间**没有竖线了** —— 靠 .knit-bar 的 gap 分开）。于是这里**不再自带左右 12px 内边距**（那是
    .knit-bar 的事，再写一遍就是双重缩进、两组对不齐）。下划线式选中态**保持不变** ——
    用户这次说「选中项用浅色背景或文字强调即可」，下划线 + 主色文字正是「文字强调」，
    而且它覆盖 2026-09-29 那条「不要灰底」的裁决，不要因为并排就退回灰底按钮。 */
@@ -1879,11 +1905,14 @@ video.knit-preview-media{width:100%;background:#000}
 
     /**
      * 读上次选择的列表类型，非法值回落到 doc。
-     * @returns {'doc'|'media'|'all'} 类型
+     *
+     * v0.23.1：「全部」档已整体删除 ⇒ 白名单里的 `'all'` 也删掉 ——
+     * 老用户 localStorage 里存着 `'all'` 时**回落到 `文档`**（不空白、不抛）。
+     * @returns {'doc'|'code'|'media'} 类型
      */
     function readKindPref() {
       const v = readPref(KIND_KEY)
-      return v === KIND_MEDIA || v === KIND_ALL || v === KIND_CODE ? v : KIND_DOC
+      return v === KIND_MEDIA || v === KIND_CODE ? v : KIND_DOC
     }
 
     /**
@@ -3947,14 +3976,6 @@ video.knit-preview-media{width:100%;background:#000}
           || String(doc.rel || '').toLowerCase().includes(q))
       }, [state.docs, query])
 
-      /* ── 「全部」= **整份包的原样**（v0.23 方案 A，2026-10-12 用户裁决）──────
-         三层（主要 / 辅助 / 相关）里**文档与代码混排**，顺序就是阅读顺序；没有类型分区、
-         没有「每区 4 条」、没有「查看全部 →」。媒体**不在包里**（宿主已把媒体剔出装配），
-         所以它们在三层之后**单独一个不截断的网格**，也不会与层里的条目重复。
-         ⇒ 四个类型档的关系因此变得一句话说得清：`全部` = 包的原样；
-           `文档 / 代码 / 媒体` = 把同一个包（或同一批语料）过滤到某类。 */
-      const allRows = kind === KIND_ALL ? visibleDocs.filter((doc) => !isMedia(doc)) : []
-      const allMedia = kind === KIND_ALL ? visibleDocs.filter(isMedia) : []
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
       // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
       // 文档列表**没有列数可算**：永远一个文档一行（见 `DOC_GRID` 那段说明）。
@@ -4057,9 +4078,8 @@ video.knit-preview-media{width:100%;background:#000}
        */
       const contextView = React.useMemo(() => {
         const pack = state.context
-        // v0.23：`全部` 与 `文档`/`代码` 走**同一条**分层渲染路径 —— 区别只在
-        // `visibleDocs` 是哪个类型档过滤出来的那一批（媒体由下面的末尾网格接手）。
-        if (!relevance || (kind !== KIND_DOC && kind !== KIND_CODE && kind !== KIND_ALL) || !pack) return null
+        // v0.23.1：只认「文档 / 代码」两档 —— 「全部」档已整体删除（2026-10-12 用户裁决）。
+        if (!relevance || (kind !== KIND_DOC && kind !== KIND_CODE) || !pack) return null
         const tiers = [
           ['primary', 'context.primary', 'context.primaryHint'],
           ['supporting', 'context.supporting', 'context.supportingHint'],
@@ -4130,13 +4150,9 @@ video.knit-preview-media{width:100%;background:#000}
        *
        * 分了层时必须是**三层里那些真的渲染出来的条目**（`contextView.flat`）——
        * 否则「其他相关文档」区里的条目键盘到不了，而已经在 Related 层里的条目
-       * 会被算两次。「全部」档里文档只到上限，媒体全部可达。
+       * 会被算两次。（媒体档走的是网格，`visibleDocs` 就是那批媒体。）
        */
-      const navDocs = kind === KIND_ALL
-        // 「全部」：三层里真的渲染出来的那些（文档 + 代码）**加上**末尾网格里的媒体 ——
-        // 媒体不是行，但它照样要能被键盘选中、也能被预览。
-        ? (contextView ? contextView.flat : allRows).concat(allMedia)
-        : (contextView ? contextView.flat : visibleDocs)
+      const navDocs = contextView ? contextView.flat : visibleDocs
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
@@ -4621,7 +4637,7 @@ video.knit-preview-media{width:100%;background:#000}
         if (semCfgOpen) focusFirst('.knit-semcfg-input')
       }, [semCfgOpen])
 
-      /** 点面板别处就收起菜单。判据用「点在 `.knit-retmode` 之内就放过」——
+      /** 点面板别处就收起菜单。判据用「点在 `.knit-pipe-method-wrap` 之内就放过」——
        *  否则按钮自己的点击会先关（pointerdown）再开（click），菜单根本打不开。
        *  ⚠️ 测试替身里 `window.addEventListener` 是空实现 ⇒ 这条只在真机生效，
        *     所以 Esc 那条**必须**另外挂在按钮与菜单上（可被断言）。 */
@@ -4629,7 +4645,7 @@ video.knit-preview-media{width:100%;background:#000}
         if (!retMenuOpen) return undefined
         const onPointerDown = (event) => {
           const node = event && event.target
-          if (node && typeof node.closest === 'function' && node.closest('.knit-retmode')) return
+          if (node && typeof node.closest === 'function' && node.closest('.knit-pipe-method-wrap')) return
           setRetMenuOpen(false)
         }
         window.addEventListener('pointerdown', onPointerDown)
@@ -4696,9 +4712,8 @@ video.knit-preview-media{width:100%;background:#000}
           }
           return rows
         }
-        // 平铺（时间序 / 没有包）：**媒体不进行**，它们走末尾那个网格。
-        const flatRows = kind === KIND_ALL ? allRows : visibleDocs
-        return flatRows.map((doc, index) => (
+        // 平铺（时间序 / 没有包）：媒体档走网格、不进行。
+        return visibleDocs.map((doc, index) => (
           { rel: doc.rel, tierKey: MOTION_TIER_FLAT, index, doc }))
       })()
       const motion = (() => {
@@ -4863,15 +4878,9 @@ video.knit-preview-media{width:100%;background:#000}
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
                 ? mediaGrid(visibleDocs)
-                : kind === KIND_ALL
-                  // 「全部」= 包的原样（或时间序下一条平铺的最近改动）+ 末尾**不截断**的媒体网格。
-                  // 顺序是语义的一部分：媒体排在整份阅读顺序之后，不与层里的条目穿插。
-                  ? h(React.Fragment, null,
-                    contextView ? contextBody(contextView) : docsGrid(withGhosts(MOTION_TIER_FLAT, allRows)),
-                    allMedia.length > 0 ? mediaGrid(allMedia) : null)
-                  : contextView
-                    ? contextBody(contextView)
-                    : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs))
+                : contextView
+                  ? contextBody(contextView)
+                  : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs))
 
       // 排序说明那一行（.knit-topic）**2026-09-30 已整体删除**：排序方式由头部那个
       // 「相关 / 最新」切换按钮自己表达（按钮上就写着当前选的是哪个），再补一句
@@ -5126,9 +5135,7 @@ video.knit-preview-media{width:100%;background:#000}
         ? (filtering ? 'count.media.filtered' : 'count.media')
         : kind === KIND_CODE
           ? (filtering ? 'count.code.filtered' : 'count.code')
-          : kind === KIND_ALL
-            ? (filtering ? 'count.all.filtered' : 'count.all')
-            : (filtering ? 'count.filtered' : 'count')
+          : (filtering ? 'count.filtered' : 'count')
       // 可见文本 = 纯数字；整句（含量词）只出现在 title 里。
       const countText = filtering
         ? `${visibleDocs.length} / ${state.total}`
@@ -5274,6 +5281,54 @@ video.knit-preview-media{width:100%;background:#000}
             : (isLoopbackBase(semForm0.base)
               ? t('sem.disclose.local')
               : t('sem.disclose.remote', { base: semForm0.base }))))
+      /* v0.24（2026-10-12 用户裁决 + Demo 参考）：检索方式不再是工具栏里的下拉，
+         而是状态行里一个**可点的状态格**（`BM25 词法检索 ›`）—— 虚线下划线 + 小箭头提示可点。
+         菜单**相对这一格定位**（`.knit-retmenu{left:0;top:22px}`），内容与行为逐字沿用原来的：
+         两个选项（menuitemradio / aria-checked）+ 现状说明 + 「不可用时就地配置」入口。
+         ⚠️ 这一格说的是**实际生效**的模式（`semLive`）：点了混合但不可用时，宿主回的是 lexical，
+            所以它仍然显示「BM25 词法检索」—— 不许把它写成「用户点了什么」。 */
+      const pipeMethodNode = h('div', { className: 'knit-pipe-method-wrap' },
+        h('button', {
+          type: 'button',
+          className: 'knit-pipe-method',
+          'aria-haspopup': 'true',
+          'aria-expanded': retMenuOpen,
+          // 悬停给**整句话**（长键在这里被用上；菜单里则是逐选项的副文案）
+          title: t(retrieval === 'hybrid' ? 'sem.mode.hybridTitle' : 'sem.mode.lexicalTitle'),
+          onClick: () => setRetMenuOpen((value) => !value),
+          onKeyDown: closeRetMenuOnEscape,
+        },
+        // 文字单独一层：悬停的下划线只划它，不划右边那个箭头（见 CSS 注释）。
+        h('span', { className: 'knit-pipe-method-label' }, t(semLive ? 'pipe.rankHybrid' : 'pipe.rank')),
+        // 箭头是**装饰**（对读屏隐藏），可访问名由上面的 title 承担。
+        // 字形复用「最近读取」行最右端那个 `›`，CSS 旋转 90° 朝下、展开时转回朝上。
+        h('span', { className: 'knit-pipe-method-go', 'aria-hidden': 'true' }, '›')),
+        retMenuOpen ? h('div', {
+          className: 'knit-retmenu',
+          role: 'menu',
+          'aria-label': t('sem.mode.aria'),
+          onKeyDown: closeRetMenuOnEscape,
+        },
+        [['lexical', 'sem.mode.lexicalOption', 'sem.mode.lexicalDesc'],
+          ['hybrid', 'sem.mode.hybridOption', 'sem.mode.hybridDesc']].map(([value, labelKey, descKey]) =>
+          h('button', {
+            type: 'button',
+            key: value,
+            role: 'menuitemradio',
+            'aria-checked': retrieval === value,
+            className: `knit-retmenu-item${retrieval === value ? ' active' : ''}`,
+            onClick: () => { pickRetrieval(value); setRetMenuOpen(false) },
+          },
+          h('strong', null, t(labelKey)),
+          h('span', null, t(descKey)))),
+        // 状态行：如实写这一档现在到底生效成什么（判据 5 的界面面）
+        h('div', { className: 'knit-retmenu-note' }, semStateText),
+        // 就地配置入口：只在「选了混合且没生效」时给；点开的是那行最小配置区
+        semCanConfigure ? h('button', {
+          type: 'button',
+          className: 'knit-retmenu-cfg',
+          onClick: () => { setRetMenuOpen(false); setSemCfgOpen((value) => !value) },
+        }, t(semCfgOpen ? 'sem.cfg.hide' : 'sem.cfg.show')) : null) : null)
       const pipeNode = h('div', { className: 'knit-pipe' },
         pipeCell(t('pipe.collect', { n: collected })),
         pipeDot(),
@@ -5283,7 +5338,7 @@ video.knit-preview-media{width:100%;background:#000}
         pipeSep(),
         // 这一格说的是**实际生效**的模式（`semantic.mode`），不是你点了什么：
         // 点了混合但不可用时，宿主回的是 lexical，这里就必须还写「BM25 词法检索」。
-        pipeCell(t(semLive ? 'pipe.rankHybrid' : 'pipe.rank')),
+        pipeMethodNode,
         ...(semLive ? [pipeDot(), pipeCell(t('pipe.semantic', { n: semCandidateCount }))] : []),
         pipeDot(),
         pipeCell(t('pipe.relations', { n: relCount })),
@@ -5330,7 +5385,7 @@ video.knit-preview-media{width:100%;background:#000}
         h('button', { className: 'knit-btn', onClick: load, title: t('action.refreshNow') }, t('action.refresh'))),
       h('div', { className: 'knit-bar' },
         /* v0.21.x（2026-10-09 用户规格）：三组一行 —— 排序 ｜ 类型 ｜ 搜索。
-           ① 排序与类型**不做成一个整体**：中间那根 `.knit-bar-sep` 就是边界，两个条件各管各的。
+           ① 排序与类型**不做成一个整体**：两组各管各的（中间的竖线 2026-10-12 已删除，靠 gap 分界）。
            ② 搜索排最后、贴最右：它只过滤当前列表，不重置排序与类型（§三.3）。
            ③ 六个选项彼此独立 —— 选「代码」再选「最新」= 最新的代码。
            顺序即控件顺序，别再挪（细则在 CSS 那边的 .knit-bar / .knit-filter 注释里）。 */
@@ -5345,12 +5400,13 @@ video.knit-preview-media{width:100%;background:#000}
             onClick: () => pickSort('time'),
             title: t('sort.timeTitle'),
           }, t('sort.time'))),
-        // 排序组 / 类型组之间**就这一根线**（2026-10-09 用户规格 §二.2）。
-        h('span', { className: 'knit-bar-sep', 'aria-hidden': 'true' }),
+        // ⚠️ 2026-10-12 用户裁决：排序组与类型组之间**那根竖线去掉了** —— 它的类名与 CSS 规则都已整体删除。
+        // 两组靠 `.knit-bar` 的 gap 分开就够 —— 「边界」不再需要一根线来表达。
         h('div', { className: 'knit-types', role: 'tablist', 'aria-label': t('kind.title') },
-          // v0.19：四档「文档 / 代码 / 媒体 / 全部」。**没有第二层分类** ——
-          // 代码里不再按语言（JS / TS / Python…）分组（需求 §46：不给代码加视觉层级压迫）。
-          [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_ALL, 'kind.all']].map(([value, labelKey]) =>
+          // v0.23.1（2026-10-12 用户裁决）：**三档**「文档 / 代码 / 媒体」——
+          // 「全部」那一档连同它的混合浏览视图在整个界面上删除了（三档等距、页签样式不变）。
+          // **没有第二层分类** —— 代码里不按语言（JS / TS / Python…）分组（需求 §46）。
+          [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media']].map(([value, labelKey]) =>
             h('button', {
               type: 'button',
               key: value,
@@ -5360,61 +5416,25 @@ video.knit-preview-media{width:100%;background:#000}
               title: t('kind.title'),
               onClick: () => pickKind(value),
             }, t(labelKey)))),
-        /* v0.23（2026-10-11 用户裁决）：检索模式从「左端第三组」改成**贴在搜索框右端的小下拉**
-           （形态照 `02_方案与 Demo/Knit-v0.22-v0.24-Demo.html` 那份原型，用户觉得那种更好：
-           左端只留「排序 ｜ 类型」两组、不再挤第三组，长解释收进菜单）。
-           只在「相关」档出现；**未配 provider 也出现**（菜单里如实说状态 + 就地给配置入口）。
-           ⚠️ 它是**搜索框容器里的第二个孩子** —— 出现/不出现都不改左端布局：
-             藏起来时搜索框自己占满，没有空位、没有置灰的死控件。
+        /* v0.24（2026-10-12 用户裁决）：**检索方式搬去状态行了**（见下面 `pipeMethodNode`），
+           工具栏第二行只剩三样：排序、类型、搜索框。
+             `[相关|最新] [文档|代码|媒体] …………………………… [ ……搜索框…… ]`
+           ⚠️ 搜索框仍靠右：`margin-left:auto` 由它外面的 `.knit-bar-right` 承担（容器没被撤掉，
+             只是里面从「检索方式 + 搜索框」变成「只有搜索框」）。
+           ⚠️ 容器里**只有搜索框**是 `flex:1 1 …` 的可伸缩项 —— 窄屏先缩它；排序 / 类型一律 `flex:none`。
            ⚠️ 搜索仍是对**当前这一份列表**再过滤，不动排序与类型。 */
-        h('div', { className: 'knit-searchwrap' },
-          h('input', {
-            className: 'knit-filter',
-            value: query,
-            placeholder: t('filter.placeholder'),
-            'aria-label': t('filter.aria'),
-            onChange: (event) => setQuery(event.target.value),
-            onKeyDown: (event) => {
-              if (event.key === 'Escape') { event.stopPropagation(); setQuery('') }
-            },
-          }),
-          showRetrieval ? h('div', { className: 'knit-retmode' },
-            h('button', {
-              type: 'button',
-              className: 'knit-retmode-btn',
-              'aria-haspopup': 'true',
-              'aria-expanded': retMenuOpen,
-              // 悬停提示给**整句话**（两根长键在这里被用上；菜单里则是逐选项的副文案）
-              title: t(retrieval === 'hybrid' ? 'sem.mode.hybridTitle' : 'sem.mode.lexicalTitle'),
-              onClick: () => setRetMenuOpen((value) => !value),
-              onKeyDown: closeRetMenuOnEscape,
-            }, t(retrieval === 'hybrid' ? 'sem.mode.hybridShort' : 'sem.mode.lexicalShort')),
-            retMenuOpen ? h('div', {
-              className: 'knit-retmenu',
-              role: 'menu',
-              'aria-label': t('sem.mode.aria'),
-              onKeyDown: closeRetMenuOnEscape,
-            },
-            [['lexical', 'sem.mode.lexicalOption', 'sem.mode.lexicalDesc'],
-              ['hybrid', 'sem.mode.hybridOption', 'sem.mode.hybridDesc']].map(([value, labelKey, descKey]) =>
-              h('button', {
-                type: 'button',
-                key: value,
-                role: 'menuitemradio',
-                'aria-checked': retrieval === value,
-                className: `knit-retmenu-item${retrieval === value ? ' active' : ''}`,
-                onClick: () => { pickRetrieval(value); setRetMenuOpen(false) },
+        h('div', { className: 'knit-bar-right' },
+          h('div', { className: 'knit-searchwrap' },
+            h('input', {
+              className: 'knit-filter',
+              value: query,
+              placeholder: t('filter.placeholder'),
+              'aria-label': t('filter.aria'),
+              onChange: (event) => setQuery(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key === 'Escape') { event.stopPropagation(); setQuery('') }
               },
-              h('strong', null, t(labelKey)),
-              h('span', null, t(descKey)))),
-            // 状态行：如实写这一档现在到底生效成什么（判据 5 的界面面）
-            h('div', { className: 'knit-retmenu-note' }, semStateText),
-            // 就地配置入口：只在「选了混合且没生效」时给；点开的是 Phase A 那行最小配置区
-            semCanConfigure ? h('button', {
-              type: 'button',
-              className: 'knit-retmenu-cfg',
-              onClick: () => { setRetMenuOpen(false); setSemCfgOpen((value) => !value) },
-            }, t(semCfgOpen ? 'sem.cfg.hide' : 'sem.cfg.show')) : null) : null) : null)),
+            })))),
       /* ── v0.21：检索状态摘要 + 排除说明（需求 §6.3）──────────────────────
          两条都是**事实行**，都在列表上方、都只在相关序出现（那是唯一有「包」的视图）。
       ⚠️ 它们的排位是**紧贴工具栏**的（2026-10-09 用户反馈）：观察层排在它们下面，

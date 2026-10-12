@@ -9,8 +9,10 @@ relevant documents, source files and media, organises them into **Primary / Supp
 context (the Context Pack) for both the panel and the agent, and keeps tracking **whether they were
 read, and whether they changed after being read**.
 
-**Find → Organise → Track**, all of it plain string work on your own machine — no model calls, no
-network, no latency, nothing leaves the machine.
+**Find → Organise → Track**, all of it plain string work on your own machine in the **default lexical
+mode** — no model calls, no network, no latency, nothing leaves the machine. The optional **hybrid mode
+is off by default** (it needs a provider you configure; with a **remote** provider it receives file
+**titles and summaries**, never bodies) — see below.
 
 ```text
                        Current task
@@ -63,7 +65,7 @@ headings and the **continuous rank numbers across all tiers**, with a one-line "
 only swapped once that turn had moved along (the tens of seconds in between were cut out).
 The GIF runs faster than real time.*
 
-Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network
+Scans Markdown / images / video across the project folder · Order follows the conversation · No model calls, no network in the default lexical mode
 
 ```sh
 dsh plugin --profile web add dsh-knit
@@ -114,7 +116,11 @@ The three differences that matter:
 3. **It does not stop at finding**: after finding comes **organising** (three tiers, each with a
    verifiable reason) and **tracking** (which were really read, and whether they changed).
 
-**No model calls, no network**: all plain string work, no latency, no cost, nothing leaves the machine.
+**No model calls, no network** in the default lexical mode: all plain string work, no latency, no cost,
+nothing leaves the machine. Optional hybrid mode is off by default; with a **remote** provider it sends
+file **titles and summaries** (never bodies) to that service, and a **loopback** provider keeps
+everything on this machine. ⚠️ The **benefit** of semantic retrieval still awaits a real-provider run
+(tracked in-repo as `value-evidence: pending`) — no recall improvement is claimed.
 
 ---
 
@@ -149,7 +155,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | **Relation evidence** (v0.21): every row carries `retrieval` / `relation` / `pinned`; "why" expands **line-level evidence** (references / imports / tests / documents, with the other file and the line number — at most 3 per item in the panel, 2 through the tool). Every one of them can be grepped back to its original line: not a word of the reasoning is invented | ✅ |
 | **Pin / exclude** (v0.21): pinning moves an item into its own section at the top (unnumbered — the three tiers keep their numbering); excluding takes effect **before retrieval** (the counts and the status summary move together, and it is undoable); with host storage it **survives restarts**, without it the panel says "this session only (not persisted)" instead of pretending | ✅ |
 | **Retrieval status summary** (v0.21.x): one honest line in the panel header — `collected · excluded · candidates ｜ BM25 lexical retrieval · relations · pinned ｜ in pack` (mid-dots inside a group, one thin rule between groups, no arrows); it follows the task, the kind tab, pins and exclusions | ✅ |
-| **Toolbar in one row** (v0.21.x): `Relevance / Newest` (sort) ｜ one light-grey rule ｜ `Docs / Code / Media / All` (kind) ｜ the filter box at the far right, width-adaptive (180–240px in a normal panel; when the panel narrows it shrinks first, the groups are never squeezed); the six options are independent — switching kind does not reset the sort or the query | ✅ |
+| **Toolbar in one row** (2026-10-12): `Relevance / Newest` (sort) `Docs / Code / Media` (kind) — **no rule between the two groups**, spacing separates them ｜ the filter box sits at the right (the only flexible item — 180–240px, shrinking first when the panel narrows). **Retrieval mode is not in this row**: it is a **clickable status cell** in the third row (`BM25 retrieval ›`); the **four options are independent** — switching sort / kind / retrieval mode never touches the query | ✅ |
 | **Header count** (v0.21.x): digits only (`9`, or `3 / 79` while filtering) — the quantifier changes with the kind, so it stays off screen; hovering still gives the full phrase (`9 code files`) | ✅ |
 | One-click toggle between relevance / modification time (preference kept in localStorage) | ✅ |
 | Scans **documents and code** in the session workspace (recursive, depth ≤ 6, skips `node_modules` / `.git` / `dist` / `build` / `out` / `coverage`) | ✅ |
@@ -157,11 +163,10 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | The document list is **always one column** (v0.14 — the multi-column layout was deleted outright, not switched off); the **number sits in its own column on the far left** and is **vertically centred with the title line**, everything else stacks to its right starting with **one line: Primary dot + title + relative time** (the time is pushed to the right edge), then the summary. **The path is no longer shown in the list** — it duplicates the clickable **path** in the preview header, which is the one that stays | ✅ |
 | Click to preview inline, click again to collapse | ✅ |
 | Relative-path images actually render (`./img/a.png`, `../assets/b.png`) | ✅ |
-| One-click switch between **Docs / Code / Media / All** (v0.19 adds Code; remembered, defaults to Docs); the selected tab is an **underline tab**, deliberately different from the list row's grey fill | ✅ |
+| One-click switch between **Docs / Code / Media** (v0.19 adds Code; remembered, defaults to Docs); the selected tab is an **underline tab**, deliberately different from the list row's grey fill. The **All** tab was removed from the UI in v0.23.1 | ✅ |
 | Images & video: square thumbnail grid — cells have a **fixed 104px baseline independent of the item count**, columns come from CSS `repeat(auto-fill, minmax(104px, 1fr))`, and **as many rows as there are items are laid out** (no max height, the grid never scrolls itself — scrolling belongs to the list); videos auto-grab the first frame with a play glyph and duration badge (no deps, no transcoding) | ✅ |
 | **"Web preview" for `.html`** (v0.19): the preview header hands the file to DSH's own document-preview tab (`openResource`) instead of showing source; the inline preview still shows source, so the two do not duplicate. Knit itself sends no request | ✅ |
 | Click an image / video to preview **inline**: large image, playable & seekable video streamed over HTTP Range (no full download) | ✅ |
-| The **All** view splits into **three stacked sections**: docs (max 4, with "View all →" when truncated), **code** (max 4), then images & video (**never truncated**, count only) | ✅ |
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
 | **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
@@ -171,13 +176,14 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Keyboard: `↑` `↓` move-and-preview, `Enter` toggle, `Esc` collapse (`←` `→` span rows in the **media grid only** — the document list is always one column, so they have no spatial meaning there) | ✅ |
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
-| Zero model calls, zero network egress | ✅ |
+| **Zero model calls / zero network egress by default**: the default **lexical mode** is plain string work on this machine | ✅ |
+| **Optional hybrid mode (off by default)** (v0.23): needs a provider you configure (Ollama / OpenAI-compatible). With a **remote** provider, what leaves the machine is the workspace files' **titles and summaries** (**never bodies**); vectors live in memory only and the config sits in its own DSH storage unit (`knit_semantic`). A **loopback** provider keeps everything local. ⚠️ The **benefit** of semantic retrieval still awaits a real-provider run (`value-evidence: pending`) — no recall improvement is claimed | ✅ |
 | **A `knit_docs` tool for the agent** — read-only, so the model can find this project's relevant docs itself | ✅ |
 
 > Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
 > the answer; position is relevance.
 
-### The other two views
+### The Media view
 
 ![Screenshot of the Media tab: a square thumbnail grid, six columns at this panel width](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-media.png)
 
@@ -187,18 +193,6 @@ six columns at this width, cells about 110px. These are the workspace's real ima
 single-colour SVG icon (the solid black square is that icon, not a failed load). Videos get their first
 frame as a poster with a play glyph and a duration badge — this workspace simply has no video, so none
 shows here.*
-
-![Screenshot of the All tab: the documents section, the code section, and the media grid below](https://raw.githubusercontent.com/PolinniZhong/dsh-knit/main/docs/screenshot-all.png)
-
-*All: the documents section shows at most 4, the **code section** shows at most 4 (each gets its own
-"View all →" when truncated — here "4 / 21" and "4 / 8"), and the media grid (11 rows) comes last.*
-
-⚠️ All three sections share the **same 40-item window** the host returns — a category that ranks past
-40th by relevance drops out of the All view entirely. This screenshot uses the **Newest** sort: in this
-workspace, under the default Relevance sort, media rank outside that window every time (at `limit=40`
-those 40 rows are documents + code files). The **Media** and **Code** tabs are unaffected — they
-request their own kind. A known defect, with reproduction and the fix recorded in
-[`docs/README.md`](docs/README.md).*
 
 ---
 
@@ -396,7 +390,7 @@ no percentage, no colour scale; in the flat list and under **Newest** none of th
 ### The retrieval status summary in the header
 
 One line of fact in the panel header:
-`collected N · excluded N · candidates N | BM25 lexical retrieval · relations N · pinned N | in pack N`.
+`collected N · excluded N · candidates N | BM25 retrieval · relations N · pinned N | in pack N`.
 The three groups are the reading order: **workspace candidates** (how many were scanned, how many
 this batch really ruled out, how many went on into retrieval), **retrieval and adjustment** (this
 path is plain local BM25, followed by how many relation evidence items are in the pack and how many
@@ -411,19 +405,24 @@ note → notice → lens → list).
 
 ### The toolbar row (v0.21.x)
 
-`Relevance / Newest` (sort) | one light-grey rule | `Docs / Code / Media / All` (kind) | the filter
-box (far right).
+`Relevance / Newest` (sort) | one light-grey rule | `Docs / Code / Media` (kind) | a **right-aligned
+group**: only the filter box (the **only flexible item**). **No rule between sort and kind** (the `.knit-bar-sep` class is gone).
+**Retrieval mode lives in the status summary** as a clickable cell: `BM25 retrieval ›` (**visually the same recipe as the hit segment `.knit-hit`**: `--knit-chip-bg` background, 6px radius, `1px 6px` padding, secondary grey text, **font size / line-height / weight identical to the hit segment** (11px / 15px, no local font-weight); on hover only the **label** brightens and gets the underline — the `›` arrow never does; the arrow is the `›` from the Recent-read row, flipped horizontally when open). Its menu opens **relative to that cell** and holds the two options (same hit-segment recipe: 6px radius, `--knit-chip-bg` when selected), the current effective state, and the inline config entry when hybrid is unavailable. The menu **panel** itself stays a floating surface (`bg-base` + `l3` border + shadow).
 
-- **Sort and kind are two conditions, not one segmented control**: that `.knit-bar-sep` (1px,
-  `border-l3`, `aria-hidden`) is the boundary. The kind group used to sit on its own row; its selected
-  state is still the v0.14 **underline tab** — it did not fall back to a grey-filled button.
-- **The filter box sits at the tail of the toolbar** (it filters the current list further, which is
-  the toolbar convention): `flex:1 1 180px` + `max-width:240px` + `margin-left:auto` puts it at
-  180–240px against the right edge in a normal panel, and `min-width:0` makes it **shrink first** when
-  the panel narrows. The sort and kind groups are both `flex:none`: they are **never squeezed**.
-- **The three conditions are independent**: pick Code and then Newest and you get the newest code; the
-  query only filters the current scope and neither resets the sort nor gets reset by switching kind or
-  sort (`sort` / `kind` / `query` are three separate pieces of state).
+- **Sort / kind / retrieval mode are three conditions, not one segmented control** (the rule that used to sit between sort and kind was removed on 2026-10-12, `.knit-bar-sep` no longer exists): the former `.knit-bar-sep`
+  (1px, `border-l3`, `aria-hidden`) is the boundary. The kind group used to sit on its own row; its
+  selected state is still the v0.14 **underline tab** — it did not fall back to a grey-filled button.
+- **The far right is one right-aligned container (`.knit-bar-right`)**: it holds the **retrieval-mode**
+  dropdown (`flex:none`, compact) and the **filter box** (`flex:1 1 180px` + `min-width:0` +
+  `max-width:240px`). The filter box is the **only flexible item** ⇒ it sits at 180–240px against the
+  right edge and **shrinks first** when the panel narrows; sort / kind / retrieval mode are all
+  `flex:none` and are **never squeezed**.
+- **The four conditions are independent**: pick Code and then Newest and you get the newest code;
+  switching retrieval mode does not touch the sort or the query; the query only filters the current
+  scope (`sort` / `kind` / `query` / `retrieval` are four separate pieces of state).
+- ⚠️ **The retrieval-mode dropdown is not shown under Newest** (time order has no Context Pack, so there
+  is nowhere for semantic candidates to land), but it is **not reset** — switching back to Relevance
+  keeps the mode you picked.
 - No icons, no loud pills; the other entries use secondary text, the selected one an underline plus
   the primary text colour.
 
@@ -799,7 +798,7 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 641 tests, zero dependencies, no npm install needed
+npm test          # 775 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -822,10 +821,12 @@ knit/
 │   ├── host/classification.js # v0.19 file classification: kind / language / searchable / contextual
 │   ├── host/passage.js   # passage layer: chunking / passage scoring / line mapping (pure, zero I/O)
 │   ├── host/context.js   # context assembly: the three-tier Context Pack (pure, zero I/O)
+│   ├── host/index-store.js # incremental index store: per-record KV + head fingerprint + fallback (v0.22)
+│   ├── host/semantic.js  # optional semantic candidates: two provider protocols / bounded embedding / honest fallback (v0.23)
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 641 tests
+└── test/                 # 775 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```
