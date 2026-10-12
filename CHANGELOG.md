@@ -111,6 +111,17 @@
 > 解包目录里 `npm test` **778 pass / 0 fail** ⇒ exit 0。
 > ⚠️ 这组读数取自「界面第二条决定（「全部」档）落地过程中」的时刻；**提交 / 打包前必须重跑**
 > （`knit/` 里任何一个在包内的字节被改，文件数与这一行都要重测）。
+> ✅ **2026-10-12 已发布**：轻量 tag `v0.23.0` = 发布提交 `e4f5507` = npm `gitHead`；OIDC 可信发布
+> run `38226035554`（**第 2 次尝试**才绿 —— 第 1 次红在 `test/index-incremental.test.mjs` 的抽验用例上，
+> 那是 v0.22 带来的**间歇性**用例、不是本版回归，见该用例自己的注释）job **23 s**、
+> `conclusion=success`、**带 SLSA provenance**；registry `latest = 0.23.0`（共 **20 个**版本）；
+> GitHub Release `published_at 2026-10-12T08:57:26Z`。
+> registry 上的真包 = **65 文件 / 737 841 B tarball / 2 166 006 B 解包**、
+> shasum `11efcf4ff2521c60e98c4d57c7eca77ac3a7ab81`（= registry `dist.shasum`），下载解包后 `npm test` **778 / 0**。
+> ⚠️ **这一行不在已发布的 tarball 里** —— 改它的提交只能在 `npm publish` 之后（同一版本号不能再发一次）。
+> ⚠️ **已发布的 tarball 里 `README.md` 仍写着「728 项」（两处）**：那是 v0.22 的数，本版漏更，
+> 发版前没人跑内容判据、是 `check-published.mjs --online` 事后抓到的。修它的提交同样只能在发布之后
+> ⇒ **要换掉 npm 上渲染的那份 README，必须再发一个版本。**
 
 ## [0.22.0] - 2026-10-10
 
