@@ -84,6 +84,17 @@
   不做禁用态的死控件；不重排三层、编号、预览与键盘导航的既有纪律。
 - **不承诺**语义收益：真 provider 的实测仍未跑（`value-evidence: pending`），本版只改**信息准确性**与**工具栏形状**。
 
+> ✅ **2026-10-13 已发布**：轻量 tag `v0.23.1` = 发布提交 `2925ad3` = npm `gitHead`；OIDC 可信发布
+> run `38322653330`（**第 2 次尝试**才绿 —— 第 1 次红在 `test/index-incremental.test.mjs` 那条 v0.22 带来的
+> **间歇性**用例上；与 0.23.0 那次是**同一根因、不同断言**，见发布 skill 台账 **B26**）、
+> `conclusion=success`、**带 SLSA provenance**；registry `latest = 0.23.1`（共 **21 个**版本）；
+> GitHub Release `published_at 2026-10-12T23:36:24Z`。
+> registry 上的真包 = **65 文件 / 748 583 B tarball / 2 190 275 B 解包**、
+> shasum `1182685ac18cacd6ff337e1963f82a0528978af1`（= registry `dist.shasum`），下载解包后 `npm test` **775 / 0**。
+> 🔑 **本版发布的首要判据已达成**：包内 `README.md` 的 `728` = **0**、`775` = **2**（0.23.0 那份是 728×2）。
+> `check-published.mjs --online` **27/27 全过、零红** —— 0.23.0 那次唯一红掉的正是这条内容判据。
+> ⚠️ **这一行不在已发布的 tarball 里** —— 改它的提交只能在 `npm publish` 之后（同一版本号不能再发一次）。
+
 ## [0.23.0] - 2026-10-12
 
 > **Optional Hybrid Retrieval（可选混合检索）** —— 在**保留「可解释的词法检索」为默认**的前提下，
