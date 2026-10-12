@@ -146,6 +146,9 @@ window.__ModuleLoader__.load({
       'prov.retrieval': '检索',
       'prov.relation': '关系',
       'prov.manual': '用户固定',
+      // v0.23：第四档来源。它**只**由「标题 + 摘要」的向量与任务相似而来 ——
+      // 不是关键词命中、也不是关系证据，而且只可能落在「相关」那一层。
+      'prov.semantic': '语义相关',
       'control.pin': '固定',
       'control.unpin': '取消固定',
       'control.exclude': '排除',
@@ -177,6 +180,59 @@ window.__ModuleLoader__.load({
       // 不写「固定覆盖」这种内部说法；也不带量词 —— 固定对象可能是文档、代码或媒体。
       'pipe.pin': '固定 {n}',
       'pipe.pack': '入包 {n}',
+      // v0.23（Phase A）：混合检索。**默认词法** —— 这一格说的是实际生效的模式，不是用户的点击。
+      'pipe.rankHybrid': 'BM25 + 语义补充',
+      // 语义候选**只计数**（Phase A 不进包）。它是「有界」的：上限由消融定（方案 §5.2）。
+      'pipe.semantic': '语义候选 {n} 条',
+      // 检索模式选择器（工具栏第三组）
+      'sem.mode.aria': '检索模式',
+      'sem.mode.lexical': '词法',
+      'sem.mode.hybrid': '混合',
+      'sem.mode.lexicalTitle': '词法检索：BM25 + IDF，纯本地、零模型调用（默认）',
+      'sem.mode.hybridTitle': '混合检索（实验）：在词法候选之外补充语义候选；需要先配置 provider',
+      // 2026-10-11：检索模式改成**搜索框右端的小下拉** —— 这两个是按钮上的短标签（带一个 ⌄）。
+      'sem.mode.lexicalShort': '词法⌄',
+      'sem.mode.hybridShort': '混合⌄',
+      // 菜单里两个选项的副文案（长解释收进菜单，工具栏不再挤第三组）
+      'sem.mode.lexicalOption': '词法检索',
+      'sem.mode.hybridOption': '混合检索 · 实验',
+      'sem.mode.lexicalDesc': '默认模式；沿用当前 BM25 + IDF 排序。',
+      'sem.mode.hybridDesc': '在词法候选之外补充语义候选；需先配置 provider。',
+      // 菜单底部的**状态行**（如实说这一档现在到底生效成什么，不美化）
+      'sem.state.lexical': '当前按词法检索。',
+      'sem.state.hybridLive': '混合已生效：语义候选只追加在「相关」层最后，主要 / 辅助两层不动。',
+      'sem.state.noProvider': '未配置 provider —— 混合还没生效。',
+      // 就地配置入口（未配 provider 时菜单里那一条）
+      'sem.cfg.show': '配置语义 provider…',
+      'sem.cfg.hide': '收起配置',
+      // 混合没生效时的**事实**（宿主只给码，文案在这里）
+      'sem.reason.noProvider': '混合检索不可用：还没有配置 provider',
+      'sem.reason.probeFailed': '混合检索不可用：provider 连不上',
+      'sem.reason.timeout': '混合检索不可用：provider 超时',
+      'sem.reason.badResponse': '混合检索不可用：provider 返回了无法解析的结果',
+      'sem.reason.noQuery': '混合检索不可用：这一轮没有可用的查询文本',
+      'sem.reason.unknown': '混合检索不可用：原因未知（已退回词法）',
+      // 防御性：时间序下宿主整层短路，回的是这个码（界面极少走到 —— 那档根本不出现这个下拉）
+      'sem.reason.notApplicable': '混合检索不适用：时间序没有相关性分层（已按词法）',
+      // 老宿主没有 `semantic` 字段 ⇒ 如实说是宿主的问题，不让用户去配一个用不上的 provider
+      'sem.unsupported': '混合检索不可用：当前宿主版本不支持（已退回词法）',
+      // 最小配置区（就地一行，不是面板）
+      'sem.kindAria': 'provider 类型',
+      'sem.kind.ollama': 'Ollama（本地）',
+      'sem.kind.openai': 'OpenAI 兼容',
+      'sem.basePlaceholder': '服务地址，如 http://127.0.0.1:11434',
+      'sem.baseAria': 'provider 服务地址',
+      'sem.modelPlaceholder': '模型名，如 nomic-embed-text',
+      'sem.modelAria': 'provider 模型名',
+      'sem.save': '保存并测试',
+      'sem.saving': '测试中…',
+      'sem.saveTitle': '保存配置并让宿主探测一次（会发一次请求）',
+      'sem.savedOk': '已保存：provider 可用',
+      'sem.savedFail': '已保存，但 provider 现在还不可用',
+      // ⚠️ 披露措辞不许含糊：回环 = 不离开本机；其余一律明写「会发送到 <地址>」
+      'sem.disclose.local': '本地服务：内容不离开这台机器',
+      'sem.disclose.empty': '填上服务地址后，这里会写明内容会不会离开这台机器',
+      'sem.disclose.remote': '内容会发送到你配置的服务 {base}',
       // 理由码 → 文案。宿主只给码（AGENTS.md §4.5），翻译在这里。
       // ⚠️ 2026-09-29 用户要求把这行压得更克制：原来是「直接命中当前话题：…」，
       // 读起来像调试信息。现在它是**标签 + 值**，词之间用「 · 」分隔。
@@ -200,6 +256,9 @@ window.__ModuleLoader__.load({
       'why.linkTarget': '被主要上下文引用',
       'why.linkSource': '引用了主要上下文',
       'why.related': '与当前任务相关',
+      // v0.23：语义补进来的理由。**只陈述可复核的事实**（标题 + 摘要的向量与任务相似），
+      // 不许写成「模型觉得相关」这类不可核查的话。
+      'why.semantic': '语义相关',
 
       'row.tooltip': '{path}\n单击就地预览 · 双击在新标签页打开',
       /* v0.20：命中片段（需求 §12）。**纯 metadata**：行号区间，不是分数、不是评分、
@@ -229,8 +288,6 @@ window.__ModuleLoader__.load({
       'media.play': '播放视频',
 
       // 「全部」的分区：类型名复用 kind.doc / kind.media，这里只补计数与跳转
-      'section.count': '{shown} / {total}',
-      'section.more': '查看全部 →',
 
       'preview.loading': '正在读取…',
       'preview.truncated': '（文件较大，仅预览前 512 KB）',
@@ -412,6 +469,8 @@ window.__ModuleLoader__.load({
       'prov.retrieval': 'retrieved',
       'prov.relation': 'relation',
       'prov.manual': 'pinned',
+      // v0.23: the fourth provenance (semantic) — same neutral, lowercase word group.
+      'prov.semantic': 'semantic',
       'control.pin': 'Pin',
       'control.unpin': 'Unpin',
       'control.exclude': 'Exclude',
@@ -433,6 +492,48 @@ window.__ModuleLoader__.load({
       'pipe.relations': '{n} relations',
       'pipe.pin': '{n} pinned',
       'pipe.pack': '{n} in pack',
+      // v0.23 (Phase A): hybrid retrieval. This cell states the mode **in effect**, not the click.
+      'pipe.rankHybrid': 'BM25 + semantic',
+      'pipe.semantic': '{n} semantic candidates',
+      'sem.mode.aria': 'Retrieval mode',
+      'sem.mode.lexical': 'Lexical',
+      'sem.mode.hybrid': 'Hybrid',
+      'sem.mode.lexicalTitle': 'Lexical retrieval: BM25 + IDF, fully local, no model call (default)',
+      'sem.mode.hybridTitle': 'Hybrid retrieval (experimental): adds semantic candidates on top of lexical ones; needs a configured provider',
+      'sem.mode.lexicalShort': 'lexical⌄',
+      'sem.mode.hybridShort': 'hybrid⌄',
+      'sem.mode.lexicalOption': 'Lexical retrieval',
+      'sem.mode.hybridOption': 'Hybrid retrieval · experimental',
+      'sem.mode.lexicalDesc': 'Default: keeps the current BM25 + IDF ranking.',
+      'sem.mode.hybridDesc': 'Adds semantic candidates on top of the lexical ones; needs a configured provider.',
+      'sem.state.lexical': 'Currently lexical retrieval.',
+      'sem.state.hybridLive': 'Hybrid is live: semantic candidates are appended to the related tier only; primary and supporting are unchanged.',
+      'sem.state.noProvider': 'No provider configured — hybrid is not active yet.',
+      'sem.cfg.show': 'Configure semantic provider…',
+      'sem.cfg.hide': 'Hide configuration',
+      'sem.reason.noProvider': 'Hybrid retrieval unavailable: no provider configured yet',
+      'sem.reason.probeFailed': 'Hybrid retrieval unavailable: provider is unreachable',
+      'sem.reason.timeout': 'Hybrid retrieval unavailable: provider timed out',
+      'sem.reason.badResponse': 'Hybrid retrieval unavailable: provider returned an unusable response',
+      'sem.reason.noQuery': 'Hybrid retrieval unavailable: no usable query text this round',
+      'sem.reason.unknown': 'Hybrid retrieval unavailable: unknown reason (fell back to lexical)',
+      'sem.reason.notApplicable': 'Hybrid retrieval does not apply: a time-ordered list has no relevance tiers (kept lexical)',
+      'sem.unsupported': 'Hybrid retrieval unavailable: this host version does not support it (fell back to lexical)',
+      'sem.kindAria': 'Provider kind',
+      'sem.kind.ollama': 'Ollama (local)',
+      'sem.kind.openai': 'OpenAI-compatible',
+      'sem.basePlaceholder': 'Service URL, e.g. http://127.0.0.1:11434',
+      'sem.baseAria': 'Provider service URL',
+      'sem.modelPlaceholder': 'Model name, e.g. nomic-embed-text',
+      'sem.modelAria': 'Provider model name',
+      'sem.save': 'Save and test',
+      'sem.saving': 'Testing…',
+      'sem.saveTitle': 'Save the configuration and let the host probe it once (sends one request)',
+      'sem.savedOk': 'Saved: provider is available',
+      'sem.savedFail': 'Saved, but the provider is still unavailable',
+      'sem.disclose.local': 'Local service: content stays on this machine',
+      'sem.disclose.empty': 'Once a service URL is filled in, this line says whether content leaves this machine',
+      'sem.disclose.remote': 'Content will be sent to your configured service {base}',
       // Reason codes → copy. The host only ships codes (AGENTS.md §4.5).
       // ⚠️ Flattened on 2026-09-29: "direct topic match: …" read like debug output.
       'why.direct': 'direct match: {term}',
@@ -445,6 +546,9 @@ window.__ModuleLoader__.load({
       'why.linkTarget': 'referenced by a primary document',
       'why.linkSource': 'references a primary document',
       'why.related': 'related to the current task',
+      // v0.23: semantic match — states the verifiable fact (title + summary embedding),
+      // never "the model thinks this is relevant".
+      'why.semantic': 'semantic match',
 
       'row.tooltip': '{path}\nClick to preview here · double-click to open in a new tab',
       /* v0.20：matched passage range (requirement §12) — metadata only, never a score. */
@@ -474,8 +578,6 @@ window.__ModuleLoader__.load({
       'media.play': 'Play video',
 
       // "All" sections: titles reuse kind.doc / kind.media, only count + jump live here
-      'section.count': '{shown} / {total}',
-      'section.more': 'View all →',
 
       'preview.loading': 'Loading…',
       'preview.truncated': '(large file — showing the first 512 KB)',
@@ -691,6 +793,14 @@ window.__ModuleLoader__.load({
      */
     const USAGE_KEY = 'dsh-knit:usage'
 
+    /* ── v0.23（Phase A）：检索模式 ──────────────────────────
+       默认**词法**。「混合」只是把语义候选**补进候选集**的一种可选模式，
+       它要用户显式选、并且配了 provider 才会真的跑 —— 「零模型调用 / 零网络出口」
+       这条对外承诺只在默认模式成立（细则见 v0.23 方案 §2 的文案纪律）。 */
+    const RETRIEVAL_KEY = 'dsh-knit:retrieval'
+    /** 语义 provider 的**唯一写路由**；读走 `/api/recent` 的 `semantic.provider`。 */
+    const SEMANTIC_API = '/knit/api/semantic'
+
     /** 列表类型：仅文档 / 仅代码 / 仅图片视频 / 全部混排。默认 doc，与旧版体验一致。 */
     const KIND_DOC = 'doc'
     /**
@@ -738,9 +848,10 @@ window.__ModuleLoader__.load({
        ⚠️ 留着一套只服务于已删 UI 的常量，下一个人只会以为它还在生效。 */
 
     /** 「全部」视图里文档区的固定上限。 */
-    const ALL_DOC_CAP = 4
+    /* v0.23（方案 A）：「全部」档的**两个类型上限**已整体删除 ——
+       「全部」不再是「文档前 4 + 代码前 4 + 媒体」，而是**整份包的原样**
+       （三层混排文档 + 代码，媒体在三层之后一个不截断的网格）。 */
     /** 「全部」视图里代码区的固定上限（与文档区同量级 —— 代码不该在这一档里压过文档）。 */
-    const ALL_CODE_CAP = 4
     /**
      * 一屏基准：两行 × 4 列的观感（只在「媒体」这一档决定一屏铺几行时用）。
      * **它不决定列数** —— 列数交给 CSS 的 `auto-fill`，见 mediaLayoutFor。
@@ -924,6 +1035,32 @@ body[data-ds-dark-theme] .knit-root{
       那根竖线是**边界**，不是把六个选项连成一个整体：排序与类型是两个互不干扰的条件，
       搜索只过滤当前范围、不重置它们（用户规格 §三.3）。 */
 .knit-bar{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none}
+/* v0.23（Phase A）：检索模式的两条行 —— 都只在**用户选了混合**时出现，默认词法时一个节点都不产生。
+   ① .knit-retnote = 混合没生效时的**事实行**（未配置 / 连不上 / 超时 / 返回不合法 / 没有可用查询文本 /
+      宿主版本较旧）。它是说明，不是错误提示，所以用次级文字色、不占卡片、不弹窗。
+   ② .knit-semcfg = 「选了混合 + provider 不可用」时**就地**展开的一行最小配置。
+      不是 Dashboard、不加滚动容器；三格控件都 flex:0/1 + min-width:0，窄面板先缩输入框。 */
+/* 检索模式那两组控件（工具栏第三组 / 配置区的 provider 类型）用**自己的类名**：
+   样式与 .knit-seg / .knit-seg-btn **逐字同值**（同一套 token、同一组数值、同一档 0.5px 描边），
+   只是它们是**另一个控件** —— 用同一个类名会让「工具栏里恰好两个排序按钮」那类老守卫
+   在查询 knit-seg-btn 时把检索模式的按钮也算进去。
+   ⚠️ 这段注释里不许出现反引号 —— 整个 CSS 在一个模板串里，一个反引号就会提前截断它。 */
+.knit-retseg{display:inline-flex;flex:none;border-radius:10px;overflow:hidden;
+  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+.knit-retseg-btn{height:28px;padding:0 15px;cursor:pointer;font-size:13px;font-weight:400;
+  border:none;background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6);
+  transition:background .16s ease,color .16s ease}
+.knit-retseg-btn + .knit-retseg-btn{border-left:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+.knit-retseg-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-retseg-btn.active{background:var(--knit-active-bg,rgba(255,255,255,.085));
+  color:var(--dsw-alias-label-primary,#e8eaed);font-weight:600}
+.knit-retnote{flex:none;padding:0 12px 8px;font-size:11px;line-height:1.5;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-semcfg{display:flex;align-items:center;gap:8px;padding:0 12px 8px;flex:none;flex-wrap:wrap}
+.knit-semcfg-input{flex:1 1 140px;min-width:0;max-width:240px;height:28px;padding:0 12px;border-radius:10px;
+  font-size:13px;background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
+  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))}
+.knit-semcfg-note{flex:1 1 100%;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#9aa0a6)}
 /* 排序组与类型组之间**就这一根线**（用户规格 §二.2：中间用一条浅灰竖线与排序区隔开）。
    色号取 .knit-seg 外框、.knit-filter 描边同一个 border-l3 ⇒ 三处一样淡；粗细写 1px ——
    0.5px 的竖线在高分屏上会淡到看不见，它不是描边而是分隔。纯装饰：aria-hidden。 */
@@ -940,12 +1077,42 @@ body[data-ds-dark-theme] .knit-root{
 /* 搜索框在工具栏**尾部**（用户规格 §二.3：搜索是对当前列表的进一步过滤，放最右符合
    工具栏惯例）。flex-basis 180px + grow ⇒ 常规面板里就是 180–240px 并贴住右边；
    max-width 240px 封顶之后剩下的空间交给 margin-left:auto（否则它会一路长到面板边缘）。
-   ⚠️ min-width:0 = 面板窄了**先缩搜索框**；前面两组都 flex:none，永远不被它挤。 */
-.knit-filter{flex:1 1 180px;min-width:0;max-width:240px;margin-left:auto;height:28px;padding:0 12px;border-radius:10px;font-size:13px;
-  background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);
-  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));outline:none;
+   ⚠️ min-width:0 = 面板窄了**先缩搜索框**；前面两组都 flex:none，永远不被它挤。
+   v0.23（2026-10-11 用户裁决）：描边从 input 挪到**外层容器** —— 因为检索模式那个小下拉
+   就贴在容器右端（中间一条细左线），两者共用一圈描边才像一个整体控件。
+   焦点态挪到 :focus-within（输入框与下拉谁拿到焦点，外框都亮）—— 行为与原来一致。 */
+.knit-searchwrap{display:flex;align-items:center;flex:1 1 180px;min-width:0;max-width:240px;margin-left:auto;
+  border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));border-radius:10px;
   transition:border-color .16s ease}
-.knit-filter:focus{border-color:var(--knit-accent)}
+.knit-searchwrap:focus-within{border-color:var(--knit-accent)}
+.knit-filter{flex:1 1 auto;min-width:0;height:28px;padding:0 12px;border:none;border-radius:10px;font-size:13px;
+  background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);outline:none}
+/* 检索模式：搜索框右端的小下拉。**只在相关档出现**，不出现时搜索框自己占满，
+   没有空位、也没有置灰的禁用态。 */
+.knit-retmode{position:relative;flex:none}
+.knit-retmode-btn{height:28px;padding:0 10px;cursor:pointer;font-size:12px;font-weight:400;white-space:nowrap;
+  border:none;border-left:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
+  background:transparent;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-retmode-btn:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-retmode-btn[aria-expanded="true"]{background:var(--knit-active-bg,rgba(255,255,255,.085));
+  color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-retmenu{position:absolute;right:0;top:32px;z-index:20;width:272px;padding:6px;text-align:left;
+  background:var(--dsw-alias-bg-base,#151517);border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
+  border-radius:10px;box-shadow:0 10px 26px rgba(0,0,0,.28)}
+.knit-retmenu-item{display:block;width:100%;text-align:left;cursor:pointer;padding:8px 9px;border-radius:8px;
+  border:none;background:transparent;color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-retmenu-item:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
+.knit-retmenu-item.active{background:var(--knit-active-bg,rgba(255,255,255,.085))}
+.knit-retmenu-item strong{display:block;font-size:12.5px;font-weight:600}
+.knit-retmenu-item span{display:block;margin-top:3px;font-size:11px;line-height:1.5;
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-retmenu-note{margin-top:4px;padding:7px 9px 4px;font-size:11px;line-height:1.5;
+  border-top:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12));
+  color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-retmenu-cfg{display:block;width:100%;text-align:left;cursor:pointer;padding:7px 9px;border:none;
+  background:transparent;color:var(--dsw-alias-label-primary,#e8eaed);font-size:12px}
+.knit-retmenu-cfg:hover{background:var(--knit-hover-bg,rgba(255,255,255,.03))}
 .knit-filter::placeholder{color:var(--dsw-alias-label-caption,#80868b)}
 /* v0.15「使用情况」→ v0.18「Context Usage Lens」：**列表上方的一块轻量观察层**。
    不是弹窗、不是新页面、不是 Dashboard、不画卡片、不画进度条、不用品牌色。
@@ -1577,7 +1744,6 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
   padding:8px 12px 16px;align-content:start;min-height:0}
 /* 分区里的网格：不留内边距。滚动一律交给 .knit-list，网格自己**不滚** ——
    嵌套滚动会在「全部」里变成滚动陷阱，而且封顶高度必然截断最后一行。 */
-.knit-media-grid.in-section{padding:0}
 .knit-media-card{min-width:0;cursor:pointer;border-radius:10px}
 .knit-media-thumbbox{position:relative;width:100%;height:var(--knit-media-cell,auto);aspect-ratio:1/1;
   border-radius:9px;overflow:hidden;
@@ -1609,16 +1775,6 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
 .knit-thumb-dur{position:absolute;right:5px;bottom:5px;padding:1px 5px;border-radius:5px;
   background:rgba(0,0,0,.7);color:#fff;font-size:10px;line-height:1.5;font-variant-numeric:tabular-nums;
   pointer-events:none}
-
-/* ── 「全部」按类型分上下两区（文档 / 图片与视频）──── */
-.knit-section{display:flex;flex-direction:column;gap:6px}
-.knit-section-head{display:flex;align-items:center;gap:6px;padding:0 2px}
-.knit-section-title{font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary,#9aa0a6)}
-.knit-section-count{font-size:10.5px;color:var(--dsw-alias-label-caption,#80868b);
-  font-variant-numeric:tabular-nums}
-.knit-section-more{margin-left:auto;flex:none;padding:0;border:none;background:transparent;
-  cursor:pointer;font-family:inherit;font-size:10.5px;color:var(--knit-accent)}
-.knit-section-more:hover{text-decoration:underline}
 
 /* ── 预览面板里的图片 / 视频 ───────────────────────── */
 .knit-preview-body.is-media{display:flex;align-items:center;justify-content:center;
@@ -1736,6 +1892,60 @@ video.knit-preview-media{width:100%;background:#000}
      */
     function readUsagePref() {
       return readPref(USAGE_KEY) === '1'
+    }
+
+    /**
+     * 读用户上次选的检索模式。**没写过、写坏了都回词法**（默认值是安全的那一个）。
+     * @returns {'lexical'|'hybrid'} 检索模式
+     */
+    function readRetrievalPref() {
+      return readPref(RETRIEVAL_KEY) === 'hybrid' ? 'hybrid' : 'lexical'
+    }
+
+    /**
+     * provider 地址是不是**本机回环**。只有回环才敢说「内容不离开这台机器」；
+     * 其它（含空地址）一律按「会发送到你配置的服务」披露 —— 宁可说得重一点。
+     * @param {string} base - 服务地址
+     * @returns {boolean} 是否回环
+     */
+    function isLoopbackBase(base) {
+      const text = String(base || '').trim().toLowerCase()
+      if (!text) return false
+      const host = text.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split('/')[0].replace(/:\d+$/, '')
+      return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
+    }
+
+    /**
+     * 把一个选择器对应的元素聚焦。**只在真浏览器里有用**：测试替身（test/harness.mjs）
+     * 没有真 `document`，SSR 里也没有 —— 所以整段包在 try 里，失败一律静默（聚焦失败
+     * 不该影响任何行为，更不能让面板崩）。
+     * @param {string} selector - CSS 选择器
+     */
+    function focusFirst(selector) {
+      try {
+        if (typeof document === 'undefined' || !document || typeof document.querySelector !== 'function') return
+        const node = document.querySelector(selector)
+        if (node && typeof node.focus === 'function') node.focus()
+      } catch (error) {
+        // 故意吞掉：焦点是锦上添花，不是功能
+      }
+    }
+
+    /**
+     * 宿主给的 reason 码 → i18n 键。**宿主只给码、不给文案**（AGENTS.md §4.5）。
+     * @param {string} reason - 宿主码
+     * @returns {string} i18n 键
+     */
+    function semanticReasonKey(reason) {
+      if (reason === 'no-provider') return 'sem.reason.noProvider'
+      if (reason === 'probe-failed') return 'sem.reason.probeFailed'
+      if (reason === 'timeout') return 'sem.reason.timeout'
+      if (reason === 'bad-response') return 'sem.reason.badResponse'
+      if (reason === 'no-query') return 'sem.reason.noQuery'
+      // 防御性：时间序下宿主整层短路（`not-applicable`）。那档下拉根本不出现，
+      // 但老/新宿主混合时仍可能回这个码 ⇒ 不许掉进「原因未知」。
+      if (reason === 'not-applicable') return 'sem.reason.notApplicable'
+      return 'sem.reason.unknown'
     }
 
     /**
@@ -2044,13 +2254,34 @@ video.knit-preview-media{width:100%;background:#000}
       // 「直接命中」后面跟一个「knit · client」）—— 它读起来是**标签 + 值**，不是一句话。
       const shown = terms.slice(0, 2).join(' · ')
       const key = `why.${reason.code}`
-      // 词典里没有这个码就把码本身显示出来 —— 宿主加了新码而客户端还没跟上时，
-      // 用户看到的是 `why.xxx` 这种明显异常，而不是一条静默的空行。
+      // v0.23 加固：**先看词典里有没有这个码**，再有条件地交给 `t()`。
+      // 未知码不赌官方 `bind()` 的缺失键行为（可能是 `undefined`），而是把键名显示出来 ——
+      // 宿主加了新码而客户端还没跟上时，用户看到 `why.xxx` 这种明显异常，
+      // 而不是一条静默的空行，更不是一个 `undefined`。
+      // （`ZH` 与 `EN` 的键集由 `test/i18n.test.mjs` 守齐，所以只查一本就够。）
+      if (ZH[key] === undefined) return key
       if (!terms.length) {
         const plain = `${key}Plain`
         return ZH[plain] !== undefined ? t(plain) : t(key)
       }
       return t(key, { term: shown })
+    }
+
+    /**
+     * v0.23：来源徽标的文案。**只认词典里真有的那几档**
+     * （`retrieval` / `relation` / `manual` / `semantic`）；未知值一律 `null` ⇒ **不给徽标**。
+     *
+     * 为什么不把未知值交给 `t()`：来源是宿主给的字符串，客户端不认识时既不该抛，
+     * 也不该把裸码（`prov.mystery`）或 `undefined` 渲染到界面上 —— 与 `DocRow` 调用点
+     * 那条纪律同源：「平铺列表里的条目来源未知，不能替它认领一个『检索』」。
+     *
+     * @param {unknown} provenance - 宿主给的那一档
+     * @returns {string|null} 文案或 null
+     */
+    function provText(provenance) {
+      if (typeof provenance !== 'string' || provenance.length === 0) return null
+      const key = `prov.${provenance}`
+      return ZH[key] !== undefined ? t(key) : null
     }
 
     function docOptionId(doc) {
@@ -2188,9 +2419,7 @@ video.knit-preview-media{width:100%;background:#000}
     const MOTION_EASE = 'cubic-bezier(.22,1,.36,1)'
     /** 幽灵行所在的「区」：分层视图用层名，平铺与「全部」各一个 —— 幽灵要插回原位。 */
     const MOTION_TIER_FLAT = 'flat'
-    const MOTION_TIER_ALL_DOCS = 'all-docs'
     /** v0.19：「全部」档里的代码区自己的区名 —— 幽灵行要插回**它原来那一区**，共用会插错位置。 */
-    const MOTION_TIER_ALL_CODE = 'all-code'
     /** 幸存行位移（换层 / 重排）的 FLIP 时长：比进入略长，它要真的「走」完一段距离。 */
     const MOTION_MOVE_MS = 340
     /** 位移小于这个像素数（含亚像素抖动）就当没动过，不排补间。 */
@@ -3529,6 +3758,9 @@ video.knit-preview-media{width:100%;background:#000}
         // `{pinned, excluded, skipped, persisted}`；`skipped` 是**这一批真的被排掉几篇**
         // （不是 excluded 的长度 —— 被排除的文件可能已经不在工作区里了）。
         control: null,
+        // v0.23：宿主回的 `semantic`（模式 / 是否可用 / 原因 / 候选数 / provider）。
+        // ⚠️ **老宿主没有这个字段** ⇒ 保持 null，界面按「宿主不支持混合检索」如实降级。
+        semantic: null,
       })
       const [preview, setPreview] = React.useState(null)
       /* v0.20 性能治理：**一分钟一次**的刷新信号。相对时间标签是按分钟变的，所以轮询只在
@@ -3566,6 +3798,16 @@ video.knit-preview-media{width:100%;background:#000}
       // v0.21：哪一条的**行级证据**是展开的。按 `rel` 记、一次只开一条 —— 证据是「这一行
       // 为什么在这里」的补充说明，同时展开多条就不是在看一行了。仍然放在最后（同上）。
       const [whyOpen, setWhyOpen] = React.useState('')
+
+      /* v0.23（Phase A）：检索模式 + provider 配置。
+         ⚠️ 四个 hook 都**追加在最后**：前面的槽位被测试按位预置（notice / sort / …），
+            插队会让老用例读到错的状态。`semForm` 用 `null` 表示「还没编辑过」——
+            那时表单值从宿主回的 `semantic.provider` 现推（见渲染里的 `semForm0`），
+            所以不需要额外的同步 effect。 */
+      const [retrieval, setRetrieval] = React.useState(readRetrievalPref)
+      const [semForm, setSemForm] = React.useState(null)
+      const [semBusy, setSemBusy] = React.useState(false)
+      const [semNotice, setSemNotice] = React.useState('')
 
       /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
          `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
@@ -3606,7 +3848,9 @@ video.knit-preview-media{width:100%;background:#000}
         try {
           // `usage=1` 是**开闸**（不是「顺便取一下」）：宿主只有看到它才会开始给这个会话记账。
           // 没打开「使用情况」的会话，宿主侧一个事件都不读。
-          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}${usageOn ? '&usage=1' : ''}`
+          // v0.23：`retrieval` 是**选填**参数 —— 老宿主忽略它（那就等于词法），
+          // 而词法模式下宿主**一次 provider 调用都不会发**（方案 §9.2 判据 1）。
+          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}&retrieval=${sort === 'relevance' && retrieval === 'hybrid' ? 'hybrid' : 'lexical'}${usageOn ? '&usage=1' : ''}`
           const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
           const data = await res.json()
           if (!live()) return
@@ -3630,6 +3874,8 @@ video.knit-preview-media{width:100%;background:#000}
               usage: data.usage || null,
               // v0.21：固定 / 排除的原始记录（面板要拿它画固定区、排除说明与管道条）。
               control: data.control || null,
+              // v0.23：`semantic` 可能不存在（老宿主）⇒ null，界面据此如实降级。
+              semantic: data.semantic || null,
               sig,
             }))
           } else {
@@ -3643,7 +3889,7 @@ video.knit-preview-media{width:100%;background:#000}
         // 返回同一个值，React 直接跳过这次更新）。标签读的是渲染时刻的钟，不受这里影响。
         const now = Date.now()
         bumpTick((prev) => (Math.floor(now / 60000) === Math.floor(prev / 60000) ? prev : now))
-      }, [sessionId, sort, kind, usageOn])
+      }, [sessionId, sort, kind, usageOn, retrieval])
 
       React.useEffect(() => {
         // 看不见就一个定时器都不挂：`visible` 变回 true 时本 effect 重跑，立刻 load 一次。
@@ -3701,16 +3947,14 @@ video.knit-preview-media{width:100%;background:#000}
           || String(doc.rel || '').toLowerCase().includes(q))
       }, [state.docs, query])
 
-      /* ── 「全部」：按类型分三区 ─────────────────────
-         文档区与代码区各固定 4 条，多余的在分区标题给「查看全部」；
-         媒体区**不截断** —— 一屏两行以外交给媒体区内部滚动（不隐藏、也不压小格子）。
-         v0.19 新增代码区，**顺序放在文档之后**：这不是排序（各区的条目顺序都来自
-         同一套任务检索），只是混排时的展示次序 —— Markdown 仍然是这个面板的主角。 */
-      const docItems = kind === KIND_ALL ? visibleDocs.filter((doc) => doc.kind === ARTIFACT_DOC) : []
-      const codeItems = kind === KIND_ALL ? visibleDocs.filter((doc) => doc.kind === ARTIFACT_CODE) : []
-      const mediaItems = kind === KIND_ALL ? visibleDocs.filter(isMedia) : []
-      const shownDocs = docItems.slice(0, ALL_DOC_CAP)
-      const shownCode = codeItems.slice(0, ALL_CODE_CAP)
+      /* ── 「全部」= **整份包的原样**（v0.23 方案 A，2026-10-12 用户裁决）──────
+         三层（主要 / 辅助 / 相关）里**文档与代码混排**，顺序就是阅读顺序；没有类型分区、
+         没有「每区 4 条」、没有「查看全部 →」。媒体**不在包里**（宿主已把媒体剔出装配），
+         所以它们在三层之后**单独一个不截断的网格**，也不会与层里的条目重复。
+         ⇒ 四个类型档的关系因此变得一句话说得清：`全部` = 包的原样；
+           `文档 / 代码 / 媒体` = 把同一个包（或同一批语料）过滤到某类。 */
+      const allRows = kind === KIND_ALL ? visibleDocs.filter((doc) => !isMedia(doc)) : []
+      const allMedia = kind === KIND_ALL ? visibleDocs.filter(isMedia) : []
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
       // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
       // 文档列表**没有列数可算**：永远一个文档一行（见 `DOC_GRID` 那段说明）。
@@ -3719,8 +3963,10 @@ video.knit-preview-media{width:100%;background:#000}
 
       /** 媒体网格：列数由 CSS 的 auto-fill 自己数；JS 只下发「一格多宽」用于正方形兜底。
        *  **不设 maxHeight** —— 有多少行就铺多少行，纵向滚动统一交给 `.knit-list`。 */
-      const mediaGrid = (docs, inSection) => h('div', {
-        className: `knit-media-grid${inSection ? ' in-section' : ''}`,
+      // v0.23：`inSection` 参数随「全部」的类型分区一起删除 —— 媒体网格只有一种形态
+      // （不带 `.in-section`，外层自己带内边距）。
+      const mediaGrid = (docs) => h('div', {
+        className: 'knit-media-grid',
         role: 'group',
         style: {
           '--knit-media-cell': `${mediaLayout.cell}px`,
@@ -3811,13 +4057,18 @@ video.knit-preview-media{width:100%;background:#000}
        */
       const contextView = React.useMemo(() => {
         const pack = state.context
-        if (!relevance || (kind !== KIND_DOC && kind !== KIND_CODE) || !pack) return null
+        // v0.23：`全部` 与 `文档`/`代码` 走**同一条**分层渲染路径 —— 区别只在
+        // `visibleDocs` 是哪个类型档过滤出来的那一批（媒体由下面的末尾网格接手）。
+        if (!relevance || (kind !== KIND_DOC && kind !== KIND_CODE && kind !== KIND_ALL) || !pack) return null
         const tiers = [
           ['primary', 'context.primary', 'context.primaryHint'],
           ['supporting', 'context.supporting', 'context.supportingHint'],
           ['related', 'context.related', 'context.relatedHint'],
         ]
-        const visible = new Set(visibleDocs.map((doc) => doc.rel))
+        // v0.23：层级过滤只认**成行的条目**（文档 / 代码）—— 媒体**永远不进层**。
+        // 宿主侧已经在装配之前把媒体剔掉了（`contextPayload()`），这里是第二道防线：
+        // 就算哪天宿主把一个靠文件名命中的 `.mp4` 塞进包里，界面也不会把它当上下文渲染。
+        const visible = new Set(visibleDocs.filter((doc) => !isMedia(doc)).map((doc) => doc.rel))
         /* v0.20 修正：宿主给三层条目的投影**只有 7 个键**（`context.js` 的
            `rel/title/summary/mtimeMs/kind/source/reason`）—— 那里**没有 `matches`**，
            而「命中片段」那一行读的是 `doc.matches`（下面的 `firstMatchOf`）。
@@ -3882,7 +4133,9 @@ video.knit-preview-media{width:100%;background:#000}
        * 会被算两次。「全部」档里文档只到上限，媒体全部可达。
        */
       const navDocs = kind === KIND_ALL
-        ? shownDocs.concat(mediaItems)
+        // 「全部」：三层里真的渲染出来的那些（文档 + 代码）**加上**末尾网格里的媒体 ——
+        // 媒体不是行，但它照样要能被键盘选中、也能被预览。
+        ? (contextView ? contextView.flat : allRows).concat(allMedia)
         : (contextView ? contextView.flat : visibleDocs)
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
@@ -4240,6 +4493,17 @@ video.knit-preview-media{width:100%;background:#000}
       /** 媒体条目的同源字节地址（缩略图 / 就地预览）。 */
       const srcFor = React.useCallback((doc) => mediaUrl(sessionId, doc.rel), [sessionId])
 
+      /**
+       * 切换检索模式并记住偏好。**只切偏好**：真正的 provider 调用发生在宿主侧，
+       * 下一次 `load()` 会带上新的 `retrieval`。切回词法时把配置区的提示清掉。
+       * @param {'lexical'|'hybrid'} value - 检索模式
+       */
+      const pickRetrieval = React.useCallback((value) => {
+        writePref(RETRIEVAL_KEY, value)
+        setRetrieval(value)
+        setSemNotice('')
+      }, [])
+
       /** 切换列表类型并记住偏好；同时收起上一类型的预览。 */
       const pickKind = React.useCallback((value) => {
         writePref(KIND_KEY, value)
@@ -4344,6 +4608,34 @@ video.knit-preview-media{width:100%;background:#000}
       /** 面板高度（px）。0 = 量不到（测试替身 / 首帧）——那时按「不矮」处理，不降级。 */
       const [panelH, setPanelH] = React.useState(0)
 
+      /* v0.23（2026-10-11）：检索模式改成搜索框右端的小下拉后的两个状态。
+         ⚠️ 与上面那条注释同一条纪律：**必须留在本组件所有既有 hook 之后**，
+            否则 `harness.seed()` 的位置预置会整体错位。 */
+      /** 那个小菜单开着没有。 */
+      const [retMenuOpen, setRetMenuOpen] = React.useState(false)
+      /** 就地配置区（`.knit-semcfg`）展开了没有 —— 由菜单里「配置语义 provider…」开关。 */
+      const [semCfgOpen, setSemCfgOpen] = React.useState(false)
+
+      /** 配置区一展开就把焦点送进第一个输入框（键盘用户不用自己 Tab 过去）。 */
+      React.useEffect(() => {
+        if (semCfgOpen) focusFirst('.knit-semcfg-input')
+      }, [semCfgOpen])
+
+      /** 点面板别处就收起菜单。判据用「点在 `.knit-retmode` 之内就放过」——
+       *  否则按钮自己的点击会先关（pointerdown）再开（click），菜单根本打不开。
+       *  ⚠️ 测试替身里 `window.addEventListener` 是空实现 ⇒ 这条只在真机生效，
+       *     所以 Esc 那条**必须**另外挂在按钮与菜单上（可被断言）。 */
+      React.useEffect(() => {
+        if (!retMenuOpen) return undefined
+        const onPointerDown = (event) => {
+          const node = event && event.target
+          if (node && typeof node.closest === 'function' && node.closest('.knit-retmode')) return
+          setRetMenuOpen(false)
+        }
+        window.addEventListener('pointerdown', onPointerDown)
+        return () => window.removeEventListener('pointerdown', onPointerDown)
+      }, [retMenuOpen])
+
       /** 点 Coverage 的某一层 → 滚到那一层 + 短暂高亮。
        *  ⚠️ 滚的是 `.knit-list`（唯一滚动容器）：Lens 自己不滚动，也不新增容器。
        *  ⚠️ 高亮走 state 而不是直接改 classList —— 这样测试替身里也能断言到结果。 */
@@ -4395,16 +4687,8 @@ video.knit-preview-media{width:100%;background:#000}
       const motionRows = (() => {
         if (state.status === 'error' || state.docs.length === 0 || visibleDocs.length === 0) return []
         if (kind === KIND_MEDIA) return []   // 媒体格子不参与：网格里收起高度没有意义
-        if (kind === KIND_ALL) {
-          if (docItems.length === 0 && codeItems.length === 0) return []
-          return [
-            ...shownDocs.map((doc, index) => (
-              { rel: doc.rel, tierKey: MOTION_TIER_ALL_DOCS, index, doc })),
-            ...shownCode.map((doc, index) => (
-              { rel: doc.rel, tierKey: MOTION_TIER_ALL_CODE, index, doc })),
-          ]
-        }
         if (contextView) {
+          // 有包（相关序）：三层的 key 就是运动分组 —— 「全部」与「文档」走同一条路。
           const rows = []
           for (const section of contextView.sections) {
             section.docs.forEach((doc, index) => rows.push(
@@ -4412,7 +4696,9 @@ video.knit-preview-media{width:100%;background:#000}
           }
           return rows
         }
-        return visibleDocs.map((doc, index) => (
+        // 平铺（时间序 / 没有包）：**媒体不进行**，它们走末尾那个网格。
+        const flatRows = kind === KIND_ALL ? allRows : visibleDocs
+        return flatRows.map((doc, index) => (
           { rel: doc.rel, tierKey: MOTION_TIER_FLAT, index, doc }))
       })()
       const motion = (() => {
@@ -4537,7 +4823,7 @@ video.knit-preview-media{width:100%;background:#000}
         // 平铺列表里的条目来源未知，不能替它认领一个「检索」。
         const controllable = Boolean(contextView && !isMedia(doc))
         return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary,
-          prov: doc.provenance ? t(`prov.${doc.provenance}`) : null,
+          prov: provText(doc.provenance),
           pinned: doc.provenance === 'manual',
           onAct: controllable ? act : null,
           whyOpen: Boolean(whyOpen) && whyOpen === doc.rel,
@@ -4560,37 +4846,6 @@ video.knit-preview-media{width:100%;background:#000}
           leaving: Boolean(doc.knitLeaving) })
       }
 
-      /** 「全部」的分区标题：类型名 + 「已显示 / 总数」+ 被截断时的「查看全部」。 */
-      const sectionHead = (labelKey, shownCount, totalCount, targetKind) =>
-        h('div', { className: 'knit-section-head' },
-          h('span', { className: 'knit-section-title' }, t(labelKey)),
-          h('span', { className: 'knit-section-count' },
-            t('section.count', { shown: shownCount, total: totalCount })),
-          totalCount > shownCount
-            ? h('button', {
-                type: 'button',
-                className: 'knit-section-more',
-                title: t('section.more'),
-                onClick: () => pickKind(targetKind),
-              }, t('section.more'))
-            : null)
-
-      /** 「全部」的上下两区：空的一区整个不渲染，免得只剩一个空标题。 */
-      const allSections = [
-        docItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'docs' },
-          sectionHead('kind.doc', shownDocs.length, docItems.length, KIND_DOC),
-          docsGrid(withGhosts(MOTION_TIER_ALL_DOCS, shownDocs))),
-        codeItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'code' },
-          sectionHead('kind.code', shownCode.length, codeItems.length, KIND_CODE),
-          docsGrid(withGhosts(MOTION_TIER_ALL_CODE, shownCode))),
-        mediaItems.length === 0 ? null : h('div', { className: 'knit-section', key: 'media' },
-          // 媒体不截断，所以只给一个标题，不给「已显示 / 总数」和「查看全部」
-          h('div', { className: 'knit-section-head' },
-            h('span', { className: 'knit-section-title' }, t('kind.media')),
-            h('span', { className: 'knit-section-count' }, String(mediaItems.length))),
-          mediaGrid(mediaItems, true)),
-      ]
-
       // 媒体视图：一格都不隐藏 —— 一屏两行以外的部分在媒体区**内部滚动**，
       // 既不让面板被整面媒体墙顶爆，也不会像旧版那样把剩下的条目直接切掉。
       const emptyText = kind === KIND_MEDIA
@@ -4607,9 +4862,13 @@ video.knit-preview-media{width:100%;background:#000}
             : visibleDocs.length === 0
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
-                ? mediaGrid(visibleDocs, false)
+                ? mediaGrid(visibleDocs)
                 : kind === KIND_ALL
-                  ? allSections
+                  // 「全部」= 包的原样（或时间序下一条平铺的最近改动）+ 末尾**不截断**的媒体网格。
+                  // 顺序是语义的一部分：媒体排在整份阅读顺序之后，不与层里的条目穿插。
+                  ? h(React.Fragment, null,
+                    contextView ? contextBody(contextView) : docsGrid(withGhosts(MOTION_TIER_FLAT, allRows)),
+                    allMedia.length > 0 ? mediaGrid(allMedia) : null)
                   : contextView
                     ? contextBody(contextView)
                     : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs))
@@ -4907,6 +5166,114 @@ video.knit-preview-media{width:100%;background:#000}
       const pipeDot = () => h('span', { className: 'knit-pipedot', 'aria-hidden': 'true' }, '·')
       const pipeSep = () => h('span', { className: 'knit-pipesep', 'aria-hidden': 'true' }, '|')
       const pinnedCount = pack && Array.isArray(pack.pinned) ? pack.pinned.length : 0
+
+      /* ── v0.23（Phase A）：从宿主回的 `semantic` 推出来的几个量 ─────────────
+         `semLive` 只看**实际生效**的模式：`mode === 'hybrid'` 才算语义真的在跑；
+         点了混合而宿主回 lexical（不可用 / 未配置 / 老宿主）⇒ 一律走「如实说明」这条。 */
+      const semInfo = state.semantic || null
+      const semOn = retrieval === 'hybrid'
+      const semLive = !!(semInfo && semInfo.mode === 'hybrid')
+      const semCandidateCount = semInfo ? Math.max(0, Number(semInfo.candidates) || 0) : 0
+      const semProvider = semInfo && semInfo.provider ? semInfo.provider : null
+      const semForm0 = semForm || (semProvider
+        ? { kind: semProvider.kind, base: semProvider.base, model: semProvider.model }
+        : { kind: 'ollama', base: '', model: '' })
+      const semReasonText = semInfo
+        ? t(semanticReasonKey(semInfo.reason))
+        : t('sem.unsupported')
+
+      /* v0.23（2026-10-11 用户裁决）：**检索模式贴在搜索框右端的小下拉里**，而且只在「相关」档出现。
+         理由（都在代码里）：时间序没有 Context Pack 分层（宿主 `contextPayload()` 要求
+         `sort === 'relevance'`），语义候选无处可落；宿主那侧也已按 `not-applicable` 整层短路。
+         ⚠️ **不再看 provider 配没配**（本次放宽）：未配也出现 —— Knit 还没有设置页，
+            藏起来用户就永远打不开这个功能；菜单里如实写状态，并就地给配置入口。
+         ⚠️ **永远不做置灰禁用态**。 */
+      const showRetrieval = sort === 'relevance'
+      const semReason = semInfo && typeof semInfo.reason === 'string' ? semInfo.reason : null
+      /** 菜单底部那行状态：如实说这一档现在到底生效成什么（不美化、不猜）。 */
+      const semStateText = !semOn
+        ? t('sem.state.lexical')
+        : (semLive
+          ? t('sem.state.hybridLive')
+          : (semReason && semReason !== 'no-provider'
+            ? t(semanticReasonKey(semReason))
+            : t('sem.state.noProvider')))
+      /** 「配置语义 provider…」入口只在「选了混合但没生效」时给 —— 其它状态下配置是无意义的动作。 */
+      const semCanConfigure = semOn && !semLive
+      /** Esc：关菜单并把焦点还给按钮（键盘可达性）。挂按钮与菜单两处，测试可断言。 */
+      const closeRetMenuOnEscape = (event) => {
+        if (!event || event.key !== 'Escape') return
+        event.stopPropagation()
+        setRetMenuOpen(false)
+        focusFirst('.knit-retmode-btn')
+      }
+
+      /* 保存并测试：**一次 POST**（宿主会 probe 一次，并在响应里回 `available` / `reason`）。
+         成功后把表单交还给宿主的回值（`setSemForm(null)`），再重取一次列表 ——
+         配置区/事实行下一帧就按宿主的事实重画，不在客户端自己猜。 */
+      const saveSemantic = async () => {
+        if (semBusy) return
+        setSemBusy(true)
+        setSemNotice('')
+        try {
+          const res = await fetch(SEMANTIC_API, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ kind: semForm0.kind, base: semForm0.base, model: semForm0.model }),
+          })
+          const data = await res.json().catch(() => null)
+          if (data && data.ok) {
+            setSemForm(null)
+            setSemNotice(data.available ? t('sem.savedOk') : t('sem.savedFail'))
+            await load()
+          } else {
+            setSemNotice(data ? hostMessage(data) : t('sem.savedFail'))
+          }
+        } catch (error) {
+          setSemNotice(String((error && error.message) || error))
+        } finally {
+          setSemBusy(false)
+        }
+      }
+
+      const semcfgNode = h('div', { className: 'knit-semcfg' },
+        h('div', { className: 'knit-retseg', role: 'group', 'aria-label': t('sem.kindAria') },
+          [['ollama', 'sem.kind.ollama'], ['openai-compatible', 'sem.kind.openai']].map(([value, labelKey]) =>
+            h('button', {
+              type: 'button',
+              key: value,
+              className: `knit-retseg-btn${semForm0.kind === value ? ' active' : ''}`,
+              'aria-pressed': semForm0.kind === value,
+              onClick: () => setSemForm({ ...semForm0, kind: value }),
+            }, t(labelKey)))),
+        h('input', {
+          className: 'knit-semcfg-input',
+          value: semForm0.base,
+          placeholder: t('sem.basePlaceholder'),
+          'aria-label': t('sem.baseAria'),
+          onChange: (event) => setSemForm({ ...semForm0, base: event.target.value }),
+        }),
+        h('input', {
+          className: 'knit-semcfg-input',
+          value: semForm0.model,
+          placeholder: t('sem.modelPlaceholder'),
+          'aria-label': t('sem.modelAria'),
+          onChange: (event) => setSemForm({ ...semForm0, model: event.target.value }),
+        }),
+        h('button', {
+          type: 'button',
+          className: 'knit-btn',
+          disabled: semBusy,
+          title: t('sem.saveTitle'),
+          onClick: saveSemantic,
+        }, semBusy ? t('sem.saving') : t('sem.save')),
+        // 披露：只有回环地址才敢说「不离开这台机器」，其余一律明写会发到哪个服务（方案 §2）。
+        h('span', { className: 'knit-semcfg-note' },
+          !semForm0.base
+            ? t('sem.disclose.empty')
+            : (isLoopbackBase(semForm0.base)
+              ? t('sem.disclose.local')
+              : t('sem.disclose.remote', { base: semForm0.base }))))
       const pipeNode = h('div', { className: 'knit-pipe' },
         pipeCell(t('pipe.collect', { n: collected })),
         pipeDot(),
@@ -4914,7 +5281,10 @@ video.knit-preview-media{width:100%;background:#000}
         pipeDot(),
         pipeCell(t('pipe.candidates', { n: state.total })),
         pipeSep(),
-        pipeCell(t('pipe.rank')),
+        // 这一格说的是**实际生效**的模式（`semantic.mode`），不是你点了什么：
+        // 点了混合但不可用时，宿主回的是 lexical，这里就必须还写「BM25 词法检索」。
+        pipeCell(t(semLive ? 'pipe.rankHybrid' : 'pipe.rank')),
+        ...(semLive ? [pipeDot(), pipeCell(t('pipe.semantic', { n: semCandidateCount }))] : []),
         pipeDot(),
         pipeCell(t('pipe.relations', { n: relCount })),
         pipeDot(),
@@ -4990,17 +5360,61 @@ video.knit-preview-media{width:100%;background:#000}
               title: t('kind.title'),
               onClick: () => pickKind(value),
             }, t(labelKey)))),
-        // 搜索排最后（工具栏尾部）：它对**当前这一份列表**再过滤，不动排序与类型。
-        h('input', {
-          className: 'knit-filter',
-          value: query,
-          placeholder: t('filter.placeholder'),
-          'aria-label': t('filter.aria'),
-          onChange: (event) => setQuery(event.target.value),
-          onKeyDown: (event) => {
-            if (event.key === 'Escape') { event.stopPropagation(); setQuery('') }
-          },
-        })),
+        /* v0.23（2026-10-11 用户裁决）：检索模式从「左端第三组」改成**贴在搜索框右端的小下拉**
+           （形态照 `02_方案与 Demo/Knit-v0.22-v0.24-Demo.html` 那份原型，用户觉得那种更好：
+           左端只留「排序 ｜ 类型」两组、不再挤第三组，长解释收进菜单）。
+           只在「相关」档出现；**未配 provider 也出现**（菜单里如实说状态 + 就地给配置入口）。
+           ⚠️ 它是**搜索框容器里的第二个孩子** —— 出现/不出现都不改左端布局：
+             藏起来时搜索框自己占满，没有空位、没有置灰的死控件。
+           ⚠️ 搜索仍是对**当前这一份列表**再过滤，不动排序与类型。 */
+        h('div', { className: 'knit-searchwrap' },
+          h('input', {
+            className: 'knit-filter',
+            value: query,
+            placeholder: t('filter.placeholder'),
+            'aria-label': t('filter.aria'),
+            onChange: (event) => setQuery(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Escape') { event.stopPropagation(); setQuery('') }
+            },
+          }),
+          showRetrieval ? h('div', { className: 'knit-retmode' },
+            h('button', {
+              type: 'button',
+              className: 'knit-retmode-btn',
+              'aria-haspopup': 'true',
+              'aria-expanded': retMenuOpen,
+              // 悬停提示给**整句话**（两根长键在这里被用上；菜单里则是逐选项的副文案）
+              title: t(retrieval === 'hybrid' ? 'sem.mode.hybridTitle' : 'sem.mode.lexicalTitle'),
+              onClick: () => setRetMenuOpen((value) => !value),
+              onKeyDown: closeRetMenuOnEscape,
+            }, t(retrieval === 'hybrid' ? 'sem.mode.hybridShort' : 'sem.mode.lexicalShort')),
+            retMenuOpen ? h('div', {
+              className: 'knit-retmenu',
+              role: 'menu',
+              'aria-label': t('sem.mode.aria'),
+              onKeyDown: closeRetMenuOnEscape,
+            },
+            [['lexical', 'sem.mode.lexicalOption', 'sem.mode.lexicalDesc'],
+              ['hybrid', 'sem.mode.hybridOption', 'sem.mode.hybridDesc']].map(([value, labelKey, descKey]) =>
+              h('button', {
+                type: 'button',
+                key: value,
+                role: 'menuitemradio',
+                'aria-checked': retrieval === value,
+                className: `knit-retmenu-item${retrieval === value ? ' active' : ''}`,
+                onClick: () => { pickRetrieval(value); setRetMenuOpen(false) },
+              },
+              h('strong', null, t(labelKey)),
+              h('span', null, t(descKey)))),
+            // 状态行：如实写这一档现在到底生效成什么（判据 5 的界面面）
+            h('div', { className: 'knit-retmenu-note' }, semStateText),
+            // 就地配置入口：只在「选了混合且没生效」时给；点开的是 Phase A 那行最小配置区
+            semCanConfigure ? h('button', {
+              type: 'button',
+              className: 'knit-retmenu-cfg',
+              onClick: () => { setRetMenuOpen(false); setSemCfgOpen((value) => !value) },
+            }, t(semCfgOpen ? 'sem.cfg.hide' : 'sem.cfg.show')) : null) : null) : null)),
       /* ── v0.21：检索状态摘要 + 排除说明（需求 §6.3）──────────────────────
          两条都是**事实行**，都在列表上方、都只在相关序出现（那是唯一有「包」的视图）。
       ⚠️ 它们的排位是**紧贴工具栏**的（2026-10-09 用户反馈）：观察层排在它们下面，
@@ -5011,6 +5425,15 @@ video.knit-preview-media{width:100%;background:#000}
          ② 排除说明：被排掉的那几篇 + 一个「恢复」。它说的是「这一批少了什么」，
             空的时候**不出现、也不占位**。 */
       relevance && contextView ? pipeNode : null,
+      /* ── v0.23（Phase A）：混合检索的两条行 ─────────────────────────────
+         ⚠️ 排位固定在这里（**状态摘要之后**）：摘要的前一个兄弟必须是 `.knit-bar`，
+            插到工具栏与摘要之间会把那条守卫顶掉（见 test/client.test.mjs 的顺序用例）。
+         两条都只在**用户选了混合**时出现：默认词法时一个节点都不产生（判据 2 的回归面）。
+         ① 事实行：混合**没生效**时如实写原因（含「宿主版本较旧」这一档静默降级）；
+         ② 配置行：只有「选了混合 + provider 不可用」才就地展开，一行三格 + 一句披露。 */
+      showRetrieval && semOn && !semLive ? h('div', { className: 'knit-retnote' }, semReasonText) : null,
+      showRetrieval && semCfgOpen && semInfo && !semInfo.available ? semcfgNode : null,
+      semOn && semNotice ? h('div', { className: 'knit-notice' }, semNotice) : null,
       relevance && excludedList.length > 0 ? h('div', { className: 'knit-excl' },
         h('span', { className: 'knit-excl-what' },
           t('control.excluded', { rel: excludedList.map((item) => item.rel).join('、') })),

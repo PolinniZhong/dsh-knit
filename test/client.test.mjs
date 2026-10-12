@@ -851,8 +851,85 @@ test('媒体：点视频卡片就地预览，播放器 controls 且静音自动�
   assert.ok(!calls.some((u) => u.includes('/api/doc')), '视频不应触发正文请求')
 })
 
-test('媒体：「全部」分上下两区，文档上限 4、媒体一格不隐藏', async () => {
-  installFetch(kindResponder({ all: bigMixedPayload() }))
+/* ── v0.23（方案 A）：「全部」= **整份包的原样** ─────────────────────────
+   2026-10-12 用户裁决：旧的三区（文档 / 代码 / 媒体）+ 每区限 4 条 + 「查看全部 →」
+   **整体删除**。「全部」现在是：三层（主要 / 辅助 / 相关）里**文档与代码混排**、
+   顺序就是阅读顺序；媒体在三层之后一个**不截断**的网格（它们进不了层 —— 没有正文，
+   只能靠**文件名**命中）。四个档因此一句话说得清：`全部` = 包的原样，
+   `文档 / 代码 / 媒体` = 把同一个包（或同一批语料）过滤到某类。 */
+
+/** 「全部」档的时间序载荷：7 文档 + 3 代码 + 5 图 + 4 视频 = 19 项。 */
+function allKindsPayload() {
+  const now = Date.now()
+  const row = (i, rel, title, kind, size) => ({
+    path: `/p/${rel}`, rel, name: rel, title, kind,
+    summary: kind === 'md' || kind === 'code' ? '摘要' : '',
+    size, mtimeMs: now - i * 1000, score: null,
+  })
+  const docs = []
+  for (let i = 1; i <= 7; i += 1) docs.push(row(i, `d${i}.md`, `文档${i}`, 'md', 500))
+  for (let i = 1; i <= 3; i += 1) docs.push(row(i, `c${i}.ts`, `c${i}.ts`, 'code', 300))
+  for (let i = 1; i <= 5; i += 1) docs.push(row(i, `i${i}.png`, `图${i}`, 'image', 1024))
+  for (let i = 1; i <= 4; i += 1) docs.push(row(i, `v${i}.mp4`, `视频${i}`, 'video', 99999))
+  return { ok: true, root: '/p', total: docs.length, mode: 'time', topic: '', kind: 'all', docs }
+}
+
+/** 造一个「全部」档的包条目。 */
+function allItem(rel, title, kind, reason) {
+  return {
+    rel,
+    path: `/p/${rel}`,
+    name: rel.split('/').pop(),
+    title,
+    summary: `摘要 ${title}`,
+    mtimeMs: Date.now(),
+    kind,
+    source: kind === 'code' ? 'impl' : 'doc',
+    reason,
+  }
+}
+
+/** 「全部」档的相关序载荷：包里**文档与代码在同一层**，媒体只在载荷里（不在包里）。 */
+function allContextPayload(overrides = {}) {
+  const at = Date.now()
+  const row = (rel, title, kind, score) => ({
+    path: `/p/${rel}`, rel, name: rel.split('/').pop(), title, kind,
+    summary: '摘要', size: 500, mtimeMs: at, score,
+  })
+  return {
+    ok: true, root: '/p', total: 5, mode: 'relevance', topic: '排序', keywords: ['排序'],
+    kind: 'all',
+    docs: [
+      row('docs/algo.md', '排序算法', 'md', 90),
+      row('src/sort.ts', 'sort.ts', 'code', null),
+      row('README.md', 'Knit', 'md', 10),
+      row('docs/other.md', '其他', 'md', 0),
+      {
+        path: '/p/a.png', rel: 'a.png', name: 'a.png', title: '图', kind: 'image',
+        summary: '', size: 1024, mtimeMs: at, score: null,
+      },
+    ],
+    context: {
+      mode: 'relevance', topic: '排序', task: '',
+      primary: [
+        allItem('docs/algo.md', '排序算法', 'md', { code: 'titleMatch', terms: ['排序'], fields: 2 }),
+        allItem('src/sort.ts', 'sort.ts', 'code', { code: 'filenameMatch', terms: ['sort'], fields: 1 }),
+      ],
+      supporting: [
+        allItem('README.md', 'Knit', 'md', { code: 'bodyMatch', terms: ['排序'], fields: 1 }),
+      ],
+      related: [
+        allItem('docs/other.md', '其他', 'md', { code: 'related', terms: [], fields: 0 }),
+      ],
+      totals: { primary: 2, supporting: 1, related: 1, matched: 3, total: 5 },
+      summary: { primary: 2, supporting: 1, related: 1, shown: 4, matched: 3, total: 5 },
+    },
+    ...overrides,
+  }
+}
+
+test('v0.23「全部」（时间序）：平铺的文档 + 代码 + 末尾**不截断**的媒体网格，分区一个都没有', async () => {
+  installFetch(kindResponder({ all: allKindsPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
   harness.seed(['', 'time', 'all'])
@@ -860,32 +937,128 @@ test('媒体：「全部」分上下两区，文档上限 4、媒体一格不隐
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  assert.equal(byExactClass(nodes, 'knit-section').length, 2, '文档区 + 媒体区，上下两区')
-  assert.deepEqual(
-    byExactClass(nodes, 'knit-section-title').map(textOf),
-    ['文档', '媒体'],
-  )
-  assert.equal(byToken(nodes, 'knit-doc').length, 4, '文档区最多 4 条')
-  // 载荷里 5 图 + 4 视频 = 9 个媒体：一格都不隐藏，纵向也**不封顶**（有多少行铺多少行）
-  assert.equal(byToken(nodes, 'knit-media-card').length, 9, '媒体区不截断，9 个全出')
-  assert.equal(byExactClass(nodes, 'knit-media-grid in-section').length, 1, '媒体区用分区网格')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^16$/, '顶行仍报总数')
-
-  const grid = byExactClass(nodes, 'knit-media-grid in-section')[0]
-  // 测试环境没有 ResizeObserver → 量不到宽度 → 走默认面板几何（632px）
-  assert.equal(grid.props.style['--knit-media-cell'], '118px', '默认面板下 9 个媒体 → 118px 的格子')
-  // 列数**不再由 JS 下发** —— 交给 CSS 的 auto-fill，面板一变宽就自己多一列
-  assert.equal(grid.props.style['--knit-media-cols'], undefined, '不再下发列数')
-  assert.equal(grid.props.style['--knit-media-label'], undefined, '118px 还有地方写文件名/时间')
-  // ⚠️ 纵向不许封顶：2026-09-20 前两版设 maxHeight 封「两行」，真机上第三行只露一点点
-  assert.equal(grid.props.style.maxHeight, undefined,
+  // ① 成行的是文档 + 代码：7 + 3 = 10 条（旧实现只给 4 条文档 + 0 条代码）
+  assert.equal(byToken(nodes, 'knit-doc').length, 10, '文档与代码都在行里，一条都不截断')
+  // ② 媒体一格不隐藏，而且网格只有一种形态（不再是「分区里的网格」）
+  assert.equal(byToken(nodes, 'knit-media-card').length, 9, '9 个媒体全出')
+  const grids = byExactClass(nodes, 'knit-media-grid')
+  assert.equal(grids.length, 1, '只有一个媒体网格')
+  assert.equal(grids[0].props.style.maxHeight, undefined,
     '网格不许设 maxHeight —— 纵向有多少行就铺多少行，滚动交给 .knit-list')
+  assert.equal(byClass(nodes, 'knit-media-grid in-section').length, 0, '分区形态的网格已删')
+  // ③ 分区那套**整体不在**
+  assert.equal(byExactClass(nodes, 'knit-section').length, 0)
+  assert.equal(byExactClass(nodes, 'knit-section-title').length, 0)
+  assert.equal(byExactClass(nodes, 'knit-section-more').length, 0, '没有「查看全部 →」了')
+  // ④ 媒体排在**所有行之后** —— 它是整份阅读顺序的尾巴，不与行穿插
+  const gridAt = nodes.indexOf(grids[0])
+  const lastRowAt = nodes.reduce((max, node, i) => (
+    String((node.props && node.props.className) || '').split(/\s+/).includes('knit-doc') ? i : max), -1)
+  assert.ok(lastRowAt >= 0 && gridAt > lastRowAt,
+    `媒体网格必须在最后一条行之后（grid=${gridAt}，最后一行=${lastRowAt}）`)
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^19$/, '顶行仍报总数')
+})
+
+test('v0.23「全部」（相关序）：与「文档」档**同一套三层**，代码进层、媒体不进', async () => {
+  const { nodes } = await mountWithPayload(allContextPayload(), 'all')
+  // ① 三层标题与提示语与「文档」档逐字一致（不再有「文档 / 代码 / 媒体」三个分区标题）
+  assert.deepEqual(
+    byExactClass(nodes, 'knit-tiername').map(textOf),
+    ['主要上下文', '辅助上下文', '相关上下文'],
+  )
+  assert.ok(
+    byExactClass(nodes, 'knit-tierhint').map(textOf).join(' ').includes('先看'),
+    '主要上下文照样有「先看」那句提示',
+  )
+  // ② 代码与文档**在同一层里**混排；媒体不进任何层
+  const tiers = byExactClass(nodes, 'knit-tier')
+  const inTier = (rel) => tiers.some((tier) => flattenUnder(tier)
+    .some((n) => n.props && n.props['data-knit-rel'] === rel))
+  assert.ok(inTier('docs/algo.md'))
+  assert.ok(inTier('src/sort.ts'), '代码进层（旧实现里它在一个单独的「代码」区里）')
+  assert.ok(!inTier('a.png'), '媒体不进层')
+  // ③ 媒体仍然渲染 —— 在三层之后的那个网格里
+  assert.equal(byToken(nodes, 'knit-media-card').length, 1)
+})
+
+test('v0.23「全部」↔「文档」：文档档的层 = 全部档的层**去掉代码与媒体**（同一份包）', async () => {
+  const pack = allContextPayload()
+  const all = await mountWithPayload({ ...pack, kind: 'all' }, 'all')
+  // 文档档的载荷里本来就不该有代码与媒体（宿主按 kind 过滤语料）
+  const doc = await mountWithPayload(
+    { ...pack, kind: 'doc', docs: pack.docs.filter((d) => d.kind === 'md') },
+    'doc',
+  )
+  const relsInTiers = (nodes) => byExactClass(nodes, 'knit-tier').flatMap((tier) => flattenUnder(tier)
+    .map((n) => n.props && n.props['data-knit-rel'])
+    .filter(Boolean))
+  const allRels = relsInTiers(all.nodes)
+  const docRels = relsInTiers(doc.nodes)
+  assert.deepEqual(
+    docRels,
+    allRels.filter((rel) => rel.endsWith('.md')),
+    '文档档 = 全部档里去掉代码与媒体（顺序也一致）',
+  )
+  assert.ok(allRels.includes('src/sort.ts'), '代码只出现在「全部」档')
+  assert.ok(!allRels.includes('a.png') && !docRels.includes('a.png'), '媒体两档都不进层')
+})
+
+test('v0.23「全部」：媒体**永远不进层**（第二道防线 —— 哪怕宿主把它塞进包里）', async () => {
+  const hostile = allContextPayload()
+  // 模拟「宿主把靠文件名命中的媒体塞进了层」：客户端必须自己把它挡在外面
+  hostile.context.supporting = hostile.context.supporting.concat([
+    allItem('a.png', '图', 'image', { code: 'semantic', terms: [], fields: 0, term: '' }),
+  ])
+  const { nodes } = await mountWithPayload(hostile, 'all')
+  const tiers = byExactClass(nodes, 'knit-tier')
+  assert.ok(
+    !tiers.some((tier) => flattenUnder(tier).some((n) => n.props && n.props['data-knit-rel'] === 'a.png')),
+    '媒体绝不许被当成上下文条目渲染',
+  )
+  assert.equal(byToken(nodes, 'knit-media-card').length, 1, '它照旧在末尾的网格里（不消失）')
+})
+
+test('v0.23「全部」：键盘能走到**每一个**条目（没有任何上限截断）', async () => {
+  installFetch(kindResponder({ all: allKindsPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'all'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const visited = new Set()
+  for (let i = 0; i < 30; i += 1) {
+    // ⚠️ 每轮都要取**最新渲染**里的 list：`onKeyDown` 闭包捕获的是那一轮的 cursor，
+    //    拿第一次的节点反复按，永远只能从第一条走到第二条（写完实测踩到）。
+    byExactClass(nodes, 'knit-list')[0].props.onKeyDown({ key: 'ArrowDown', preventDefault() {} })
+    nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+    await harness.flush()
+    const current = byToken(nodes, 'cursor')[0]
+    if (current) visited.add(String(current.props['data-knit-rel'] || ''))
+  }
+  // 旧实现里 d5–d7.md 与全部媒体都到不了（被每区 4 条与分区上限截断）
+  assert.ok(visited.has('d7.md'), `被旧上限截断的文档现在必须可达：${[...visited].join(', ')}`)
+  assert.ok(visited.has('i1.png'), '媒体格子同样可达（它们在末尾的网格里）')
+})
+
+test('v0.23「全部」：分区那套特例在**源码里整体删除**（不是关掉）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/client/client.js', import.meta.url)),
+    'utf8',
+  )
+  for (const dead of ['knit-section', 'ALL_DOC_CAP', 'ALL_CODE_CAP', 'MOTION_TIER_ALL', "'section.count'", "'section.more'"]) {
+    assert.ok(!source.includes(dead), `「全部」的分区特例必须整体删除，源码里不该再有 ${dead}`)
+  }
+  // 证伪方式：把任意一个名字放回源码，这条守卫就会红（写完实测过一次）。
 })
 
 test('媒体：条目不多时卡片正常带文件名与时间，不让文字让位', async () => {
   // 1 篇文档 + 5 媒体（正好一屏内）
-  const docs = bigMixedPayload().docs.slice(0, 1).concat(
-    bigMixedPayload().docs.filter((d) => d.kind !== 'md').slice(0, 5))
+  const pool = mixedPayload().docs
+  const docs = pool.slice(0, 1).concat(pool.filter((d) => d.kind !== 'md').slice(0, 4))
   installFetch(kindResponder({ all: mixedPayload({ total: docs.length, docs }) }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -894,117 +1067,10 @@ test('媒体：条目不多时卡片正常带文件名与时间，不让文字�
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  const grid = byExactClass(nodes, 'knit-media-grid in-section')[0]
+  const grid = byExactClass(nodes, 'knit-media-grid')[0]
   assert.equal(grid.props.style['--knit-media-label'], undefined, '不缩小就保留文件名/时间')
-  assert.equal(byExactClass(nodes, 'knit-media-meta').length, 5, '5 个媒体都有文字区')
-})
-
-test('媒体：「全部」的文档区被截断时给「已显示 / 总数」与「查看全部」，媒体区不截断', async () => {
-  installFetch(kindResponder({ all: bigMixedPayload() }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  // 7 篇文档里只显示 4 条；媒体 9 个全显示，所以媒体区没有「已显示 / 总数」
-  assert.deepEqual(byExactClass(nodes, 'knit-section-count').map(textOf), ['4 / 7', '9'])
-  assert.equal(byExactClass(nodes, 'knit-section-more').length, 1, '只有文档区被截断')
-})
-
-test('媒体：「全部」没被截断时不出现「查看全部」，空的一区整个不渲染', async () => {
-  // 1 篇文档 + 1 图：都低于上限
-  installFetch(kindResponder({ all: mixedPayload({ total: 2, docs: mixedPayload().docs.slice(0, 2) }) }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  assert.equal(byExactClass(nodes, 'knit-section').length, 2)
-  assert.equal(byExactClass(nodes, 'knit-section-more').length, 0, '没截断就没有「查看全部」')
-  assert.deepEqual(byExactClass(nodes, 'knit-section-count').map(textOf), ['1 / 1', '1'])
-})
-
-test('媒体：只有文档时「全部」只出一区，不留空标题', async () => {
-  installFetch(kindResponder({ all: mixedPayload({ total: 1, docs: mixedPayload().docs.slice(0, 1) }) }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  assert.equal(byExactClass(nodes, 'knit-section').length, 1)
-  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['文档'])
-  assert.equal(byExactClass(nodes, 'knit-media-grid in-section').length, 0)
-})
-
-test('媒体：「全部」文档区的「查看全部」点了切到文档分类', async () => {
-  const { calls } = installFetch(kindResponder({
-    all: bigMixedPayload(), doc: listPayload(), media: mediaPayload(),
-  }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  // 媒体区不截断，所以「全部」里只剩文档区那一个「查看全部」
-  byExactClass(nodes, 'knit-section-more')[0].props.onClick()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  assert.ok(calls.some((u) => u.includes('kind=doc')), `实际: ${calls.join(', ')}`)
-  assert.equal(globalThis.window.localStorage.getItem('dsh-knit:kind'), 'doc')
-  assert.equal(byExactClass(nodes, 'knit-section').length, 0, '已离开「全部」，不再有分区')
-  assert.equal(byExactClass(nodes, 'knit-media-grid').length, 0, '文档视图里没有媒体网格')
-})
-
-test('媒体：只有媒体时「全部」的媒体区不截断、也不给「查看全部」', async () => {
-  const now = Date.now()
-  const docs = Array.from({ length: 9 }, (_, i) => ({
-    path: `/p/i${i}.png`, rel: `i${i}.png`, name: `i${i}.png`, title: `图${i}`,
-    kind: 'image', summary: '', size: 1024, mtimeMs: now - i * 1000, score: null,
-  }))
-  installFetch(kindResponder({ all: mixedPayload({ total: docs.length, docs }) }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  assert.equal(byExactClass(nodes, 'knit-section').length, 1, '只有媒体区')
-  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['媒体'])
-  assert.equal(byExactClass(nodes, 'knit-section-more').length, 0, '媒体区不截断，没有「查看全部」')
-  assert.equal(byToken(nodes, 'knit-media-card').length, 9)
-})
-
-test('媒体：「全部」的键盘导航只走到分区上限内，不落到被截断的条目', async () => {
-  installFetch(kindResponder({ all: bigMixedPayload() }))
-  const { KnitBody } = loadClientModule().exports.__test
-  harness.reset()
-  harness.seed(['', 'time', 'all'])
-  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-  await harness.flush()
-  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-
-  const list = byExactClass(nodes, 'knit-list')[0]
-  // 上限内共 4 + 6 = 10 条；连按 20 次也不能走到第 11 条
-  for (let i = 0; i < 20; i += 1) {
-    list.props.onKeyDown({ key: 'ArrowDown', preventDefault() {} })
-    nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
-    await harness.flush()
-  }
-  const withCursor = byToken(nodes, 'cursor')
-  assert.equal(withCursor.length, 1, '任何时候只有一个条目是 cursor')
-  const reached = String(withCursor[0].props['data-knit-rel'] || '')
-  assert.ok(!/^d[5-7]\.md$/.test(reached), `不该落到被截断的文档：${reached}`)
+  assert.equal(byExactClass(nodes, 'knit-media-meta').length, docs.filter((d) => d.kind !== 'md').length,
+    '每个媒体都有文字区')
 })
 
 test('媒体：mediaLayoutFor —— 列数只跟可用宽度走，格子基准固定、与条目数无关', () => {
@@ -1794,14 +1860,14 @@ function contextPayload(overrides = {}) {
  * @param {object} payload - `fetch` 的载荷
  * @returns {Promise<{nodes:object[], render:s Function}>} 首帧节点与重渲染函数
  */
-async function mountWithPayload(payload) {
+async function mountWithPayload(payload, kind = 'doc') {
   installFetch((url) => (url.includes('/api/links')
     ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
     : payload))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
-  // 前两个 hook 槽位是 notice / sort —— 预置成相关序，面板才会去用 Context Pack
-  harness.seed(['', 'relevance'])
+  // 前三个 hook 槽位是 notice / sort / kind —— 预置成相关序，面板才会去用 Context Pack
+  harness.seed(['', 'relevance', kind])
   const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
   // ⚠️ 数据到位后要再走一轮 render → flush → render：cursor 是在**数据到达之后**
   // 那一轮 effect 里落位的（AGENTS.md §6.2：断言前少一轮就会停在初值）。
@@ -3049,9 +3115,11 @@ test('v0.18 定位手感：高亮时长与 CSS 同步；对比控件描边用官
   assert.match(source,
     /\.knit-seg-btn \+ \.knit-seg-btn\{border-left:0\.5px solid var\(--dsw-alias-border-l3/,
     '「相关 / 最新」之间的分隔线也是同一档同粗（色或粗细差一点就会看得出来）')
-  assert.match(source, /\.knit-filter\{[^}]*border:0\.5px solid var\(--dsw-alias-border-l3/,
+  // v0.23（2026-10-11 用户裁决）：描边从输入框挪到**搜索框容器**（.knit-searchwrap）——
+  // 检索模式那个小下拉贴在容器右端，两者共用一圈描边才像一个控件。色与粗细一字不变。
+  assert.match(source, /\.knit-searchwrap\{[^}]*border:0\.5px solid var\(--dsw-alias-border-l3/,
     '搜索框描边用 border-l3、0.5px')
-  assert.ok(!/\.knit-(?:seg|filter)\{[^}]*border[^;]*--dsw-alias-border-l4/.test(source),
+  assert.ok(!/\.knit-(?:seg|searchwrap)\{[^}]*border[^;]*--dsw-alias-border-l4/.test(source),
     '这两个控件不许再退回 l4')
   assert.ok(!/\.knit-seg(-btn \+ \.knit-seg-btn)?\{[^}]*border[^;]*:1px solid var\(--dsw-alias-border-l3/
     .test(source), '这三个描边要么一起 0.5px，要么一起改 —— 不许只把其中一处写回 1px')
@@ -3892,7 +3960,7 @@ test('v0.19 网页预览：只有 HTML 给这个入口，点了走官方标签�
   assert.ok(byExactClass(nodes, 'knit-codepane').length === 1, '它照旧走就地代码预览')
 })
 
-test('v0.19 代码：「全部」档是三区（文档 / 代码 / 媒体），代码区排在媒体区之前且限流', async () => {
+test('v0.19 代码/v0.23「全部」：文档与代码混排在一条平铺列表里，媒体在末尾（不再有分区顺序）', async () => {
   const now = Date.now()
   const docs = []
   for (let i = 1; i <= 7; i += 1) {
@@ -3901,10 +3969,10 @@ test('v0.19 代码：「全部」档是三区（文档 / 代码 / 媒体），�
       kind: 'md', summary: '摘要', size: 500, mtimeMs: now - i * 1000, score: null,
     })
   }
-  for (let i = 1; i <= 6; i += 1) {
+  for (let i = 1; i <= 3; i += 1) {
     docs.push({
-      path: `/p/src/c${i}.ts`, rel: `src/c${i}.ts`, name: `c${i}.ts`, title: `c${i}.ts`,
-      kind: 'code', summary: 'src/', size: 900, mtimeMs: now - i * 1000, score: null,
+      path: `/p/c${i}.ts`, rel: `c${i}.ts`, name: `c${i}.ts`, title: `c${i}.ts`,
+      kind: 'code', summary: '实现', size: 300, mtimeMs: now - i * 1000, score: null,
     })
   }
   for (let i = 1; i <= 3; i += 1) {
@@ -3922,15 +3990,13 @@ test('v0.19 代码：「全部」档是三区（文档 / 代码 / 媒体），�
   await harness.flush()
   nodes = render()
 
-  assert.deepEqual(byExactClass(nodes, 'knit-section-title').map(textOf), ['文档', '代码', '媒体'],
-    '三区的顺序是文档 → 代码 → 媒体')
-  // 文档区 4 条 + 代码区 4 条 = 8 行文本行；媒体区是格子，不算行
-  assert.equal(byToken(nodes, 'knit-doc').length, 8, '文档区与代码区各自限 4 条')
-  assert.equal(byExactClass(nodes, 'knit-lang').length, 4, '语言徽章只跟着代码区那 4 行')
+  // v0.23（方案 A）：**没有分区标题**，文档与代码在同一个平铺列表里，一条都不截断
+  assert.equal(byExactClass(nodes, 'knit-section-title').length, 0, '分区标题已整体删除')
+  assert.equal(byToken(nodes, 'knit-doc').length, 10, '文档 7 + 代码 3 全在行里')
+  assert.equal(byExactClass(nodes, 'knit-lang').length, 3, '语言徽章跟着代码那几行')
   assert.equal(byToken(nodes, 'knit-media-card').length, 3, '媒体一格不隐藏')
-  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^16$/, '顶行仍报总数')
+  assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^13$/, '顶行仍报总数')
 })
-
 test('v0.19 代码：Usage Lens 里的代码路径照常显示（读的是一份事实、不是两套）', async () => {
   installFetch(() => contextPayload({
     usage: {
@@ -4609,6 +4675,94 @@ test('v0.21 来源：检索 / 关系 / 用户固定 三个中性词，不是分�
   }
 })
 
+/* ── v0.23 可选混合检索：来源与理由各多一档（Phase B）──────────────
+   宿主开始**真的把语义候选补进包**之后，契约里多两个值：
+     · `provenance: 'semantic'` ⇒ 来源徽标「语义相关」（与前三档同一个中性词组）；
+     · `reason.code: 'semantic'` ⇒ 理由句（只陈述可复核的事实：标题 + 摘要的向量相似）。
+   第三件事是**未知值**：客户端不认识的 provenance / reason.code 不许抛、
+   不许把 `undefined` 或裸码渲染到界面上。 */
+
+test('v0.23 来源：语义 是第四档中性词（徽标），与前三档同一组', async () => {
+  const payload = v021Payload({ pinnedRels: ['docs/pin.md'] })
+  payload.context.primary = [{ ...payload.context.primary[0], provenance: 'semantic' }]
+  payload.context.supporting = [{ ...payload.context.primary[0], rel: 'docs/eval.md', provenance: 'relation' }]
+  const { nodes } = await mountWithPayload(payload)
+  const provs = byExactClass(nodes, 'knit-prov').map(textOf).sort()
+  assert.deepEqual(provs, ['关系', '用户固定', '语义相关'].sort(), '四档来源共用一套中性词')
+  // 来源**不是强弱**：不许带数字 / 百分比 / 颜色语义（与 v0.21 同一条纪律）
+  for (const text of provs) {
+    assert.ok(!/\d|%/.test(text), `来源词里不许出现数字或百分比：${text}`)
+  }
+})
+
+test('v0.23 理由：reason.code = semantic 渲染成「语义相关」，且只写可复核的事实', async () => {
+  const payload = v021Payload()
+  payload.context.primary = [{
+    ...payload.context.primary[0],
+    // 只换理由码：这样这一行里的「语义相关」只可能来自理由，不会与来源徽标混在一起
+    provenance: 'retrieval',
+    reason: { code: 'semantic', terms: [], fields: 0, term: '' },
+  }]
+  const { nodes } = await mountWithPayload(payload)
+  const row = byToken(nodes, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  const text = textOf(row)
+  assert.ok(text.includes('语义相关'), `理由要渲染出来：${text}`)
+  assert.ok(!text.includes('why.semantic'), `不许把词典键漏到界面上：${text}`)
+  assert.ok(!/模型|AI|置信|相似度/.test(text), `理由只陈述事实，不许出现模型 / 置信度这类说法：${text}`)
+})
+
+test('v0.23 来源 / 理由：英文环境下是 semantic / semantic match', async () => {
+  const payload = v021Payload()
+  payload.context.primary = [{
+    ...payload.context.primary[0],
+    provenance: 'semantic',
+    reason: { code: 'semantic', terms: [], fields: 0, term: '' },
+  }]
+  installFetch((url) => (url.includes('/api/links')
+    ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
+    : payload))
+  const { exports } = loadClientModule()
+  // 词典是模块级状态：apply 到 en 之后整块面板都说英文（与真机一致）
+  exports.apply(fakeCtx({ sidebarRightTabs: true, locale: 'en' }).ctx)
+  const { KnitBody } = exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const provs = byExactClass(nodes, 'knit-prov').map(textOf)
+  assert.ok(provs.includes('semantic'), `英文来源词是中性小写 semantic：${provs.join(' / ')}`)
+  const row = byToken(nodes, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  const text = textOf(row)
+  assert.ok(text.includes('semantic match'), `英文理由句：${text}`)
+  assert.ok(!text.includes('why.semantic'), `不许把词典键漏出来：${text}`)
+})
+
+test('v0.23 未知值降级：不认识的 provenance / reason.code 不抛、不渲染 undefined', async () => {
+  const payload = v021Payload()
+  payload.context.primary = [{
+    ...payload.context.primary[0],
+    provenance: 'mystery',
+    reason: { code: 'mystery', terms: [], fields: 0, term: '' },
+  }]
+  // 「不抛」这一条由这次 await 自己守：渲染路径真的抛了，这条用例直接红。
+  const { nodes } = await mountWithPayload(payload)
+  assert.equal(byExactClass(nodes, 'knit-prov').length, 0, '不认识的来源 ⇒ 一个徽标都不给（不替它认领一档）')
+  const flat = nodes.map((node) => textOf(node)).join('\n')
+  assert.ok(!flat.includes('undefined'), '任何位置都不许渲染出 undefined')
+  // ⚠️ 未知**理由码**会显示键名（下面那条），所以这里只守**来源**那一侧不许漏裸码。
+  assert.ok(!flat.includes('prov.mystery'), '未知来源不许以 `prov.mystery` 这种裸码出现在界面上')
+  const row = byToken(nodes, 'knit-doc').find((r) => r.props['data-knit-rel'] === 'docs/algo.md')
+  assert.ok(
+    textOf(row).includes('why.mystery'),
+    '未知理由码显示键名（可见的异常，便于发现宿主加了码而客户端没跟上），而不是一条静默的空行',
+  )
+})
+
 test('v0.21.x 布局：标题行只剩标题与时间，来源与固定 / 排除搬到证据行右端（固定 → 排除 → 来源词）', async () => {
   /* 2026-10-08 用户规格（Context 列表操作布局优化）：标题行右侧原来并排四样东西
      （来源词 + 固定 + 排除 + 时间）＝信息过载。来源与命中段、理由说的是**同一层证据**，
@@ -4805,32 +4959,62 @@ test('v0.21.x 检索状态摘要：单行三组、竖线分隔、组内中点，
 test('v0.21.x 工具栏：排序 ｜ 竖线 ｜ 类型 ｜ 搜索一行，两组不做成一个整体，搜索永远排尾', async () => {
   /* 2026-10-09 用户规格：左侧「相关 / 最新」负责排序；中间「文档 / 代码 / 媒体 / 全部」负责
      内容类型；搜索框固定在最右侧、宽度自适应（常规面板 180–240px，窄屏先缩它）。三条要守住：
-     ① 六个选项**不做成一个整体** —— 排序与类型是两个条件，中间一根浅灰竖线就是那道边界；
+     ① 各条件**不做成一个整体** —— 排序 / 类型 / 检索模式是三个条件，中间的浅灰竖线就是边界；
      ② 搜索排尾、贴右、`flex:1 1 180px` + `max-width:240px` + `min-width:0`；
-     ③ 条件彼此独立：选「代码」再选「最新」= 最新的代码，搜索词两边都不重置。 */
+     ③ 条件彼此独立：选「代码」再选「最新」= 最新的代码，搜索词两边都不重置。
+     ⚠️ 2026-10-11（用户裁决，v0.23）：检索模式**不再**是左端第三组 —— 它搬进了
+             **搜索框容器**（`.knit-searchwrap`）的右端，成了一个小下拉（`knit-retmode-btn`）。
+             所以竖线又从 2 根**回到 1 根**：左端只有「排序 ｜ 类型」两组。
+             它仍在工具栏里（只是嵌在搜索框里），而且**未配 provider 也在**（菜单里如实说状态）。 */
   const { nodes: first, renderAgain } = await mountWithPayload(v021Payload())
   let nodes = first
 
   const bar = byExactClass(nodes, 'knit-bar')
   assert.equal(bar.length, 1, '工具栏恰好一个')
+  // 直接子节点的类名（要判「谁是最后一个」必须看直接子节点，不能看 flatten 后的整棵子树）
+  const directOf = (node) => {
+    const out = []
+    const push = (n) => {
+      if (!n || typeof n !== 'object') return
+      if (Array.isArray(n)) { n.forEach(push); return }
+      const type = n.type
+      if (type && typeof type === 'object' && typeof type.type === 'function') { push(type.type(n.props)); return }
+      if (typeof type === 'function') { push(type(n.props)); return }
+      out.push(String((n.props && n.props.className) || ''))
+    }
+    ;(node.children || []).forEach(push)
+    return out
+  }
   const under = flattenUnder(bar[0]).slice(1)
   const cls = under.map((n) => String(n.props.className || ''))
   const at = (name) => cls.findIndex((c) => c === name)
 
-  // ① 顺序：排序 → 竖线 → 类型 → 搜索（顺序本身就是这条规格要传达的信息）
-  for (const name of ['knit-seg', 'knit-bar-sep', 'knit-types', 'knit-filter']) {
+  // ① 顺序：排序 → 竖线 → 类型 → 搜索框（检索模式嵌在搜索框里 ⇒ 左端回到两组）
+  for (const name of ['knit-seg', 'knit-bar-sep', 'knit-types', 'knit-searchwrap']) {
     assert.ok(at(name) >= 0, `工具栏里必须有 ${name}：${cls.join(' / ')}`)
   }
-  assert.ok(at('knit-seg') < at('knit-bar-sep'), '竖线在排序组右边')
-  assert.ok(at('knit-bar-sep') < at('knit-types'), '竖线在类型组左边')
-  assert.equal(cls.at(-1), 'knit-filter', '搜索是工具栏里最后一个节点（工具栏尾部）')
-  assert.equal(byClass(nodes, 'knit-bar-sep').length, 1, '两组之间**就一根**线')
-  assert.equal(byExactClass(nodes, 'knit-bar-sep')[0].props['aria-hidden'], 'true',
-    '分隔线是装饰，不进可达性树')
+  assert.ok(at('knit-seg') < at('knit-bar-sep'), '第一根竖线在排序组右边')
+  assert.ok(at('knit-bar-sep') < at('knit-types'), '第一根竖线在类型组左边')
+  assert.ok(at('knit-types') < at('knit-searchwrap'), '搜索框（容器）排在类型组右边')
+  assert.equal(directOf(bar[0]).at(-1), 'knit-searchwrap',
+    '搜索框是工具栏里最后一个直接子节点（工具栏尾部）；那个下拉嵌在它里面')
+  // v0.23（2026-10-11）：检索模式搬进搜索框 ⇒ 竖线从 2 根**回到 1 根**（左端只有两组）
+  assert.equal(byClass(nodes, 'knit-bar-sep').length, 1, '左端两组之间**就一根**线')
+  // 它确实在**搜索框容器里**（不是又回到左端去了），而且未配 provider 也在
+  const wrap = byExactClass(nodes, 'knit-searchwrap')[0]
+  assert.equal(byClass(flattenUnder(wrap), 'knit-retmode-btn').length, 1,
+    '检索模式那个下拉必须嵌在搜索框容器里（2026-10-11 搬的位置）')
+  assert.equal(byClass(under, 'knit-retseg').length, 0,
+    '左端不再有检索模式那一组（.knit-retseg 只剩配置区在用）')
+  for (const sep of byExactClass(nodes, 'knit-bar-sep')) {
+    assert.equal(sep.props['aria-hidden'], 'true', '分隔线是装饰，不进可达性树')
+  }
 
-  // ② 六个选项都在，而且两组各用各的控件（不是六个连排的按钮）
+  // ② 各条件都在，而且各用各的控件（不是把条件连排成一串按钮）
   assert.deepEqual(byClass(under, 'knit-seg-btn').map(textOf), ['相关', '最新'])
   assert.deepEqual(byClass(under, 'knit-type-btn').map(textOf), ['文档', '代码', '媒体', '全部'])
+  assert.deepEqual(byClass(under, 'knit-retmode-btn').map(textOf), ['词法⌄'],
+    'v0.23（2026-10-11）：检索模式是搜索框右端的一个下拉（短标签 + ⌄），默认词法')
   for (const node of under) {
     assert.ok(!/^(svg|path|use|img|i)$/.test(String(node.type)), `不许加图标：${String(node.type)}`)
   }
@@ -4861,11 +5045,15 @@ test('v0.21.x 工具栏：排序 ｜ 竖线 ｜ 类型 ｜ 搜索一行，两组
     assert.ok(m, `必须有 .${sel} 这条规则`)
     return m[1]
   }
+  // v0.23（2026-10-11）：这几条量的是**搜索框容器**（描边与宽度都在容器上，输入框只管输入）
+  const wrapCss = rule('knit-searchwrap')
+  assert.match(wrapCss, /flex:1 1 180px/, '搜索框：基础宽 180px，可长可缩')
+  assert.match(wrapCss, /max-width:240px/, '搜索框封顶 240px（常规面板 180–240px）')
+  assert.match(wrapCss, /margin-left:auto/, '封顶后剩下的空间留在左边 ⇒ 搜索框贴住右端')
+  assert.match(wrapCss, /min-width:0/, '面板窄了先缩搜索框')
   const filter = rule('knit-filter')
-  assert.match(filter, /flex:1 1 180px/, '搜索框：基础宽 180px，可长可缩')
-  assert.match(filter, /max-width:240px/, '搜索框封顶 240px（常规面板 180–240px）')
-  assert.match(filter, /margin-left:auto/, '封顶后剩下的空间留在左边 ⇒ 搜索框贴住右端')
-  assert.match(filter, /min-width:0/, '面板窄了先缩搜索框')
+  assert.match(filter, /flex:1 1 auto/, '输入框吃掉容器里剩下的宽度（右边留给那个下拉）')
+  assert.match(filter, /min-width:0/, '输入框也要能缩')
   assert.match(rule('knit-seg'), /flex:none/, '排序组不被挤')
   assert.match(rule('knit-types'), /flex:none/, '类型组不被挤')
   assert.ok(!/\.knit-types\{[^}]*padding/.test(source), '类型组不再自带左右内边距（.knit-bar 统一给）')
@@ -5012,4 +5200,299 @@ test('镜像常量：客户端的 REL_MAX 必须等于宿主的面板投影上�
     loadClientModule().exports.__test.REL_MAX, hostMax,
     '客户端镜像必须与宿主一致 —— 否则「共 N 条关系」那句话会撒谎',
   )
+})
+
+
+/* ── v0.23（Phase A）：检索模式选择器 + 语义 provider 最小配置区 ──────────
+   这一版**只管呈现**：默认词法、语义默认关、没有 provider 时如实说不可用。
+   Phase A **不动三层、不加 provenance 新值** —— 语义候选只计数（`semantic.candidates`）。
+   契约（宿主由另一边实现，这里按冻结合同写）：
+     `/api/recent` 多一个 `semantic: { mode, requested, available, reason, candidates, provider }`；
+     写只有 `POST /knit/api/semantic`；**没有** `GET`；`semantic` 字段可能整个不存在（老宿主）。 */
+
+/** 把 v0.21 的载荷补上 v0.23 的 `semantic` 字段（不传 = 模拟**老宿主**：字段缺失）。 */
+function v023Payload(semantic, options = {}) {
+  const base = v021Payload(options)
+  return semantic === undefined ? base : { ...base, semantic }
+}
+
+/** 装一个「记录 URL + 记录 POST body」的 fetch 替身（返回体按 url 决定）。 */
+function installSemanticFetch(payload, postReply = { ok: true, available: true, reason: null }) {
+  const calls = []
+  const posts = []
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url)
+    calls.push(target)
+    if (target.includes('/api/semantic') && String(init.method || 'GET').toUpperCase() === 'POST') {
+      posts.push(JSON.parse(init.body))
+      return { json: async () => postReply }
+    }
+    if (target.includes('/api/links')) {
+      return { json: async () => ({ ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }) }
+    }
+    return { json: async () => payload }
+  }
+  return { calls, posts }
+}
+
+/**
+ * 渲染一轮面板，可选先把检索模式偏好写进 localStorage。
+ * ⚠️ 偏好**必须在 `harness.reset()` 之后**写：reset 会把 window / localStorage 换成新的替身，
+ * 写在它前面等于没写（第一次跑这几条用例时正是在这里翻的车）。
+ * @param {object} payload - fetch 载荷
+ * @param {'lexical'|'hybrid'} [pref] - 要预置的检索模式
+ * @returns {Promise<object>} 与 `mountWithPayload` 同形
+ */
+async function mountV023(payload, pref, sort = 'relevance') {
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  if (pref) globalThis.window.localStorage.setItem('dsh-knit:retrieval', pref)
+  harness.seed(['', sort])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  return { nodes, render, renderAgain: async () => { nodes = render(); await harness.flush(); return render() } }
+}
+
+/** 面板里所有可见文字（判断「有没有出现某句话」时用它）。 */
+function allText(nodes) {
+  const root = byExactClass(nodes, 'knit-root')[0]
+  return flattenUnder(root).map(textOf).join(' | ')
+}
+
+test('v0.23（2026-10-11）：默认词法 —— 下拉在搜索框右端、标签「词法⌄」，未配 provider 也在', async () => {
+  const { nodes } = await mountWithPayload(v021Payload())
+  const btns = byClass(nodes, 'knit-retmode-btn')
+  assert.equal(btns.length, 1, '未配 provider 时这个下拉**也在**（没有设置页 ⇒ 藏起来就永远打不开）')
+  assert.equal(textOf(btns[0]), '词法⌄', '短标签 + 一个 ⌄；长解释在菜单里')
+  assert.equal(btns[0].props['aria-haspopup'], 'true')
+  assert.equal(btns[0].props['aria-expanded'], false, '默认收起')
+  assert.equal(byClass(nodes, 'knit-retmenu').length, 0, '收起时菜单一个节点都不产生（不是 display:none）')
+  assert.equal(byExactClass(nodes, 'knit-retnote').length, 0, '词法模式：一句说明都不产生')
+  assert.equal(byExactClass(nodes, 'knit-semcfg').length, 0, '词法模式：配置区不出现')
+  const text = allText(nodes)
+  assert.ok(!text.includes('语义候选'), `词法模式不许出现语义候选的计数：${text}`)
+  assert.ok(text.includes('BM25 词法检索'), '摘要里那格仍然如实写着词法检索')
+})
+
+test('v0.23 Phase A：切到「混合」—— 偏好落盘，且下一次取数带上 retrieval=hybrid', async () => {
+  const payload = v021Payload()
+  const { calls } = installSemanticFetch(payload)
+  const { nodes: first, render, renderAgain } = await mountV023(payload)
+  let nodes = first
+  assert.ok(calls.every((url) => !url.includes('retrieval=hybrid')),
+    `默认取数必须是词法：${calls.join(' | ')}`)
+  assert.ok(calls.some((url) => url.includes('retrieval=lexical')),
+    `默认取数要把词法**显式**带上（宿主据此完全不碰 provider）：${calls.join(' | ')}`)
+
+  // 打开搜索框右端那个下拉 → 两个选项的文案与选中态先核一遍 → 点「混合检索 · 实验」
+  byClass(nodes, 'knit-retmode-btn')[0].props.onClick()
+  nodes = render()
+  const items = byClass(nodes, 'knit-retmenu-item')
+  assert.equal(items.length, 2, '菜单里两个选项')
+  assert.deepEqual(items.map((b) => b.props['aria-checked']), [true, false], '选中态跟着当前模式走（默认词法）')
+  const itemText = (node) => flattenUnder(node).map(textOf).join(' ')
+  assert.ok(itemText(items[0]).includes('词法检索') && itemText(items[0]).includes('默认模式'),
+    `选项一：词法检索 + 副文案：${itemText(items[0])}`)
+  assert.ok(itemText(items[1]).includes('混合检索') && itemText(items[1]).includes('provider'),
+    `选项二：混合检索 + 副文案：${itemText(items[1])}`)
+  await items.find((b) => itemText(b).includes('混合检索')).props.onClick()
+  nodes = await renderAgain()
+  await harness.flush()
+  nodes = render()
+  assert.equal(byClass(nodes, 'knit-retmenu').length, 0, '选完就收起菜单')
+  assert.equal(globalThis.window.localStorage.getItem('dsh-knit:retrieval'), 'hybrid', '偏好应被记住')
+  assert.ok(calls.some((url) => url.includes('retrieval=hybrid')),
+    `切到混合后必须带上 retrieval=hybrid：${calls.join(' | ')}`)
+})
+
+test('v0.23 Phase A：混合真的在跑时 —— 摘要那一格改口径并多一格「语义候选 N 条」', async () => {
+  const payload = v023Payload({
+    mode: 'hybrid', requested: 'hybrid', available: true, reason: null, candidates: 3,
+    provider: { kind: 'ollama', base: 'http://127.0.0.1:11434', model: 'nomic-embed-text' },
+  }, { relations: [{ type: 'references', dir: 'out', other: 'docs/b.md', line: 7 }] })
+  installSemanticFetch(payload)
+  const { nodes } = await mountV023(payload, 'hybrid')
+  const pipe = byExactClass(nodes, 'knit-pipe')
+  assert.equal(pipe.length, 1)
+  const seq = flattenUnder(pipe[0]).slice(1).map(textOf)
+  assert.ok(seq.includes('BM25 + 语义补充'), `实际生效的是混合，摘要就必须这么说：${seq.join(' / ')}`)
+  assert.ok(!seq.includes('BM25 词法检索'), '不许在混合真的在跑时还写「词法检索」')
+  assert.ok(seq.includes('语义候选 3 条'), `可用时要如实给候选数：${seq.join(' / ')}`)
+  assert.equal(seq.filter((t) => t === '·').length, 5, '语义那一格进第二组 ⇒ 组内中点从 4 变 5')
+  assert.equal(byExactClass(nodes, 'knit-retnote').length, 0, '混合在跑：没有「不可用」说明')
+  assert.equal(byExactClass(nodes, 'knit-semcfg').length, 0, '混合在跑：不展开配置区')
+})
+
+test('v0.23 Phase A：选了混合但宿主回词法（no-provider）—— 如实说原因 + 就地展开最小配置区', async () => {
+  const payload = v023Payload({
+    mode: 'lexical', requested: 'hybrid', available: false, reason: 'no-provider', candidates: 0, provider: null,
+  })
+  const { calls, posts } = installSemanticFetch(payload)
+  const { nodes: first, renderAgain } = await mountV023(payload, 'hybrid')
+  let nodes = first
+
+  const note = byExactClass(nodes, 'knit-retnote')
+  assert.equal(note.length, 1, '不可用时必须有一行事实说明（不是每条结果里的噪声）')
+  assert.match(textOf(note[0]), /还没有配置 provider/, `原因要来自宿主的码：${textOf(note[0])}`)
+  // ⚠️ 摘要仍然写「BM25 词法检索」：**实际生效**的模式是词法，不是用户点了什么
+  assert.ok(allText(nodes).includes('BM25 词法检索'), '没生效就还写词法')
+
+  // 菜单：状态行如实说「未配置 provider」，并给一条就地配置入口
+  byClass(nodes, 'knit-retmode-btn')[0].props.onClick()
+  nodes = await renderAgain()
+  assert.equal(textOf(byClass(nodes, 'knit-retmenu-note')[0]), '未配置 provider —— 混合还没生效。',
+    '状态行如实写（不美化、不说成可用）')
+  const entry = byClass(nodes, 'knit-retmenu-cfg')
+  assert.equal(entry.length, 1, '未配 provider 时必须给「配置语义 provider…」入口')
+  assert.match(textOf(entry[0]), /配置语义 provider/)
+  // 点它：菜单收起、配置区就地展开，并且**第一个输入框拿到焦点**（键盘用户不用自己 Tab）
+  // ⚠️ 假 React 的替身里**没有真 document**（`ensureStyle` 就是在 typeof 检查那里早退的），
+  //    所以要临时给一个**够用的**：`getElementById` 回真值 ⇒ ensureStyle 直接早退，
+  //    不会走到 createElement / head；`querySelector` 就是这一条要断言的那次聚焦。
+  //    收尾必须把 document **整个还原/删掉** —— 第一版只删了 querySelector，
+  //    留下的空对象把后面两条用例全打挂了（跨用例污染，单独跑却全绿）。
+  const focused = []
+  const hadDocument = 'document' in globalThis
+  const prevDocument = globalThis.document
+  globalThis.document = {
+    getElementById: () => ({ id: 'knit-style' }),
+    querySelector: (sel) => ({ focus: () => focused.push(sel) }),
+  }
+  try {
+    entry[0].props.onClick()
+    nodes = await renderAgain()
+  } finally {
+    if (hadDocument) globalThis.document = prevDocument
+    else delete globalThis.document
+  }
+  assert.equal(byClass(nodes, 'knit-retmenu').length, 0, '点入口会收起菜单')
+  assert.deepEqual(focused, ['.knit-semcfg-input'], '配置区一展开就把焦点送进第一个输入框')
+
+  const cfg = byExactClass(nodes, 'knit-semcfg')
+  assert.equal(cfg.length, 1, '点过入口后就地展开一行最小配置区')
+  assert.deepEqual(byClass(flattenUnder(cfg[0]), 'knit-retseg-btn').map(textOf), ['Ollama（本地）', 'OpenAI 兼容'])
+  const inputs = byClass(flattenUnder(cfg[0]), 'knit-semcfg-input')
+  assert.equal(inputs.length, 2, 'base + model 两个输入框')
+  assert.ok(byClass(flattenUnder(cfg[0]), 'knit-btn').map(textOf).includes('保存并测试'), '写路由只此一个按钮')
+  assert.match(textOf(byClass(flattenUnder(cfg[0]), 'knit-semcfg-note')[0]), /填上服务地址后/,
+    '空地址时给中性提示，不许说「不离开这台机器」也不许说「会发送到 —」')
+
+  // ① 回环地址 ⇒ 说「本地服务」
+  inputs[0].props.onChange({ target: { value: 'http://127.0.0.1:11434' } })
+  nodes = await renderAgain()
+  let cfgNow = byExactClass(nodes, 'knit-semcfg')[0]
+  assert.match(textOf(byClass(flattenUnder(cfgNow), 'knit-semcfg-note')[0]), /本地服务：内容不离开这台机器/,
+    '回环地址才敢说不离开本机')
+
+  // ② 非回环 ⇒ 必须明写「内容会发送到你配置的服务 <base>」
+  await byClass(flattenUnder(cfgNow), 'knit-retseg-btn').find((b) => textOf(b) === 'OpenAI 兼容').props.onClick()
+  nodes = await renderAgain()
+  cfgNow = byExactClass(nodes, 'knit-semcfg')[0]
+  byClass(flattenUnder(cfgNow), 'knit-semcfg-input')[0].props.onChange({ target: { value: 'https://embed.example.com' } })
+  nodes = await renderAgain()
+  cfgNow = byExactClass(nodes, 'knit-semcfg')[0]
+  assert.match(textOf(byClass(flattenUnder(cfgNow), 'knit-semcfg-note')[0]), /内容会发送到你配置的服务 https:\/\/embed\.example\.com/,
+    '远程 provider 必须披露内容去向')
+
+  // ③ 「保存并测试」= 一次 POST，body 就是表单里的三格
+  await byClass(flattenUnder(cfgNow), 'knit-btn').find((b) => textOf(b) === '保存并测试').props.onClick()
+  await harness.flush()
+  assert.equal(posts.length, 1, '保存只发一次 POST')
+  assert.deepEqual(posts[0], { kind: 'openai-compatible', base: 'https://embed.example.com', model: '' })
+  assert.ok(calls.some((url) => url.includes('/api/semantic')), '写路由是 /knit/api/semantic')
+})
+
+test('v0.23 Phase A：老宿主（响应里没有 semantic 字段）—— 说清是宿主不支持，且不展开配置区', async () => {
+  // ⚠️ 必须自己装 fetch：`mountV023` 不装（它要能被「装了记录型替身」的用例复用），
+  //    不装就会沿用上一条用例留下的替身 —— 那会读到别的 payload（这里翻过一次车）。
+  const payload = v023Payload(undefined)
+  installSemanticFetch(payload)
+  const { nodes } = await mountV023(payload, 'hybrid')
+  const note = byExactClass(nodes, 'knit-retnote')
+  assert.equal(note.length, 1)
+  assert.match(textOf(note[0]), /当前宿主版本不支持/, '缺字段要说成宿主的问题，别让用户去配一个用不上的 provider')
+  assert.equal(byExactClass(nodes, 'knit-semcfg').length, 0, '宿主不支持时不给配置区（配了也没用）')
+})
+
+test('v0.23 Phase A：宿主缺 semantic 字段时不崩、也不改变默认词法的界面（静默降级）', async () => {
+  const { nodes } = await mountWithPayload(v023Payload(undefined))
+  assert.equal(byExactClass(nodes, 'knit-retnote').length, 0, '词法模式：老宿主也不产生说明行')
+  assert.equal(byExactClass(nodes, 'knit-pipe').length, 1, '状态摘要照旧')
+  assert.ok(allText(nodes).includes('BM25 词法检索'), '默认词法的呈现一个字不变')
+})
+
+test('v0.23（2026-10-11）：切到「最新」—— 搜索框右端那个下拉**整块不存在**（不是禁用、也不是 display:none）', async () => {
+  /* 用户裁决 ①：检索模式只在「相关」档有意义。判据在代码里：时间序没有 Context Pack
+     分层（宿主 `contextPayload()` 要求 `sort === 'relevance'`），语义候选无处可落。
+     ⇒ 这一档**一个节点都不产生**（不是置灰、不是隐藏），搜索框自己占满；
+       顺便也不带 `retrieval=hybrid` 去白问宿主（宿主那侧已按 not-applicable 短路）。 */
+  const payload = v023Payload({
+    mode: 'lexical', requested: 'lexical', available: null, reason: null, candidates: 0, provider: null,
+  })
+  const { calls } = installSemanticFetch(payload)
+  const { nodes: first, renderAgain } = await mountV023(payload, 'hybrid', 'time')
+  let nodes = first
+
+  assert.equal(byClass(nodes, 'knit-retmode').length, 0, '时间序 ⇒ 这一组一个节点都不产生')
+  assert.equal(byClass(nodes, 'knit-retmode-btn').length, 0, '「不存在」要真不存在（拿 display:none 冒充是空转的绿灯）')
+  assert.equal(byClass(nodes, 'knit-retmenu').length, 0, '菜单更不该有')
+  assert.equal(byExactClass(nodes, 'knit-searchwrap').length, 1, '搜索框还在（它自己占满，不留空位）')
+  assert.equal(byClass(nodes, 'knit-filter').length, 1)
+  assert.ok(calls.length > 0, '时间序也要取数')
+  assert.ok(calls.every((url) => !url.includes('retrieval=hybrid')), `最新档不许白问混合：${calls.join(' | ')}`)
+  assert.ok(calls.every((url) => url.includes('retrieval=lexical')), `最新档带的是词法：${calls.join(' | ')}`)
+
+  // 切回「相关」⇒ 它自己长出来（**不做禁用态**：直接出现）
+  byClass(nodes, 'knit-seg-btn').find((b) => textOf(b) === '相关').props.onClick()
+  nodes = await renderAgain()
+  assert.equal(byClass(nodes, 'knit-retmode-btn').length, 1, '回到相关档，下拉自己出现')
+})
+
+test('v0.23（2026-10-11）：宿主回一个客户端不认识的 reason 码 —— 降级成「原因未知」，不许漏出裸键名', async () => {
+  /* 判据 5 的界面面：宿主只给码，客户端查表。查不到时必须说「原因未知」，
+     而不是把 `sem.reason.weird-code` 或者 `undefined` 渲染到界面上。 */
+  const payload = v023Payload({
+    mode: 'lexical', requested: 'hybrid', available: false, reason: 'weird-code', candidates: 0, provider: null,
+  })
+  installSemanticFetch(payload)
+  const { nodes: first, renderAgain } = await mountV023(payload, 'hybrid')
+  let nodes = first
+  byClass(nodes, 'knit-retmode-btn')[0].props.onClick()
+  nodes = await renderAgain()
+
+  const note = textOf(byClass(nodes, 'knit-retmenu-note')[0])
+  assert.match(note, /原因未知/, `未知码必须说「原因未知」：${note}`)
+  assert.match(textOf(byExactClass(nodes, 'knit-retnote')[0]), /原因未知/, '事实行同一口径')
+  const text = allText(nodes)
+  for (const bad of ['sem.reason.', 'why.', 'undefined']) {
+    assert.ok(!text.includes(bad), `不许把裸键名或空值渲染出来（${bad}）：${text}`)
+  }
+})
+
+test('v0.23（2026-10-11）：菜单的键盘关闭 —— Esc 收起菜单、不改当前模式，且 aria-expanded 跟着走', async () => {
+  const payload = v023Payload({
+    mode: 'lexical', requested: 'lexical', available: null, reason: null, candidates: 0, provider: null,
+  })
+  installSemanticFetch(payload)
+  const { nodes: first, renderAgain } = await mountV023(payload, 'lexical')
+  let nodes = first
+  const btn = () => byClass(nodes, 'knit-retmode-btn')[0]
+  assert.equal(btn().props['aria-expanded'], false, '收起时 aria-expanded=false')
+  btn().props.onClick()
+  nodes = await renderAgain()
+  assert.equal(btn().props['aria-expanded'], true, '开着时 aria-expanded=true（读屏据此播报）')
+  // ⚠️ 容器要用 byExactClass：`byClass` 是**子串**匹配，`knit-retmenu` 会把
+  //    -item / -note / -cfg 一起数进来（这里 1 个容器 + 2 个选项 + 1 行状态 = 4）。
+  assert.equal(byExactClass(nodes, 'knit-retmenu').length, 1)
+
+  btn().props.onKeyDown({ key: 'Escape', stopPropagation() {} })
+  nodes = await renderAgain()
+  assert.equal(byClass(nodes, 'knit-retmenu').length, 0, 'Esc 收起菜单')
+  assert.equal(btn().props['aria-expanded'], false, 'aria-expanded 跟着回到 false')
+  assert.equal(globalThis.window.localStorage.getItem('dsh-knit:retrieval') || 'lexical', 'lexical',
+    'Esc 只关菜单，不改检索模式')
 })

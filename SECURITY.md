@@ -2,7 +2,9 @@
 
 > **Knit 的安全属性 —— 每一条都指向一个真实存在的检查。**
 >
-> 最后更新：2026-10-08（v0.21.0）—— 新增 `POST /knit/api/control` 与固定/排除的落盘，两条属性已按实际情况改写
+> 最后更新：2026-10-12（v0.23.0）—— 写通道由一条变两条（新增 `POST /knit/api/semantic`，只存 provider 配置）、
+> 会落盘的单元由两个变三个（`knit_index` 起于 v0.22、`knit_semantic` 起于 v0.23）；
+> 「**唯一的**写动作」那条从 v0.22 起就已经不成立，本次按实际改写，并补一条 ⚠️ 说明第二条写通道的守卫缺口
 
 ## 为什么有这份文件
 
@@ -31,8 +33,9 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 | 读文件接口守在会话工作区内 | ✅ | `test/host.test.mjs` 的越界用例（解析后必须落在工作区内，否则一律拒绝） |
 | `/knit/api/doc` 只放行文本类产物 | ✅ | v0.19 起因代码而放宽（原为「仅 Markdown」），所以边界要重新说清：**文档 / 代码 / 生成产物**放行，**媒体与未知后缀一律拒绝**。`test/host.test.mjs` 的 `notPreviewable` 用例 + `test/classification.test.mjs` 的 `isPreviewKind` 闭集断言 |
 | `/knit/api/raw` 叠扩展名白名单 | ✅ | `test/host-http.test.mjs`（非图片/视频扩展名一律拒绝） |
-| 只允许 GET、只允许回环地址 | ✅ | `test/host-http.test.mjs`。**v0.21 起有一个例外**：`POST /knit/api/control`（写固定 / 排除），它同样只认回环地址，且只接受 `pin`/`unpin`/`exclude`/`restore` 四个动作 + 一条工作区内的相对路径；非 POST 打这个路由回 405、坏 body 回 400 |
-| 唯一的写动作 = 固定 / 排除，且只写 DSH 给的存储单元 | ✅ | `src/host/control.js` 只通过 `ctx` 注入的 storage 服务读写单元 `knit_control`（`~/.dsh/storages/knit_control.json`，按工作区隔离），**不碰工作区里的任何文件**；`test/control.test.mjs` + `test/host-http.test.mjs` |
+| 只允许 GET、只允许回环地址（写通道是**例外**，不是放开 POST） | ✅ | `test/host-http.test.mjs`。写路由**只认 POST**、GET 打它回 405；**别的路由的 POST 仍回 405**（有对照断言）；坏 body 回 400。v0.21 起有 `POST /knit/api/control`（写固定 / 排除，只接受 `pin`/`unpin`/`exclude`/`restore` 四个动作 + 一条工作区内的相对路径） |
+| 会写盘的东西只有三类，且只写 DSH 给的存储单元 —— **不碰工作区里的任何文件** | ✅ | 三个 kv 单元各开各的：`knit_control`（`src/host/control.js`，v0.21，固定 / 排除）、`knit_index`（`src/host/index-store.js`，v0.22，增量索引，**非 HTTP 触发**）、`knit_semantic`（`src/host/semantic.js`，v0.23，**只存 provider 配置**，向量只在内存）。落盘路径由 DSH 的 storage 服务决定，Knit 不自己拼；`test/control.test.mjs` + `test/index-store.test.mjs` |
+| 第二条写通道 `POST /knit/api/semantic` 的主机侧 e2e 守卫 | ⚠️ | **如实说明（v0.23 新增，尚未补）**：它目前只有**客户端侧**断言（`test/client.test.mjs` 认这条 URL），**没有**像 `/api/control` 那样在真实回环端口上验「GET→405 / 别的路由 POST→405 / 坏 body→400」。两条写路由在 `src/host/index.js` 里共用同一段前置守卫，但「共用同一段代码」**不等于**「被验过」 |
 | 响应带 `nosniff` 与 `default-src 'none'; sandbox` | ✅ | `test/host-http.test.mjs`（两个指令各自断言） |
 | 零网络出口：客户端 `fetch` 全部同源相对路径 | ✅ | `src/client/client.js` 的三个接口常量都是 `/knit/api/*`；`test/security.test.mjs` 断言无协议头。HTML 的「网页预览」按钮是把文件交给 **DSH 自己的**文档预览标签页去渲染（Knit 这一侧一个请求都不发），渲染的沙箱与 CSP 归 DSH 管 —— 所以这条承诺不变 |
 | 宿主半边不 import `@deepseek-ai/*` | ✅ | `test/security.test.mjs` 扫三个宿主文件，注释里提到可以、真实 `import` 不行 |
@@ -48,6 +51,9 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 ## 如何自己复核
 
 ```sh
-npm test                       # 641 项，含本节所有断言
-npm test -- test/security.test.mjs   # 只跑安全守卫
+npm test                            # 全套（含本节所有断言）
+node --test test/security.test.mjs  # 只跑安全守卫
 ```
+
+> ⚠️ **别用 `npm test -- test/security.test.mjs`**：`scripts.test` 是**逐文件枚举**的，
+> 追加参数不会把范围收窄 —— 实测它照样跑全套。要只跑这一份就直接用 `node --test`。

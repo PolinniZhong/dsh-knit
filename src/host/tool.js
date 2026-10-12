@@ -128,6 +128,19 @@ const PARAMETERS = {
         + 'and how many reads fell outside the pack. Counts only — no scores, no confidence. '
         + 'Default false.',
     },
+    // v0.23：检索模式。**默认 lexical** —— 不传它时这次的入参与返回值与 v0.22 逐字一致
+    // （唯一的例外是输出里多了 `retrieval` 那一行，见 `renderToolText()`）。
+    //   lexical = 纯 BM25（纯本地、零模型调用、零网络出口）
+    //   hybrid  = 在词法之外**可选地**算一层语义候选；需要用户在面板里配好 provider。
+    //             Phase A 只**计数**，不进三层（`provenance` 也不新增取值）。
+    retrieval: {
+      type: 'string',
+      enum: ['lexical', 'hybrid'],
+      description: 'Retrieval mode. "lexical" (default) is pure local BM25 — no model calls, no network. '
+        + '"hybrid" additionally asks the user-configured embedding provider for bounded semantic '
+        + 'candidates; it falls back to lexical (with a stated reason) when no provider is configured '
+        + 'or reachable. Semantic candidates never replace or re-rank the lexical results.',
+    },
   },
 }
 
@@ -167,6 +180,9 @@ const ITEM_SCHEMA = {
           enum: [
             'direct', 'titleMatch', 'filenameMatch', 'summaryMatch', 'pathMatch', 'bodyMatch',
             'linkTarget', 'linkSource', 'related',
+            // v0.23：语义候选补进来的那一条（只在「相关」层）。
+            // 它**不是**关键词命中 —— `terms` 恒为空数组，别把两者读成同一件事。
+            'semantic',
           ],
         },
         // 命中的话题词（没有命中就是空数组 —— 不编造）。
@@ -184,7 +200,8 @@ const ITEM_SCHEMA = {
     // v0.21：**来源**（怎么进的这个包）。与上面的 `source`（文件角色）是两件事，
     // 名字故意不同 —— 把 `source` 的语义换掉会静默打断老调用方。
     //   retrieval = 命中当前任务的关键词；relation = 靠关系进来；manual = 用户自己钉的。
-    provenance: { type: 'string', enum: ['retrieval', 'relation', 'manual'] },
+    // v0.23：多一值 `semantic` —— 这条是**语义候选**补进来的（默认词法模式下永远不会出现）。
+    provenance: { type: 'string', enum: ['retrieval', 'relation', 'manual', 'semantic'] },
     // v0.21：**这个条目与工作区里别的文件的关系**（需求 §6.7）。
     // 每条都带证据：`other` 是对方 rel，`line` 是**提及所在那一行**（1 起）。
     //   dir:'out' ⇒ 本条目提到了 other，`line` 在本条目里
@@ -275,6 +292,9 @@ const OUTPUT_SCHEMA = {
       },
       required: ['matched', 'total'],
     },
+    // v0.23：**这一次到底按哪种模式跑的**。只有调用方显式要了 `hybrid` 才出现；
+    // 词法回退时写明原因（判据 5：不许让模型以为它拿到的是语义结果）。
+    retrieval: { type: 'string' },
     // v0.15：**可选**的一行「使用情况」（只有 `audit: true` 时才有）。
     // 它说的全是计数与事实 —— 没有分数、没有百分比、没有置信度、没有 trajectory。
     // 不传 `audit` 时这个字段根本不出现（而不是给个空串）。
@@ -577,6 +597,11 @@ export function renderToolText(value, readSnippet) {
   })
 
   const out = []
+  // v0.23：检索模式那一行**紧跟在头部之后** —— 它是「这次结果是怎么来的」的一部分。
+  // 只有调用方要了 `hybrid` 才会有（默认词法调用的输出与 v0.22 逐字一致）。
+  if (value && typeof value.retrieval === 'string' && value.retrieval) {
+    out.push(`Retrieval: ${value.retrieval}`)
+  }
   const matched = (value && value.totals && Number.isInteger(value.totals.matched))
     ? value.totals.matched : 0
   out.push(`Context for ${topic ? `「${topic}」` : 'the current conversation'}: `
@@ -627,6 +652,9 @@ function whyText(reason) {
     case 'bodyMatch': return terms ? `matched in the body (${terms})` : 'matched in the body'
     case 'linkTarget': return 'referenced by a primary document'
     case 'linkSource': return 'references a primary document'
+    // v0.23：语义候选补进来的。**不要把这句话写成「相关」**（那是不可验证的推断）：
+    // 它进包的唯一依据是「标题 + 摘要」的向量与任务相似，而且**没有任何关键词命中**。
+    case 'semantic': return 'semantic candidate (title / summary similarity — no keyword match)'
     default: return 'related in the current workspace'
   }
 }
@@ -721,17 +749,30 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
       // v0.15：审计是**显式**的（默认 false）。不传它就完全不走 feedback 那条路。
       const auditRequested = !!(args && args.audit === true)
 
+      // v0.23：`retrieval` 默认 `lexical`（老调用方一个字都不用改）。
+      const retrieval = args && args.retrieval === 'hybrid' ? 'hybrid' : 'lexical'
+
       const payload = await scan(root, limit, {
         session,
         sessionId,
         sort: 'relevance',
         query,
+        retrieval,
         // v0.19：工具的语料是**文档 + 代码**（不给 HTTP 的 `context` 档）。
         // 这一条正是本次版本的核心主张：代码和 Markdown 在**同一套 BM25、同一套分层**
         // 里竞争，谁进 Primary 只由任务检索决定，没人给代码留座位。
         // 媒体不进 —— 图片/视频没有可检索的正文，进上下文只会稀释（v0.18 起如此）。
         kind: 'context',
       })
+
+      // v0.23：把「这一轮实际用了哪种检索」如实带出去。只有要了 `hybrid` 才写，
+      // 而且**回退时写明原因** —— 判据 5 的「不许伪装成混合成功」在工具这一面就是这一行。
+      const semantic = payload.semantic && typeof payload.semantic === 'object' ? payload.semantic : null
+      const retrievalLine = (retrieval !== 'hybrid' || !semantic)
+        ? null
+        : (semantic.mode === 'hybrid'
+          ? `hybrid (semantic candidates: ${Number(semantic.candidates) || 0})`
+          : `lexical — fell back from hybrid (${semantic.reason || 'unavailable'})`)
 
       // 命中词用 `scan()` 的 `keywords` —— 它是**语料里真实存在**的那批词
       // （不是原始候选），所以拿它去原文里找段落，必然找得到。
@@ -761,6 +802,7 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
           mode: 'time',
           topic: '',
           total: Number.isInteger(payload.total) ? payload.total : 0,
+          ...(retrievalLine ? { retrieval: retrievalLine } : {}),
           primary: [],
           supporting: [],
           related: [],
@@ -849,6 +891,7 @@ export function knitDocsDefinition(scan, read, contextFor, audit) {
         mode: 'relevance',
         topic: typeof pack.topic === 'string' ? pack.topic : '',
         total: Number.isInteger(pack.totals && pack.totals.total) ? pack.totals.total : 0,
+        ...(retrievalLine ? { retrieval: retrievalLine } : {}),
         // `matched` 走 `totals` —— 头部的「N matching documents」靠它。
         // 漏掉这一个字段会让头部永远写「0 matching documents」，而下面明明列着结果
         // （实测踩过一次，是渲染层的一个真实缺陷，不是美观问题）。

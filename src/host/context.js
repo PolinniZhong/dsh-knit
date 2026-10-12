@@ -237,6 +237,8 @@ function fieldCount(fields) {
  *   5. `linkTarget`  —— 被某个 Primary 引用
  *   6. `linkSource`  —— 引用了某个 Primary
  *   7. `related`     —— 兜底：名次靠后的命中项
+ *   8. `semantic`    —— **v0.23**：语义候选补进来的（`raw === 0`、由 `doc.semantic` 标记）。
+ *                       它**只可能**出现在「相关」层，而且**只追加在最后** —— 见下面 `semanticOnly`。
  *
  * v0.19 给代码换的只是**两个码的名字**，不是两套判据 —— 命中位置完全一样
  * （文件名占的是 `title` 槽、目录占的是 `summary` 槽，见 `index.js` 的 `readCode()`）。
@@ -244,7 +246,8 @@ function fieldCount(fields) {
  * 它的「标题」就是文件名。**判据没有分叉，只有称谓分叉。**
  *
  * @param {object} doc - 记录（`{rel, kind, matchedTerms}`；`matchedTerms[].fields` 是字段位图）
- * @param {{linkTarget?:boolean, linkSource?:boolean}} [links] - 与 Primary 的关系
+ * @param {{linkTarget?:boolean, linkSource?:boolean, semantic?:boolean}} [links] - 与 Primary 的关系；
+ *   `semantic` = v0.23 的「这条是语义候选补进来的」（只有在词法 / 关系证据都没有时才认它）
  * @returns {{code:string, terms:string[], fields:number, term:string}} 理由
  */
 export function explainContext(doc, links = {}) {
@@ -289,6 +292,10 @@ export function explainContext(doc, links = {}) {
   }
   if (links.linkTarget) return { code: 'linkTarget', terms: [], fields: 0, term: '' }
   if (links.linkSource) return { code: 'linkSource', terms: [], fields: 0, term: '' }
+  // v0.23：语义补进来的那一条。**排在这里是有讲究的** ——
+  //   · 前面几条都是**可复核的证据**（命中在哪个字段、哪条引用），语义只是「标题+摘要像」；
+  //   · 所以只有前几条都不成立时才轮到它，而且它**不冒充**任何关键词命中（`terms: []`）。
+  if (links.semantic === true) return { code: 'semantic', terms: [], fields: 0, term: '' }
   return { code: 'related', terms: [], fields: 0, term: '' }
 }
 
@@ -308,6 +315,9 @@ const REASON_ORDER = {
   linkTarget: 4,
   linkSource: 5,
   related: 6,
+  // v0.23：语义是**最弱**的一档 —— 它只在同层名次相同时才参与兜底排序，
+  // 而且实际装配里它总是追加在「相关」层最后（rank 最大）。
+  semantic: 7,
 }
 
 /**
@@ -393,12 +403,27 @@ export function buildContext(input = {}) {
       // 不出现在任何返回值里。
       strength: topRaw > 0 ? raw / topRaw : 0,
       rank: index,
+      // v0.23：**这一条是语义候选补进来的吗**。如实带进来，因为它是准入判据的一部分
+      // （`semanticOnly` 只收 `raw === 0 && semantic === true`）——
+      // 漏带这一格，语义条目就会在装配层静默消失（写完守卫当场抓到过一次）。
+      semantic: doc.semantic === true,
     }
   })
 
   // 命中了话题的篇（`raw > 0`）。**只有它们才有资格进任何一层** ——
   // 零命中的文档只能靠「与 Primary 的引用关系」被带进 Supporting / Related（见下）。
   const hit = records.filter((r) => r.raw > 0)
+
+  /* ── v0.23：语义补进来的那几条 ───────────────────────
+   * 它们是 `raw === 0`（BM25 一个词都没命中）但被语义通道标了 `doc.semantic` 的记录。
+   *
+   * 为什么要与 `hit` **分开收**（而不是把门槛放宽成 `raw > 0 || semantic`）：
+   *   · 进 Primary 要 `strength >= PRIMARY_MIN_SHARE`、进 Supporting 要 `isDocHit`（**正文**命中），
+   *     语义条目两样都没有 ⇒ 放宽门槛的结果仍然是「只能进 Related」；
+   *   · 分开收能把结论**写成结构性保证**而不是纪律：语义条目**只**可能出现在「相关」层，
+   *     而且**只追加在最后** —— 既有条目（词法 + 关系）的成员与顺序因此可以逐条断言。
+   * 这是对抗性审查（2026-10-11）指出的那条：原方案以为「改个门槛就够」。 */
+  const semanticOnly = records.filter((r) => r.raw === 0 && r.semantic === true)
 
   /* ── 焦点词 ─────────────────────────────────────────
    * 一个话题词在这批结果的前 `FOCUS_WINDOW` 篇里**至少两篇**命中，才算「项目里真的
@@ -532,7 +557,8 @@ export function buildContext(input = {}) {
   /* ── Related ────────────────────────────────────────
    * 有命中、但没进上面两层的；再补上「引用了 Primary / 被 Primary 引用」的其余邻居。
    *
-   * ⚠️ **只走 `hit`，不走 `noHit`**（2026-09-29 改，对齐 PRD §5 / SDD §25）。
+   * ⚠️ **只走 `hit`，不走 `noHit`**（2026-09-29 改，对齐 PRD §5 / SDD §25）；
+   * **v0.23 唯一的例外是语义条目** —— 它们在下面**单独追加**，且只吃剩下的 `capRelated` 名额。
    * PRD §5 对 Related 的定义是「**与当前任务有关**，但没有足够证据进入 Primary / Supporting 的资料」——
    * 一个话题词都没命中、又没有引用关系的文档**不是「有关」**，它只是「工作区里还有这一篇」。
    * 放进来会让它带着兜底理由码 `related` 出场，而客户端把那句翻译成
@@ -564,6 +590,14 @@ export function buildContext(input = {}) {
       }
     }
   }
+  // v0.23：**最后**才轮到语义条目（词法 → 关系 → 语义），而且只吃剩下的名额。
+  // 顺序在这里是语义的一部分：capRelated 满的时候，被挤掉的必须是语义条目，不能是既有条目。
+  for (const record of semanticOnly) {
+    if (related.length >= capRelated) break
+    if (seenRelated.has(record.rel)) continue
+    seenRelated.add(record.rel)
+    related.push({ record, linkTarget: false, linkSource: false, semantic: true })
+  }
 
   /**
    * 把内部记录投影成对外的条目：**只有 rel / title / summary / mtimeMs / kind / source /
@@ -589,7 +623,12 @@ export function buildContext(input = {}) {
       kind: record.kind,
       source: record.source,
       reason,
-      provenance: RELATION_REASON.has(reason.code) ? 'relation' : 'retrieval',
+      // v0.23：**三分支**。语义必须单独判 —— 否则它会从
+      // `RELATION_REASON` 的默认分支掉出去变成 `retrieval`（伪装成关键词命中），
+      // 或者（如果 `explainContext()` 还回 `related` 兜底码）被误标成 `relation`。
+      provenance: reason.code === 'semantic'
+        ? 'semantic'
+        : (RELATION_REASON.has(reason.code) ? 'relation' : 'retrieval'),
     }
     if (incident) {
       const found = relationsOf(incident, record.rel, MAX_RELATIONS_PER_ITEM)

@@ -43,8 +43,7 @@
 
 `.knit-icon { color: var(--dsw-alias-label-primary, #0f1115) }` —— **一条规则管两个主题**（令牌自己随主题切），
 **不要写死 `#000` / `#fff`，也不要让它继承父级文本色**。
-⚠️ 2026-10-07 改过：原来写死「浅色纯黑 / 暗色纯白」，用户指出暗色的 `#fff` 比 DSH 自己的主文本色
-`#f9fafb` 还亮（原话「看得有点犯晕」）⇒ 改成一律跟随官方主文本色令牌。`test/icon.test.mjs` 现在反过来守
+⚠️ 2026-10-07 改过：原来写死「浅色纯黑 / 暗色纯白」⇒ 改成跟随官方主文本色令牌（用户指出暗色 `#fff` 比官方 `#f9fafb` 还亮）。`test/icon.test.mjs` 现在反过来守
 「不许出现 `.knit-icon{color:#000|#fff}`」「不许有 `body[data-ds-dark-theme] .knit-icon` 覆盖规则」。
 样式表由 `KnitGlyph` 自己保证注入。**四个位置必须都用 `KnitGlyph`**：tab 芯片标题、guide 入口胶囊、
 better-sidebar tab、会话头部入口按钮。`test/icon.test.mjs` 断言源码里不再出现 🧶。
@@ -62,7 +61,7 @@ better-sidebar tab、会话头部入口按钮。`test/icon.test.mjs` 断言源�
 
 品牌强调色只有一个来源，定义在 `.knit-root` 上：
 `--knit-accent` → `--dsw-alias-brand-primary-new-colorprimary-new-color`（浅 `#4176e6` / 暗 `#5686fe`）。
-**不要硬编码 `rgba(…)`**（客户端测试在源码上守卫 `rgba(124,108,240` / `rgba(79,140,255`）；半透明就用
+**不要硬编码 `rgba(…)`**（源码守卫 `rgba(124,108,240` / `rgba(79,140,255`）；半透明就用
 DSH 已带 alpha 的令牌。**变量必须先定义再用**：`var(--knit-x)` 没写 fallback 而 `--knit-x` 未定义，
 这条声明**整体作废、界面静默少一块样式**（漏改引用把 `.knit-doc.active` 填充弄丢过一次）。
 
@@ -80,12 +79,11 @@ DSH 已带 alpha 的令牌。**变量必须先定义再用**：`var(--knit-x)` �
 **灰底一律从 DSH 官方交互令牌按固定比例推**（`--dsw-alias-interactive-bg-hover` 浅 `#2631480f`=5.88% /
 暗 `#ffffff14`=7.84%；`-bg-active` 浅 `#2631481a`=10.20% / 暗 `#ffffff24`=14.12%）：`--knit-hover-bg` = ×0.36、
 `--knit-active-bg`（行选中）= ×0.54、`--knit-chip-bg`（命中段胶囊）**= ×0.81，是三档里最高的一档**。
-**暗色三档各再低约 10%**（`.028 / .076 / .114` vs 浅色 `.024 / .061 / .092`），2026-10-07 用户裁决
+**暗色三档各再低约 10%**（`.028 / .076 / .114`），2026-10-07 用户裁决
 （「暗色高亮太白、看得犯晕」）。🔴 **不要自己拍一个 alpha**：那条 `.13`（纯白 13%）就是自造的，
 用户一眼看出比官方 active 还亮。守卫钉住 `chip > active` 且 `chip <` 官方 active 的千分比。
 
-**列表行「正在预览」无描边（2026-09-30 用户裁决）**：连 `.5px solid transparent` 的占位边框都去掉了，
-几何用 `padding:10.5px 11.5px` 补回。依据：「**用灰阶建立层级，而不是用颜色建立层级**」。
+**列表行「正在预览」无描边（2026-09-30 用户裁决）**：连占位边框都去掉了，几何用 `padding:10.5px 11.5px` 补回。依据：「**用灰阶建立层级，而不是用颜色建立层级**」。
 ⚠️ 浅色主题下 `bg-layer-1/2/3` **全是 `#fff`**，不要用它们做分层。
 
 `test/client.test.mjs` 的源码级守卫还盯着四条：「**类型切换是下划线式页签**：选中态既不含
@@ -188,17 +186,16 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
    不过就 `return`）与工具里的 `auditRequested`；`feedback.js` 的 `ingestEvents`/`noteSnapshot`
    **自己不检查 `isAudited`**。
 2. **读证据唯一来源 = `ctx.on('session/event', …, { global: true })`**（`apply(ctx)` 顶部注册、单事件入库）。
-   🔴 `session.snapshotEvents()` 已被 DSH 标 deprecated（`dsh-session/README.md:62`「new production calls
-   are prohibited」）—— **不许新增生产调用**；`rankByRelevance` 那处是检索输入（existing logic）。
+   🔴 `session.snapshotEvents()` 已 deprecated（`dsh-session/README.md:62`）—— **不许新增生产调用**；`rankByRelevance` 那处是检索输入。
    ✅ **唯一例外（v0.17 验收修订）**：闸门打开那一刻 `backfillFeedback()` 回填一次本会话已有事件
-   （一会话一次、同一 tick、零 I/O），否则「未读」是没证据的断言。⚠️ **顺序是机制**：先
+   （同 tick、零 I/O），否则「未读」是没证据的断言。⚠️ **顺序是机制**：先
    `noteSnapshot(store, sid, pack)`（**不传 `at`**）**再** `ingestEvents()`，反了会把补记的读冻成包外
    （回填的读按**已知最早的那份包**归因）。
    ⚠️ 不传 `{ global: true }` 收不到 agent 作用域的会话事件。**一个代价**：fork 继承的父会话读**不算进来**（seed 不派发）。
 3. **不落盘、不发请求**：状态全在内存（`createStore()`），进程重启即失。
 4. **五个上限**：`MAX_SESSIONS 24`（LRU）、`MAX_READS_PER_SESSION 200`、`MAX_SNAPSHOTS_PER_SESSION 20`、
    `MAX_DELTAS_PER_SESSION 50`、`MAX_PENDING_CALLS 64`。⚠️ `churn.snapshots`/`deltas` 是 `changes`
-   的**别名**（`changes = epochs - 1`），不是 `state.deltas.length`（累计计数器不会被上限截断）。
+   的**别名**（`changes = epochs - 1`），不是 `state.deltas.length`。
 5. **归因在读那一刻结算并冻结**（v0.16 核心）：`recordRead()` → `snapshotAt(state.snapshots, read.seq)`
    （取 `seq <= read.seq` 的最后一帧）→ `attributeRead()` → 冻进 `firstRead`/`lastRead`。**禁止**出报告时
    再拿最新快照重判（v0.15 的 split-brain：`usageFrom()` 重算 ⇒ 历史被现在改口）；`reads[].tier`/`rank`/
@@ -211,9 +208,9 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 9. **审计坏了不能带坏主路径**：`feedback.js` 每个入口、订阅回调、宿主侧每个调用点、客户端每次渲染都
    必须降级成「空」，不许抛错（有测试钉住畸形事件 / 未记账会话时接口照常 200）。
 10. **界面上只许出现计数**：分数 / 百分比 / 置信度 / 评分条一律不许（有守卫；`getAuditSummary` 只吐
-    一条 `Usage since the last pack: …`；v0.16 只多一句「当前上下文 · Epoch N」）。
+    一条 `Usage since the last pack: …`；v0.16 只多「当前上下文 · Epoch N」）。
 11. **「包外」要拆成两笔**（只在离线量尺里）：`missed`（索引里有、没进包）与 `outOfScope`（如 `.js`）——
-    不拆开时 `outside` 恒高，读起来像「Context Pack 没用」（`tools/context-feedback-eval.mjs` 的 `scopeFor`）。
+    不拆开时 `outside` 恒高，读起来像「Context Pack 没用」。
 
 ⚠️ **写工具的块注释时别写 glob**：`~/.dsh/sessions/**/…` 或 `sessions/*/*/` 里的 `*/` 会**提前闭合块注释**，
 报 `SyntaxError: Unexpected identifier 'scan'`。写成 `<工作区>/<会话>/`。
@@ -231,7 +228,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 **① FLIP / 动效要「谁换了位置」时，只能用布局坐标**（`rowLayoutPoint()` 先取 `offsetTop` / `offsetLeft`）。
 `getBoundingClientRect()` 是**视口坐标**：容器滚动、容器自己变高变矮（预览面板一开一合、「使用情况」长高一行）、
-行上的 `.knit-doc:hover{transform:translateX(-2px)}`（2px 是死区 `MOTION_MOVE_EPS=0.5` 的**四倍**）
+行上的 `.knit-doc:hover{transform:translateX(-2px)}`（2px 是死区 `MOTION_MOVE_EPS=0.5` 的四倍）
 都会被算成位移 ⇒ 一屏行乱飘。拿不到 `offset*` 时才退回视口矩形并减掉容器矩形、补 `scrollLeft/scrollTop`。
 ⚠️ 前提是**所有行的 `offsetParent` 相同**（`.knit-tier` 不带 `position`）—— 改布局时别打破它。
 
@@ -265,7 +262,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **永远单列**。用户原话：「文档列表最多一个就行，现在一行两个有点太多了」。
   🔴 **多列那套是「整体删除」不是「关掉」**：`docLayoutFor`、`DOC_TRACK_PX`、`DOC_GRID_MAX_COLS`、
   `DOC_SUMMARY_MIN_PX`、`.knit-multicol*`、`.no-sum` **全都不存在**了，测试反过来守「它真的没了」
-  （`knit/test/client.test.mjs`：`__test` 里四个标识符必须是 `undefined` + CSS 守卫）。
+  （`client.test.mjs` 里四个标识符必须 `undefined` + CSS 守卫）。
   ⚠️ **不要加回多列**；要提升宽面板利用率，该做的是让**单列更舒展**。
 - **序号在最左边独立成一列**：两列 grid（`grid-template-columns:22px minmax(0,1fr)`；`.knit-doc` 是
   `column-gap:8px`、`align-items:start`），第一列＝序号，第二列＝`.knit-body` 装的其余全部数据。
@@ -299,13 +296,11 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 ### 7.2 三档类型 / 媒体网格 / 键盘
 
-- **「文档 / 代码 / 媒体 / 全部」四档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签**
-  （v0.14 起）—— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
+- **「文档 / 代码 / 媒体 / 全部」四档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签** —— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
   文档档选中**不要加品牌色/绿色描边**（用户原话：「选中的时候不用加绿色、蓝色的描边，
   就跟下面列表一样，选中填充背景灰就可以」）。
 - **媒体网格**：方形缩略图，**格子基准固定 104px、与条目数无关**；列数由 CSS
-  `repeat(auto-fill,minmax(104px,1fr))` 连续数出来（面板拖宽约 120px 多一列）。
-  实测：320px→2 列 / 632px→5 列 / 900px→7 列 / 1200px→10 列。
+  `repeat(auto-fill,minmax(104px,1fr))` 连续数出来（实测 320→2 / 632→5 / 900→7 / 1200→10 列）。
   **纵向有多少行铺多少行**：网格**不设 maxHeight、也不自己滚**，滚动统一交给 `.knit-list`。
   ⚠️ **`mediaLayoutFor` 只接受 `width` 一个参数，且不返回 `maxHeight`** —— 这是走过三遍的坑：
   格宽跟着**条目数**走就把列数锁死；封顶高度按「两行」算死必然截断第三行。
@@ -316,7 +311,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **键盘**：`↑↓` 移动即预览 / `Enter` 切换 / `Esc` 收起；媒体档 `←→` 按屏幕位置跨行、`Home`/`End` 到首尾。
   ⚠️ **文档档（含「全部」档的文档区）永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦
   （以前误传 `docLayout.columns`）。导航算术在纯函数 `nextIndexFor` 里（真实列数要 `ResizeObserver` 量）。
-- **「全部」档**：上下两个分区 —— 文档最多 4 条（超出给「查看全部 →」）；媒体**不截断**，只给计数。
+- **「全部」档**（2026-10-12 裁决 = **整份包的原样**）：三层（先看 / 辅助 / 背景）**混排文档 + 代码**，媒体作**末尾一个不截断的网格**（媒体没有可检索正文 ⇒ 进不了任何层）；**没有**「按类型分三区 / 每区 4 条 / 查看全部」那套特例（`knit-section*` / `ALL_DOC_CAP` / `ALL_CODE_CAP` 全删，守卫反过来守「它们真的没了」）。
 
 ---
 
@@ -336,6 +331,8 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **使用反馈（v0.16）**：默认关的「使用情况」开关 + `knit_docs` 的 `audit: true`，把「先看的那篇读没读 /
   辅助层 read÷total / 读了几次 / 包外几篇 / 上下文换过几次」摊成**一行事实**，行首多一个累计的
   「当前上下文 · Epoch N」。归因**读时冻结**，之后换多少份上下文都不会改口。见 §6.11。
+- **v0.23 检索模式**：贴在**搜索框右端**的小下拉（`词法⌄`），不在左端排序/类型那簇；「最新」档**不出现**（时间序无分层，宿主同时短路成 `not-applicable`、零 provider 调用）；未配 provider 也出现，菜单里如实写状态 + 「配置…」入口。
+
 
 ---
 
@@ -354,7 +351,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **预览头**：38px 高、`border-l3`、**放路径**（**目录不上屏，收敛成一个 `…/` 占位** + 文件名 primary，
   **不放标题** —— 同一个词会出现三遍），右上角 **`[网页预览] [本地打开] [全屏] [✕]`**（网页预览仅 `.html`），四者在 38px 里上下居中。
   拖拽把手是**绝对定位的窄条**（不占布局高度）。路径**可点**：在系统文件管理器中打开这篇文档并**选中它**（`action:'reveal'`）。
-  ⚠️ **完整相对路径在它的 `title` 里**（2026-10-01 用户要求「前面那一串都用三个点点点表示」，把宽度让给文件名）；
+  ⚠️ **完整相对路径在它的 `title` 里**（用户要求「前面那一串都用三个点点点表示」）；
   ⚠️ **不要试图做「选择用哪个本机应用打开」**：官方 `open-in-app` 只认**目录**，应用表是编译期开发工具清单
   （没有 Typora / Obsidian）；要做就得自己写应用目录 + 一条**启动本机进程**的宿主路由 —— 新的风险等级。
 - **代码预览走 DSH 官方语法高亮器**（2026-10-07 用户要求，**推翻 v0.19「不做高亮」**）：
@@ -364,13 +361,12 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   `--shiki-foreground` 就是 `.knit-code-src` 原本的 `--dsw-alias-label-primary`）。token span **平铺**进同一个
   `<pre>`（**不包逐行元素**，否则 `pre.scrollHeight / 行数` 的行高几何会变，命中横带会错位）。
   ⚠️ **只给命中段那一带上色**（2026-10-07 用户第二次裁决）：窗口 = 命中段前后各 `CODE_HL_PAD = 60` 行，
-  硬上限 `CODE_HL_MAX_LINES = 800`（命中段本身可能几百行）；**没有命中段就一个 token 都不上色**，其余行
-  保持默认正文色（浅色黑 / 暗色白，跟随主题令牌）。窗口之上 / 之下的行各是**一个**纯文本节点。
+  上限 `CODE_HL_MAX_LINES = 800`；**没有命中段就一个 token 都不上色**，其余行
+  保持默认正文色（跟随主题令牌）。窗口之上 / 之下的行各是**一个**纯文本节点。
   代价明说：窗口从半截注释 / 字符串中间开始时缺上下文，那一段可能**错色**（命中横带仍精确标出行）。
   **必须限制窗口**：官方高亮器同步跑，实测 170–560 ms / 千行，整篇 4000 行首开 2.5–5.5 s（4× 节流）。
   宿主没导出这个 hook（旧版 DSH）或返回行数对不上 ⇒ **静默回落纯文本**。
-  被否决的四条：自造配色、`setTimeout(0)` 让出首帧（实测更慢）、整篇 / 前 N 行前缀着色（用户嫌慢）、
-  按锚点放宽（着色行数变成命中段位置的函数）。
+  被否决：自造配色、`setTimeout(0)` 让出首帧、整篇 / 前缀着色、按锚点放宽。
 - 相对路径图片真渲染、可拖高度、全屏、原生 Markdown。
 - 滚动条**不自己画**：继承 DSH 主题的全局滚动条（8px + `--dsh-scrollbar-thumb`），正文区把变量提到 l2
   （与官方文档预览同档）。
@@ -385,11 +381,10 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 - **入口**：会话头部右侧（`conversation.session.header.utilities`）一个 Knit 图标按钮 ——
   **悬停弹只读浮层偷看，点击才进右边栏**；浮层是自己画的，不碰框架（不会推开布局）。
-  浮层上限 `PEEK_LIMIT = 5`，请求 `/knit/api/recent?sessionId=…&limit=5&sort=<相关/最新>`，
-  `sort` 跟面板偏好（默认「相关」= 当前 Context Pack 前 5 条）。
+  浮层上限 `PEEK_LIMIT = 5`，请求 `/knit/api/recent?…&limit=5&sort=<相关/最新>`，`sort` 跟面板偏好。
   ⚠️ 会话 id 走**座位 props 的 `sessionId`**，不要读 `sessions.list` 快照的 `current`（§8）。
-  ⚠️ **浮层只有「头 + 列表」两层**：列表下面那条横线与「点击打开面板」页脚 2026-10-01 已删除
-  （用户：「我觉得都可以删掉，有点多余了」），`peek.openPanel` 两个文案键也一并删了 —— 别再画回来。
+  ⚠️ **浮层只有「头 + 列表」两层**：列表下那条横线与「点击打开面板」页脚已删（用户要求），
+  `peek.openPanel` 两个键也删了 —— 别再画回来。
 - 点头部那行工作区路径 → 用系统文件管理器打开项目文件夹（`remote.session.openWorkspacePath`）。
 - 语言：中英双语，跟随 DSH 语言实时切换（`ctx.locale`，命名空间 `knit`）。
 - 图标：mono SVG（跟随官方主文本色令牌，**不写死纯黑 / 纯白**）—— **四个位置统一**（见 §6.2）。
@@ -411,14 +406,14 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | 坑 | 结论（照做即可） |
 |---|---|
 | `React.memo` 是对象不是函数 | 只能判空，不能 `typeof === 'function'`；**假件照契约写**（字段先去 `node_modules/@deepseek-ai/*/lib/types/**/*.d.ts` 核） |
-| 测试脚手架 | 用 `byExactClass`（`byClass` 是子串匹配）；先 `render` 登记 effect 再 `flush`；harness 从不给 `ref` ⇒ 只能守**代码形状** |
-| 官方座位 | 座位是 **70 个**：用 `cordis_inspect` 查，**别翻 `.d.ts` 去数**；`conversation.chat.turnTail` 是 `list` ⇒ 新 `id` 是纯追加 |
+| 测试脚手架 | 用 `byExactClass`（`byClass` 是子串匹配）；先 `render` 登记 effect 再 `flush`；harness 不给 `ref` ⇒ 只守**代码形状** |
+| 官方座位 | 座位 **70 个**：用 `cordis_inspect` 查，**别翻 `.d.ts` 数**；`conversation.chat.turnTail` 是 `list` ⇒ 新 `id` 纯追加 |
 | 即时信号 | 用户点一下就期待有反应的操作，**不许经过任何轮询/批处理**（改订阅制） |
 | `byClass` 子串匹配 | 新 class 名不要是已有 class 名的前缀（`knit-entry-wrap` 踩过） |
 | 媒体网格 | 列数**只由宽度决定**；纵向**不许封顶**（算两行装三行 = 第三行只显示一点点） |
 | 测试不许依赖目录布局 | 样本一律向 `test/fixture.mjs` 要（`os.tmpdir()` + `utimes` 定死 mtime），断言里不出现 `knit/` 前缀 |
 | 改 DSH 的观感 | 先看官方怎么写的：**删掉自己的规则**（滚动条）；分层**别用 `bg-layer-*`**；能派生的状态别用额外 `state` + `effect` |
-| 验收失败先怀疑测例 | v0.11 四轮都不是功能坏了：触发条件与收益条件错开 ⇒ **别把机制通过说成价值被证实** |
+| 验收失败先怀疑测例 | v0.11 四轮都不是功能坏了 ⇒ **别把机制通过说成价值被证实** |
 | `curl` 验 `/knit/api/*` | `sessionId` 必须是**还开着**的会话；先看 `returns.root` 对不对，不对后面数字都别信 |
 | 守卫必须证伪一次 | 写完守卫**把 bug 放回去试一次**；没跑到那条分支的守卫是一盏空转的绿灯 |
 | 「列表自己跳」 | 几何用**布局坐标**（`offsetTop`）；effect 依赖里**不许出现轮询刷出来的数组** |
@@ -430,26 +425,28 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | 文件 | 覆盖 |
 |---|---|
 | `test/host.test.mjs` | 解析、越界防护、相关性引擎、会话事件提取、**符号链接工作区的 canonical `hostRoot` / `path`**（DSH 只认 realpath） |
-| `test/host-http.test.mjs` | 真回环端口的 HTTP 端到端：`/raw` 200、**Range 206**、安全响应头、白名单与越界、`/links` 入/出度与不泄漏内部字段 |
-| `test/links.test.mjs` | **链接解析层**：三种引用写法、反引号遮蔽、锚点剥离、`a.md.bak` 不被误咬、**无 `[[wikilink]]`**、歧义同名 ⇒ `null`、入/出度互逆、缓存不重读、`linksOf` 的 404 / 排序 / 上限 |
-| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段 / 语法高亮守卫**（细则见 §7.4） |
+| `test/host-http.test.mjs` | 真回环端口 e2e：`/raw` 200、**Range 206**、安全响应头、白名单与越界、`/links` 入/出度 |
+| `test/links.test.mjs` | **链接解析层**：三种引用写法、反引号遮蔽、`a.md.bak` 不被误咬、**无 `[[wikilink]]`**、歧义同名 ⇒ `null`、入/出度互逆、缓存不重读、`linksOf` 的 404/排序/上限 |
+| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段 / 语法高亮守卫**、**v0.23 检索模式下拉** |
 | `test/tier1.test.mjs` | 相对路径图片、高度与全屏、键盘导航、过滤 |
 | `test/entry.test.mjs` | 入口按钮、宿主解析、list 语义 |
 | `test/i18n.test.mjs` | 中英双语、占位符、错误码翻译、词典键对齐、无表情符号 |
 | `test/icon.test.mjs` | 图标渲染、尺寸、**配色跟随官方主文本色令牌（不写死 `#000` / `#fff`）**、与 assets 源文件一致、四处统一 |
 | `test/path.test.mjs` | 点工作区路径开文件夹、**点预览头路径在文件管理器中显示并选中**、**打开 / 定位一律用 canonical 路径**（界面仍显示会话原本那条） |
-| `test/peek.test.mjs` | 悬停浮层：延迟显示/收起、点击开面板、**不等列表即时响应**、会话 id 取座位 props |
+| `test/peek.test.mjs` | 悬停浮层：延迟显示/收起、点击开面板、**不等列表即时响应**、会话 id 取 props |
 | `test/eval.test.mjs` + `test/eval/` | **排序质量回归**：21 个用例，断言新引擎显著优于冻结的 v0.5.2 基线。⚠️ `eval/legacy.mjs` 是冻结基线，**不要删** |
 | `test/label.test.mjs` | **话题标签可读性**：真词必须出现 + 旧碎片必须不出现；标签词必须是输入的子串 |
-| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、用对话 vs 用 query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**需求 §15 跨面集成守卫（同一条任务下工具侧与面板载荷逐条一致）** |
+| `test/tool.test.mjs` | **agent 工具 `knit_docs`**：注册/注销、两条 `inject` 互不依赖、schema 形状、对话 vs query 排序、无会话报错、`limit` 边界、不泄漏内部字段、渲染格式、**v0.20 片段行与 R2 预算 / 镜像常量守卫**、**需求 §15 跨面集成守卫** |
 | `test/harness.mjs` | 最小 React / window / fetch 替身（**改它要格外小心，见 §8**） |
 | `test/fixture.mjs` | **样本工作区工厂**（`os.tmpdir()` + `utimes` 定死 mtime）。**新增依赖目录布局的测试时，样本一律从这里要**（§8） |
 | `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：`backfillFeedback()` 的回填顺序（见 §6.11 第 2 条）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
-| `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只许活在分类层 |
-| `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch、噪声路径 |
-| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：需求 §21 的 12 个用例 + 媒体反例、四指标（DeepHitRate / PassageHit@1 / PassageRecall / LongDocNoiseRate）、R1 规模门槛（1000 文件 ≤ 1.5 s）、R2 载荷预算（面板 ≤16 KB / 工具 ≤1.4×）。**语料工厂在 `test/deep-corpus.mjs`（必须随包发布；`tools/deep-benchmark.mjs` 只是 CLI 外壳）** |
-| `test/relations.test.mjs` + `test/control.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认、无行号）、`references`/`documents` 与反向 `in` 边、截断顺序、四条端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、持久化只写差量、无 storage 降级 |
-| `test/index-store.test.mjs` + `test/index-incremental.test.mjs` | **v0.22 增量索引**：持久层 16 项（键含 root 指纹、`per-record` 键形状、`mtime+size` 筛子 + `headHash` 复核、版本 / 指纹不符或无存储 ⇒ 空 Map + `reason` 不抛、遗留键**有界清理**（≤32））与端到端 15 项（重启后复用、改一个只重读 1 篇、增删改名不留过期项、同 `mtime+size` 的改写被抽验抓住、相关序不装载索引） |
+| `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只活在分类层 |
+| `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch |
+| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：§21 的 12 个用例 + 媒体反例、四指标、R1（1000 文件 ≤1.5 s）、R2（面板 ≤16 KB / 工具 ≤1.4×）；语料工厂 `test/deep-corpus.mjs` 随包发布 |
+| `test/relations.test.mjs` + `test/control.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认）、`references`/`documents` 与反向 `in` 边、截断顺序、端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、只写差量、无 storage 降级 |
+| `test/semantic.test.mjs` + `test/hybrid-retrieval.test.mjs` | **v0.23 混合检索（A+B）**：provider 两协议 / 配置收敛 / 有界嵌入与缓存 / 五条回退 reason；判据 1/2/2c/3/3b/5/6/7（零调用、既有条目原样、只追加进「相关」、`capRelated` 让位、排除不可绕过、理由不冒充命中） |
+| `test/hybrid-eval.test.mjs`（+ `test/retrieval-corpus.mjs` / `test/retrieval-eval.mjs`） | **v0.23 Phase C 消融**：四路径（L / H0 替身 / H1 真 provider⇒skip / H2 回退逐字一致）+ 指标与有界性；语料 19 篇 13 查询。⚠️ 量尺放 `test/`（`tools/` 不进包） |
+| `test/index-store.test.mjs` + `test/index-incremental.test.mjs` | **v0.22 增量索引**：持久层 16 项（键含 root 指纹、`per-record` 键形状、`mtime+size` 筛子 + `headHash` 复核、版本 / 指纹不符或无存储 ⇒ 空 Map + `reason` 不抛、遗留键**有界清理**）与端到端 15 项（重启后复用、改一个只重读 1 篇、增删改名不留过期项、同 `mtime+size` 改写被抽验） |
 
 ---
 
@@ -463,14 +460,14 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── cordis.patch.yml             挂进 plugin tree 的 insert 行
 ├── assets/                      图标源文件（path 已内联进 client.js）
 ├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
-│                                + index-store.js（v0.22 索引持久层）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
+│                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        728 项，分工见 §9.3
+└── test/                        778 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

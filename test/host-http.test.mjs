@@ -265,6 +265,29 @@ test('HTTP 端到端：/api/recent 带 context，且不泄漏装配层的内部�
   }
 })
 
+test('v0.23「全部」档：/api/recent 给得出 Context Pack，且媒体**不进任何层**', async () => {
+  const { base, close } = await startKnitServer(
+    sessionWithEvents([userMessage(1, 'hub 这份文档，还有 screenshot')]), 's-all',
+  )
+  try {
+    const r = await fetch(`${base}/api/recent?sessionId=s-all&kind=all&sort=relevance&limit=40`)
+    const body = await r.json()
+    assert.equal(body.mode, 'relevance')
+    assert.ok(body.context, '「全部」档必须给包 —— 它现在是「整份包的原样」')
+    const tiers = [...body.context.primary, ...body.context.supporting, ...body.context.related]
+    // 证伪点：媒体能靠**文件名**命中查询词并拿到 `raw > 0`（实测 `docs/screenshot.png` 就会），
+    // 它绝不许出现在层里 —— 但**必须**还留在载荷里（客户端末尾那个网格要用它）。
+    assert.ok(body.docs.some((d) => d.rel === 'docs/screenshot.png'), '媒体照旧在载荷里')
+    assert.ok(tiers.every((i) => i.kind !== 'image' && i.kind !== 'video'), '媒体不进任何层')
+    assert.ok(!tiers.some((i) => i.rel === 'docs/screenshot.png'), '靠文件名命中的媒体也不进层')
+    // 媒体档：永远没有包（媒体不进上下文是结构性的）
+    const rm = await fetch(`${base}/api/recent?sessionId=s-all&kind=media&sort=relevance&limit=40`)
+    assert.equal((await rm.json()).context, null, '媒体档不给包')
+  } finally {
+    await close()
+  }
+})
+
 test('HTTP 端到端：/api/context 返回同一份 Context Model', async () => {
   const { base, close } = await startKnitServer()
   try {

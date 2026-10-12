@@ -190,10 +190,15 @@ test('apply: webServer 与 tools 都缺席时不抛错', () => {
 
 test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致', () => {
   const definition = knitDocsDefinition(scan)
-  // 三个参数都可选 → 没有 required，根对象也没有 additionalProperties
+  // 四个参数都可选 → 没有 required，根对象也没有 additionalProperties
   // v0.15 加了 `audit`（默认 false：不传它完全不走 Context Feedback）
-  assert.deepEqual(Object.keys(definition.parameters.properties), ['query', 'limit', 'audit'])
+  // v0.23 加了 `retrieval`（默认 lexical：不传它时执行路径与配额与 v0.22 逐字相同，
+  //   只有**入参键集**从 3 变 4 —— 这正是方案 §9.2 判据 2 写明的那个唯一例外）
+  assert.deepEqual(Object.keys(definition.parameters.properties), ['query', 'limit', 'audit', 'retrieval'])
   assert.equal(definition.parameters.properties.audit.type, 'boolean')
+  // v0.23：`retrieval` 是**闭集**（lexical / hybrid），不是自由字符串 ——
+  // 认不出的值不许让工具在**校验层**静默失败，也不许悄悄走语义。
+  assert.deepEqual(definition.parameters.properties.retrieval.enum, ['lexical', 'hybrid'])
   assert.equal(definition.parameters.type, 'object')
   assert.equal(definition.parameters.required, undefined)
   // 输出是严格的：根与 items 都 additionalProperties: false，且字段必填
@@ -214,9 +219,10 @@ test('定义形状: 参数与输出 schema 与 defineTool 的编译产物一致'
     )
     // v0.21：来源三值必须**声明**（同 `kind` 那条教训 —— 装配层每条都给，
     // schema 少声明一个字段就会在**校验层**静默失败），且不是 `source` 的替代品。
+    // v0.23：多一值 `semantic`（语义候选补进来的；默认词法模式下永远不会出现）。
     assert.deepEqual(
       items.properties.provenance.enum,
-      ['retrieval', 'relation', 'manual'],
+      ['retrieval', 'relation', 'manual', 'semantic'],
     )
     assert.deepEqual(
       Object.keys(items.properties.relations.items.properties), ['type', 'dir', 'other', 'line'],
@@ -1124,7 +1130,7 @@ test('registerKnitDocsTool: 第五个参数（记账桥）被透传给工具定�
   const { bridge } = fakeBridge()
   registerKnitDocsTool(ctx, scan, undefined, buildContextFor, bridge)
   assert.equal(state.definitions.length, 1)
-  assert.deepEqual(Object.keys(state.definitions[0].parameters.properties), ['query', 'limit', 'audit'])
+  assert.deepEqual(Object.keys(state.definitions[0].parameters.properties), ['query', 'limit', 'audit', 'retrieval'])
 })
 
 test('renderToolText: 有 usage 时它单独占最后一行，且不影响三层正文', () => {
@@ -1143,4 +1149,53 @@ test('renderToolText: 有 usage 时它单独占最后一行，且不影响三层
   // 没有 usage 时不留空行（不许出现尾部空行这种「看不出差别」的漂移）
   const without = renderToolText({ ...value, usage: undefined })
   assert.ok(!without.endsWith('\n'), without)
+})
+
+/* ── v0.23 · 可选混合检索：工具面（判据 5 / 6）────────────────────────
+ *
+ * 工具面要守两件事：
+ *   ① 默认（词法）调用**一个字节都不变** —— 老调用方不必知道这一版存在；
+ *   ② 要了 `hybrid` 而宿主回退时，**如实说**（不许让模型以为拿到的是语义结果）。
+ */
+
+test('v0.23 工具面：默认（词法）调用不留痕迹 —— 值里没有 `retrieval`，渲染里没有那一行', async () => {
+  const value = await runTool(fakeExec(fakeSession([userMessage(1, '相关性排序与 BM25')])))
+  assert.equal('retrieval' in value, false, '不传 retrieval ⇒ 值里不许出现这个键')
+  const text = renderToolText(value)
+  assert.ok(!text.includes('Retrieval:'), `默认调用的输出不许提检索模式：${text.slice(0, 120)}`)
+})
+
+test('v0.23 工具面：要了 `hybrid` 而没有 provider ⇒ 如实写「已回退词法」（判据 5）', async () => {
+  const value = await runTool(fakeExec(fakeSession([userMessage(1, '相关性排序与 BM25')])), { retrieval: 'hybrid' })
+  assert.equal(typeof value.retrieval, 'string', '要了混合就必须写出实际模式')
+  assert.match(value.retrieval, /fell back from hybrid \(no-provider\)/)
+  const text = renderToolText(value)
+  assert.match(text, /^Retrieval: lexical — fell back from hybrid \(no-provider\)$/m)
+  // ③ 同一份结果里，条目本身仍然是词法的理由 —— 回退不许把它伪装成语义命中
+  for (const item of allItems(value)) assert.notEqual(item.reason.code, 'semantic')
+})
+
+test('v0.23 工具面：`semantic` 理由码有自己的说法，且**不许**落进 `related` 那句兜底话（判据 6）', () => {
+  const value = {
+    mode: 'relevance',
+    topic: '语义检索',
+    totals: { matched: 1, total: 2 },
+    primary: [{
+      rel: 'main.md', title: '主文档', summary: '摘要', mtimeMs: 0, kind: 'md', source: 'doc',
+      reason: { code: 'titleMatch', terms: ['语义检索'], fields: 1, term: '语义检索' },
+      provenance: 'retrieval',
+    }],
+    supporting: [],
+    related: [{
+      rel: 'sem.md', title: '语义文档', summary: '摘要', mtimeMs: 0, kind: 'md', source: 'doc',
+      reason: { code: 'semantic', terms: [], fields: 0, term: '' },
+      provenance: 'semantic',
+    }],
+  }
+  const text = renderToolText(value)
+  assert.match(text, /Why: semantic candidate/)
+  assert.ok(
+    !text.includes('related in the current workspace'),
+    '`semantic` 必须有自己的说法 —— 落进兜底那句就是「无法验证的推断」（正是需求 §九 禁止的）',
+  )
 })

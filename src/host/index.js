@@ -35,6 +35,12 @@ import {
 // v0.22：增量上下文索引的持久层。**不参与排序、不缓存正文** —— 它只回答
 // 「这个文件的头部指纹和上次一样吗」。存储拿不到时它自己降级成空 Map。
 import { sharedIndexStore, headHashOf, refsShapeOk } from './index-store.js'
+// v0.23：可选混合检索（Phase A）。**默认零调用** —— 没有配置、或要的是词法模式时，
+// 这一层连探测都不发（方案 §9.2 判据 1）。它只算「有界的语义候选数」，**不进三层、不改名次**
+// （那是 Phase B 的规则变更，见 `Knit-v0.23-方案-可选混合检索.md` §3 第 6/7/8 条与 §11）。
+import {
+  createSemanticEngine, sharedSemanticStore, normalizeProviderConfig,
+} from './semantic.js'
 // v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
 // ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
@@ -874,6 +880,15 @@ export function setIndexRegistry(store) {
 }
 
 /**
+ * 装一次语义引擎（`apply()` 拿到 `ctx.storage` 时换成带持久化配置的那份；测试也走它）。
+ * @param {object|null} engine - `semantic.js` 的引擎；传 `null` 退回「没有配置」
+ * @returns {void}
+ */
+export function setSemanticEngine(engine) {
+  semanticEngine = engine || createSemanticEngine({ store: null })
+}
+
+/**
  * 最近一轮扫描的索引计数（v0.22）。
  *
  * 验收要求「不能只说更快」，所以这些**计数**要和墙钟一起报出来：
@@ -1555,6 +1570,96 @@ function publicDoc(doc) {
  */
 let controlRegistry = createControlRegistry(null)
 
+/**
+ * v0.23 · 进程内的语义引擎（`apply()` 拿到 `ctx.storage` 时换成带持久化配置的那份）。
+ *
+ * ⚠️ **只持久化配置**；向量活在 `semantic.js` 的进程内有界缓存里 —— 持久化向量与
+ * 「有界增量嵌入」是 Phase B 的事（方案 §6）。
+ */
+let semanticEngine = createSemanticEngine({ store: null })
+
+/**
+ * v0.23 Phase A：跑一轮**有界**语义候选。
+ *
+ * 三条不会变的行为（判据 1 / 5 / 7）：
+ *   · 词法模式 ⇒ **一次 provider 调用都不发**（`available` 老实回 `null`：本轮没探测过）；
+ *   · 任何失败 ⇒ 收敛成一个 `reason`，**绝不抛**（语义层坏了不许带坏检索）；
+ *   · Phase A 只**数**候选，不往 `pool` 里塞任何东西 ⇒ 面板与工具载荷逐字不变。
+ *
+ * @param {string} root - 工作区根
+ * @param {{retrieval: string, keywords: string[], task: string, docs: Array<object>}} input
+ * @returns {Promise<object>} 语义状态行
+ */
+async function semanticPassFor(root, input) {
+  const status = await semanticEngine.ready()
+  const requested = input.retrieval === 'hybrid' ? 'hybrid' : 'lexical'
+  // ⚠️ v0.23 修订（2026-10-11）：**时间序下这一层整个不适用**。
+  // 判据在代码里：`contextPayload()` 要求 `sort === 'relevance'` 才产出 Context Pack
+  // （`contextPayload()` 的第一行），所以时间序**根本没有分层结构**，语义标记没有消费者；
+  // 而这一轮如果照跑，就是「白花 provider 调用 + 界面上还显示成可用」。
+  // ⇒ 直接如实回 `not-applicable`，**不探测、不嵌入**（判据 1 的同一条纪律：不该花的钱一分不花）。
+  if (requested === 'hybrid' && input.applies !== true) {
+    return {
+      mode: 'lexical', requested, configured: status.configured, available: null,
+      reason: 'not-applicable', candidates: 0, provider: status.provider, rels: [],
+    }
+  }
+  if (requested !== 'hybrid') {
+    return {
+      mode: 'lexical', requested, configured: status.configured, available: null,
+      reason: null, candidates: 0, provider: status.provider, rels: [],
+    }
+  }
+  // ⚠️ 2026-10-11（Phase C 量尺发现）：查询文本必须是**用户原话**。
+  // 原来的顺序是 `task || keywords.join(' ')` —— 显式 `query` 路径（`knit_docs(query=…)`）下
+  // `task` 是空的，于是拿去做嵌入的是 `extractKeywords()` **去重叠后的 3-gram 碎片**
+  // （实测 `失效策略怎么定` → `["失效策","效策略"]`），语义那条路的质量因此明显更差。
+  // 现在由调用方按「原话优先」传 `queryText`：显式 query > 会话原话 > 关键词（最后兜底）。
+  const query = (input.queryText && String(input.queryText).trim())
+    || (input.task && String(input.task).trim())
+    || (Array.isArray(input.keywords) ? input.keywords.join(' ') : '')
+  try {
+    const result = await semanticEngine.pass({ root, query, docs: input.docs })
+    // ⚠️ `mode` 报的是**实际生效**的模式，不是「你要的那个」：
+    // 只有语义那一轮真的跑成功（`available === true`）才算 `hybrid`；
+    // 没配置 / 探测失败 / 超时 / 形状不对一律**如实回 `lexical`** 并带上 `reason`
+    // —— 判据 5 的「不许伪装成混合成功」在宿主这一侧就是这一行。
+    const ok = result.available === true
+    return {
+      mode: ok ? 'hybrid' : 'lexical',
+      requested,
+      configured: !!result.provider,
+      available: ok,
+      reason: ok ? null : (result.reason || 'unavailable'),
+      candidates: ok ? result.candidates : 0,
+      provider: result.provider,
+      rels: ok ? result.rels : [],
+    }
+  } catch {
+    return {
+      mode: 'lexical', requested, configured: true, available: false,
+      reason: 'bad-response', candidates: 0, provider: status.provider, rels: [],
+    }
+  }
+}
+
+/**
+ * 把上面那一行压成**可以下发**的形状：`rels` 是内部输入（Phase B 要用），不下发。
+ * @param {object} row - `semanticPassFor()` 的产物
+ * @returns {object} 公开字段
+ */
+function publicSemantic(row) {
+  return {
+    mode: row.mode,
+    requested: row.requested,
+    configured: !!row.configured,
+    available: row.available === null ? null : !!row.available,
+    reason: row.reason || null,
+    candidates: Number(row.candidates) || 0,
+    provider: row.provider || null,
+  }
+}
+
 export async function scan(root, limit, options = {}) {
   // v0.19 修订：**扫的是展开符号链接后的那份路径**。
   // 每条记录里的 `path`（`publicDoc()` 原样下发给客户端）就是「打开 / 定位」时
@@ -1579,6 +1684,9 @@ export async function scan(root, limit, options = {}) {
   // 当前任务的**原文引用**（SDD §12）。只在「对话驱动」这条路上有值：
   // 显式 query 路径下模型自己知道在问什么，把 query 当「任务」是编的。
   let task = ''
+  // v0.23：给语义通道的**查询原话**（显式 query 或会话里那条用户消息）。
+  // 与 `task` 分开：`task` 是「包引用的任务原文」，这里是「拿去嵌入的文本」。
+  let queryText = ''
 
   if (wantRelevance) {
     // 调用方给了明确的 query（v0.7 的 agent 工具走这条路）：把它当成**一条最新的消息**，
@@ -1587,10 +1695,13 @@ export async function scan(root, limit, options = {}) {
     const explicitQuery = typeof options.query === 'string' ? options.query.trim() : ''
     if (explicitQuery) {
       keywords = extractKeywords([explicitQuery], 30)
+      // v0.23：语义那一层要的是**原话**，不是抽完的碎片（见 `semanticPassFor()` 的注释）。
+      queryText = explicitQuery
     } else {
       const conv = conversationFor(options.session, sessionId)
       keywords = conv.keywords
       task = conv.task
+      queryText = conv.task
     }
     // 没有对话可依据时老实退回时间序，而不是假装排了个序
     mode = keywords.length > 0 ? 'relevance' : 'time'
@@ -1654,6 +1765,33 @@ export async function scan(root, limit, options = {}) {
     for (const doc of collected.docs.concat(collected.code, collected.media)) {
       if (excluded.has(doc.rel)) controlAlive.add(doc.rel)
     }
+  }
+
+  // ── v0.23：可选混合检索（Phase A）────────────────────────────────
+  //
+  // 位置是**刻意的**，两处都不能挪（方案 §3）：
+  //   · 在**排除之后** ⇒ 被排除的文件不可能经语义路径回来（判据 3）；
+  //   · 在 `rankByRelevance()` **之前** ⇒ 与未来 Phase B 的融合点一致。
+  // Phase A 只算候选数、如实报告可用性 —— **不往 `pool` 里塞东西**（判据 2：载荷不变）。
+  const semantic = await semanticPassFor(root, {
+    retrieval: options.retrieval === 'hybrid' ? 'hybrid' : 'lexical',
+    // 只有相关序才有 Context Pack（`contextPayload()` 的判据）⇒ 时间序下语义不适用。
+    applies: mode === 'relevance',
+    // 嵌入用的查询文本：**原话优先**（显式 query > 会话原话 > 关键词碎片兜底）。
+    queryText,
+    keywords,
+    task,
+    docs: pool,
+  })
+
+  // v0.23 Phase B：把这一轮的语义候选**标进池子**（只标记 —— 不排序、不抬层、不改名次）。
+  // 与词法同时命中的条目也照标：`context.js` **只在 `raw === 0` 时**才认这个标记，
+  // 所以「有词法证据的仍按词法规则分层」是结构性保证，不靠纪律。
+  // ⚠️ `pool` 里的对象就是后面 `rankByRelevance()` / `publicDoc()` 看到的那些；
+  // `publicDoc()` 是白名单投影，所以这个标记**不会**下发到浏览器。
+  if (semantic.mode === 'hybrid' && semantic.rels.length > 0) {
+    const semanticRels = new Set(semantic.rels)
+    for (const doc of pool) if (semanticRels.has(doc.rel)) doc.semantic = true
   }
 
   let ordered
@@ -1721,6 +1859,8 @@ export async function scan(root, limit, options = {}) {
     // 剥掉不是为了保密（这是用户自己刚说过的话），而是为了不动 v0.13 的响应形状：
     // `context.task` 已经把这个值带出去了，顶层再来一份是重复。
     task: mode === 'relevance' ? task : '',
+    // v0.23：检索模式 + 语义可用性 / 回退原因 / 有界候选数。**只计数、不进包**。
+    semantic: publicSemantic(semantic),
     docs: ordered.slice(0, limit).map(publicDoc),
     // 全量列表（未按 limit 切片）。**内部输入**：v0.17 的 lifecycle 需要「被读过但
     // 不一定落在当前页」的文档的当前 mtime。由 `publicScanPayload()` 剥掉。
@@ -1728,7 +1868,11 @@ export async function scan(root, limit, options = {}) {
     // v0.19 扫描计数（需求 §50 要报的那几个数：见到的 / 准入的 / 被排除的 / 生成噪声）
     // 加上 `corpusSize`（本档语料的实际大小，即 `allDocs.length`）。
     // **内部输入**，由 `publicScanPayload()` 剥掉 —— HTTP 响应形状一个键都不加。
-    stats: { ...collected.stats, scanMs: collected.scanMs, corpusSize: ordered.length, controlSkipped, controlAlive },
+    stats: {
+      ...collected.stats, scanMs: collected.scanMs, corpusSize: ordered.length, controlSkipped, controlAlive,
+      // v0.23：带 `rels` 的那一份**只在内部**（装配层 / 测试用）。
+      semantic,
+    },
   }
 }
 
@@ -1891,9 +2035,15 @@ function withStats(pack) {
  * @returns {Promise<object|null>} Context Pack（带 `summary`）或 null
  */
 async function contextPayload(root, payload, sort, kind) {
-  const contextKind = kind === 'doc' || kind === 'code' || kind === 'context'
+  // v0.23（方案 A）：面板的「全部」档也要一份包 —— 它是**包的原样**（三层混排文档 + 代码），
+  // 媒体在三层之后单独成网格。所以 `all` 与 `doc` / `code` / `context` 一样产出 Context Pack。
+  const contextKind = kind === 'doc' || kind === 'code' || kind === 'context' || kind === 'all'
   if (!payload || payload.mode !== 'relevance' || sort !== 'relevance' || !contextKind) return null
-  const ranked = Array.isArray(payload.ranked) ? payload.ranked : []
+  // ⚠️ 媒体必须**在装配之前**剔掉，而且这不是洁癖：实测（2026-10-12）媒体能靠**文件名**命中
+  // 查询词并拿到 `raw > 0`，`docs/clip.mp4` 甚至能进 Primary —— 一个没有正文的视频当「先看」
+  // 是不可解释的上下文。剔掉之后「全部」档的语料与 `kind=context`（文档 + 代码）逐条一致。
+  const ranked = (Array.isArray(payload.ranked) ? payload.ranked : [])
+    .filter((doc) => doc && doc.kind !== KIND_IMAGE && doc.kind !== KIND_VIDEO)
   if (ranked.length === 0) return null
   try {
     const pack = await buildContextFor(root, {
@@ -1903,7 +2053,8 @@ async function contextPayload(root, payload, sort, kind) {
       total: payload.total,
       // 引用图只在**真有命中**时才值得建（零命中时 Primary 为空，邻居逻辑没有锚点）；
       // 而且只有 Markdown 有图可建。
-      withLinks: kind === 'doc' && ranked.some((doc) => Number(doc.raw) > 0),
+      // 「全部」也建引用图：三层里要能看到与「文档」档同样的关系证据（同一张图，零额外 I/O）。
+      withLinks: (kind === 'doc' || kind === 'all') && ranked.some((doc) => Number(doc.raw) > 0),
     })
     return withStats(pack)
   } catch {
@@ -2583,10 +2734,14 @@ export function apply(ctx) {
       // 它改的也只是 Knit 自己的控制状态，从不碰工作区里的任何文件。
       const path = (req.url || '/').split('?')[0]
       const isControl = path === `${ROUTE_PREFIX}/api/control`
-      // 写通道只有这一条，且**只认 POST**：别的路由仍然是纯 GET。
-      // （写成「非 GET 一律 405，除非是 control 的 POST」会让 `GET /api/control`
+      // v0.23：第二条（也是最后一条）写通道 —— 只写 Knit 自己的语义 provider 配置。
+      // 它同样**只认 POST**（`GET /api/semantic` 一律 405，与 `GET /api/control` 一致）。
+      const isSemantic = path === `${ROUTE_PREFIX}/api/semantic`
+      const isWrite = isControl || isSemantic
+      // 写通道**只认 POST**：别的路由仍然是纯 GET。
+      // （写成「非 GET 一律 405，除非是写路由的 POST」会让 `GET /api/control`
       // 掉进写分支里报 400 —— 那是「方法不对」不是「请求不对」。）
-      if (req.method !== (isControl ? 'POST' : 'GET')) {
+      if (req.method !== (isWrite ? 'POST' : 'GET')) {
         sendJson(res, 405, { ok: false, code: ERROR_CODES.methodNotAllowed })
         return
       }
@@ -2596,6 +2751,29 @@ export function apply(ctx) {
       const root = workspaceRootOf(webCtx, sessionId)
 
       try {
+        if (isSemantic) {
+          // 只认 `{kind, base, model}`：三个都空 ⇒ **清空配置**；否则必须整份合法。
+          // 配置是**机器级**的（不按工作区），所以这里不需要 sessionId / rel 校验 ——
+          // 但**仍然**只回环、只 POST、坏 body 400（与 `/api/control` 同一条纪律，§6.9）。
+          const body = await readJsonBody(req)
+          const raw = body && typeof body === 'object' ? body : {}
+          const empty = !raw.kind && !raw.base && !raw.model
+          const config = empty ? null : normalizeProviderConfig(raw)
+          if (!empty && !config) {
+            sendJson(res, 400, { ok: false, code: ERROR_CODES.badRequest })
+            return
+          }
+          await semanticEngine.configure(config)
+          // 保存后**顺手探一次**：界面要的是「现在到底能不能用」，不是「我存下了」。
+          const checked = config ? await semanticEngine.check() : { available: false, reason: 'no-provider' }
+          sendJson(res, 200, {
+            ok: true,
+            configured: !!config,
+            available: !!checked.available,
+            reason: checked.available ? null : (checked.reason || 'probe-failed'),
+          })
+          return
+        }
         if (isControl) {
           // 只认 `{action, rel}`；动作白名单在 `control.js` 里（一处真源）。
           // `root` 由 sessionId 解析 —— 工作区**不能由请求指定**，与其余路由同一条纪律。
@@ -2632,6 +2810,8 @@ export function apply(ctx) {
             : 'doc'
           const payload = await scan(root, limit, {
             session: sessionOf(webCtx, sessionId), sessionId, sort, kind,
+            // v0.23：默认 `lexical`（不带这个参数的老客户端行为逐字不变）。
+            retrieval: url.searchParams.get('retrieval') === 'hybrid' ? 'hybrid' : 'lexical',
           })
           const body = publicScanPayload(payload)
           // v0.14：相关模式下顺带给出任务上下文分层。
@@ -2802,6 +2982,15 @@ export function apply(ctx) {
     const store = sharedIndexStore(backend)
     if (store) setIndexRegistry(store)
     console.log(`[${name}] index storage: ${store ? 'attached' : 'memory-only'}`)
+
+    // ── v0.23：可选混合检索的**配置**持久化 ──────────────────────────
+    //
+    // 第三个 kv 单元（`knit_semantic`）。**只存配置**（一条全局记录，`single` 布局）；
+    // 向量活在进程内缓存里 —— 持久化向量是 Phase B 的事（方案 §6）。
+    // 拿不到存储时引擎照样工作，只是配置活不过这次进程（面板会如实说）。
+    const semanticStore = sharedSemanticStore(backend)
+    if (semanticStore) semanticEngine = createSemanticEngine({ store: semanticStore })
+    console.log(`[${name}] semantic storage: ${semanticStore ? 'attached' : 'memory-only'}`)
   })
 
   // ── v0.7：把同一个排序结果也交给模型 ──────────────────────────────
