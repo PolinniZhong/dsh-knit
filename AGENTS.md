@@ -125,7 +125,7 @@ curl -s "http://127.0.0.1:3080/knit/api/raw?rel=nope.png"
 `KnitBody` 被两个宿主共用，只在「怎么开新标签页」上用适配器分叉：
 官方右侧栏 → `tab.actions.openResource`（必须从 `useTabInfo()` 拿，**不是** props）；
 better-sidebar → `ctx.betterSidebar.openTab`。两边都是**可选依赖**（`ctx.inject` 子 fiber），缺一个不影响另一个。
-⚠️ descriptor 必须带 `hidden: true`：v0.24.1 起它把自己的 tab 镜像成官方类型并顺带挂一条 guide 条目，
+⚠️ descriptor 必须带 `hidden: true`：**better-sidebar** v0.24.1 起它把自己的 tab 镜像成官方类型并挂一条 guide 条目，
 不写就会在「开始」页出现两行同名入口。
 
 ---
@@ -308,7 +308,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   网格内边距 24）；`height:var(--knit-media-cell)` 与 `aspect-ratio:1/1` 同时写（变量缺失时不塌成 0 高）。
   视频取首帧当海报 + 播放三角 + 时长角标。
 - **键盘**：`↑↓` 移动即预览 / `Enter` 切换 / `Esc` 收起；媒体档 `←→` 按屏幕位置跨行、`Home`/`End` 到首尾。
-  ⚠️ **文档档（含「全部」档的文档区）永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦
+  ⚠️ **文档档永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦
   （以前误传 `docLayout.columns`）。导航算术在纯函数 `nextIndexFor` 里（真实列数要 `ResizeObserver` 量）。
 - **类型档只有三个**：`文档 / 代码 / 媒体`（v0.23.1 起）——**「全部」档连同它的混合浏览视图已从 UI 删除**（老偏好 `all` 回落「文档」）；**内部跨类型检索 / `knit_docs` / 统一 Context Pack 保留**（宿主 `kind=all` 一行没改，e2e 仍在）。
 
@@ -330,7 +330,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **使用反馈（v0.16）**：默认关的「使用情况」开关 + `knit_docs` 的 `audit: true`，把「先看的那篇读没读 /
   辅助层 read÷total / 读了几次 / 包外几篇 / 上下文换过几次」摊成**一行事实**，行首多一个累计的
   「当前上下文 · Epoch N」。归因**读时冻结**，之后换多少份上下文都不会改口。见 §6.11。
-- **v0.24 检索方式**：**状态行里的可点状态格**（`BM25 检索 ›`，视觉照命中段 `.knit-hit`：`--knit-chip-bg` + 6px 圆角 + `1px 6px` + 次级灰字 + 字号/行高同命中段）（几何 / 翻转 / 定位由 `client.test.mjs` 逐值钉住）；工具栏第二行只剩排序 / 类型 / 搜索；「最新」档整条状态行不渲染 ⇒ 格子不在，但**不重置**偏好；未配 provider 也出现，菜单如实写状态 + 配置入口。
+- **v0.23.1 检索方式**：**状态行里的可点状态格**（`BM25 检索 ›`，视觉照命中段 `.knit-hit`：`--knit-chip-bg` + 6px 圆角 + `1px 6px` + 次级灰字 + 字号/行高同命中段）（几何 / 翻转 / 定位由 `client.test.mjs` 逐值钉住）；工具栏第二行只剩排序 / 类型 / 搜索；「最新」档整条状态行不渲染 ⇒ 格子不在，但**不重置**偏好；未配 provider 也出现，菜单如实写状态 + 配置入口。
 
 
 ---
@@ -425,7 +425,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/host.test.mjs` | 解析、越界防护、相关性引擎、会话事件提取、**符号链接工作区的 canonical `hostRoot` / `path`**（DSH 只认 realpath） |
 | `test/host-http.test.mjs` | 真回环端口 e2e：`/raw` 200、**Range 206**、安全响应头、白名单与越界、`/links` 入/出度 |
 | `test/links.test.mjs` | **链接解析层**：三种引用写法、反引号遮蔽、`a.md.bak` 不被误咬、**无 `[[wikilink]]`**、歧义同名 ⇒ `null`、入/出度互逆、缓存不重读、`linksOf` 的 404/排序/上限 |
-| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段 / 语法高亮守卫**、**v0.24 状态行检索方式状态格** |
+| `test/client.test.mjs` | 双宿主注册、排序、渲染、降级、适配层、颜色 / 类名 / 样式守卫、v0.19 预览 UI 守卫、**v0.20 命中段 / 语法高亮守卫**、**v0.23.1 状态行检索方式状态格** |
 | `test/tier1.test.mjs` | 相对路径图片、高度与全屏、键盘导航、过滤 |
 | `test/entry.test.mjs` | 入口按钮、宿主解析、list 语义 |
 | `test/i18n.test.mjs` | 中英双语、占位符、错误码翻译、词典键对齐、无表情符号 |
@@ -441,7 +441,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只活在分类层 |
 | `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch |
 | `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：§21 的 12 个用例 + 媒体反例、四指标、R1（1000 文件 ≤1.5 s）、R2（面板 ≤16 KB / 工具 ≤1.4×） |
-| `test/relations.test.mjs` + `test/control.test.mjs` + `test/git-changes.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认）、`references`/`documents` 与反向 `in` 边、截断顺序、端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、只写差量、无 storage 降级；**v0.25 Git 变更关联**：状态解析五态、五种降级、接口隔离、真机夹具验证据与误报、**子进程环境白名单**（注入 + 证伪） |
+| `test/relations.test.mjs` + `test/control.test.mjs` + `test/git-changes.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认）、`references`/`documents` 与反向 `in` 边、截断顺序、端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、只写差量、无 storage 降级；**v0.24 Git 变更关联**：状态解析五态、五种降级、接口隔离、真机夹具验证据与误报、**子进程环境白名单**（注入 + 证伪） |
 | `test/semantic.test.mjs` + `test/hybrid-retrieval.test.mjs` | **v0.23 混合检索（A+B）**：provider 两协议 / 配置收敛 / 有界嵌入与缓存 / 五条回退 reason；判据 1/2/2c/3/3b/5/6/7（零调用、既有条目原样、只追加进「相关」、`capRelated` 让位、排除不可绕过、理由不冒充命中） |
 | `test/hybrid-eval.test.mjs`（+ `test/retrieval-corpus.mjs` / `test/retrieval-eval.mjs`） | **v0.23 Phase C 消融**：四路径（L / H0 替身 / H1 真 provider⇒skip / H2 回退逐字一致）+ 指标与有界性；语料 19 篇 13 查询。⚠️ 量尺放 `test/`（`tools/` 不进包） |
 | `test/index-store.test.mjs` + `test/index-incremental.test.mjs` | **v0.22 增量索引**：持久层 16 项（键含 root 指纹、`per-record` 键形状、`mtime+size` 筛子 + `headHash` 复核、版本 / 指纹不符或无存储 ⇒ 空 Map + `reason` 不抛、遗留键**有界清理**）与端到端 15 项（重启后复用、改一个只重读 1 篇、增删改名不留过期项、同 `mtime+size` 改写被抽验） |
@@ -458,7 +458,7 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── cordis.patch.yml             挂进 plugin tree 的 insert 行
 ├── assets/                      图标源文件（path 已内联进 client.js）
 ├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
-│                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层）
+│                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层） + git.js + changes.js（v0.24 变更关联）
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/

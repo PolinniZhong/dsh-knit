@@ -68,6 +68,18 @@
 本版**改了宿主半边**（`src/host/*`）—— 与 v0.23.x「只要硬刷新」不同：**升级后需要重启 DSH**，
 否则 `/knit/api/changes` 不存在，状态行那一格会显示「变更 —」并写明原因。
 
+> ✅ **2026-10-14 已发布**：轻量 tag `v0.24.0` = 发布提交 `cc51791` = npm `gitHead`；OIDC 可信发布
+> run `38485942612`（**第 2 次尝试**才绿 —— 第 1 次又红在 `test/index-incremental.test.mjs:168` 那条
+> **间歇性**用例上；这是**连续第三个版本**撞它 ⇒ 见发布 skill 台账 B27 / B32）、`conclusion=success`、
+> **带 SLSA provenance**；registry `latest = 0.24.0`（共 **22 个**版本）；GitHub Release
+> `published_at 2026-10-13T23:47:54Z`。
+> registry 上的真包 = **69 文件 / 802 076 B tarball / 2 357 111 B 解包**、
+> shasum `4a9d1ac1e4369039dceb804a5ebae9f8cb1b871b`（= registry `dist.shasum`），下载解包后 `npm test` **828 / 0**。
+> 本地 pack 基线 = **791 091 B / `2208ae8e832f3f6d2f2cfb5d728ea0582043b937` / 69 条目 / 解包 2 357 111 B**（连打两次逐字节相同）。
+> ⚠️ 本地 pack 的字节数与 shasum 和 registry **历来对不上**（差的是 tar/gzip 框架元数据）—— 能跨端比的是
+> 「下载件 sha1 == `dist.shasum`」与「`fileCount` / `unpackedSize` == 本地 pack」这两条。
+> ⚠️ **这一行不在已发布的 tarball 里** —— 改它的提交只能在 `npm publish` 之后（同一版本号不能再发一次）。
+
 ## [0.23.1] - 2026-10-13
 
 > **本版定位**：这一版**不是纯 patch** —— 它一边修包装/文案，一边带了一次**用户可见的工具栏收敛**。
