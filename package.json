@@ -1,8 +1,8 @@
 {
   "name": "dsh-knit",
-  "version": "0.23.1",
+  "version": "0.24.0",
   "type": "module",
-  "description": "Workspace context retrieval for DeepSeek Harness: ranks documents, source files and media by relevance to the current conversation into a sidebar Context Pack with inline preview. Lexical and fully local by default — zero model calls, zero network. Optional hybrid mode is off by default and needs a provider you configure; a remote provider receives file titles and summaries (not bodies). Loopback stays local.",
+  "description": "Context retrieval for DeepSeek Harness: ranks docs, code and media by relevance into a sidebar Context Pack. Lexical and fully local by default. Hybrid is off until you configure a provider; it sends your query and file titles/summaries, not bodies.",
   "main": "./src/host/index.js",
   "exports": {
     ".": "./src/host/index.js",
@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "agents:budget": "node tools/agents-budget.mjs",
-    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs test/links.test.mjs test/relations.test.mjs test/control.test.mjs test/security.test.mjs test/context.test.mjs test/context-eval.test.mjs test/feedback.test.mjs test/context-delta.test.mjs test/context-feedback-eval.test.mjs test/context-effectiveness.test.mjs test/document-lifecycle.test.mjs test/classification.test.mjs test/code-context.test.mjs test/deep-context.test.mjs test/deep-eval.test.mjs test/deep-scale.test.mjs test/index-store.test.mjs test/index-incremental.test.mjs test/hybrid-eval.test.mjs test/semantic.test.mjs test/hybrid-retrieval.test.mjs"
+    "test": "node --test test/host.test.mjs test/host-http.test.mjs test/client.test.mjs test/tier1.test.mjs test/entry.test.mjs test/i18n.test.mjs test/icon.test.mjs test/path.test.mjs test/peek.test.mjs test/eval.test.mjs test/tool.test.mjs test/label.test.mjs test/links.test.mjs test/relations.test.mjs test/control.test.mjs test/security.test.mjs test/context.test.mjs test/context-eval.test.mjs test/feedback.test.mjs test/context-delta.test.mjs test/context-feedback-eval.test.mjs test/context-effectiveness.test.mjs test/document-lifecycle.test.mjs test/classification.test.mjs test/code-context.test.mjs test/deep-context.test.mjs test/deep-eval.test.mjs test/deep-scale.test.mjs test/index-store.test.mjs test/index-incremental.test.mjs test/hybrid-eval.test.mjs test/semantic.test.mjs test/hybrid-retrieval.test.mjs test/git-changes.test.mjs"
   },
   "dsh": {
     "bundle": {

@@ -41,11 +41,16 @@ import { sharedIndexStore, headHashOf, refsShapeOk } from './index-store.js'
 import {
   createSemanticEngine, sharedSemanticStore, normalizeProviderConfig,
 } from './semantic.js'
+// v0.25：Git 变更关联检索。**只读、有界、默认关闭** —— `git.js` 只跑一条
+// `git status --porcelain=v1 -z`（argv 是数组，绝不走 shell；写动词一个都没有），
+// `changes.js` 把变更文件当种子去**已有的**关系事实表里取边，不发明关系。
+import { createGitReader, MAX_REPORTED_FILES } from './git.js'
+import { splitSeeds, ghostCandidates, projectChangeRelated, MAX_CHANGE_RELATED } from './changes.js'
 // v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
 // ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
 // `renderToolText()` 里发生（模型看到的是那段文本，不是结构化 JSON）。曾经多导出一个
 // `renderContextText` 却没人调用 —— 那是个会与 `tool.js` 漂移的第二渲染器，已删。
-import { buildContext } from './context.js'
+import { buildContext, sourceTypeOf } from './context.js'
 // v0.20：内容片段层（Deep Context Retrieval）。**纯函数、不读盘**，
 // 目录遍历与缓存全在本文件 —— 它只回答「这篇正文里哪几段相关」。
 import { passageMatchesFor, passageTfOf, PASSAGE_WINDOW } from './passage.js'
@@ -1579,6 +1584,13 @@ let controlRegistry = createControlRegistry(null)
 let semanticEngine = createSemanticEngine({ store: null })
 
 /**
+ * v0.25 · 进程内的 Git 读取器。**只有 `changes=1` 那一轮才会真的去跑 git** ——
+ * 默认关闭意味着默认这条路上一个进程都不 spawn（用户需求 §三.3 的「不悄悄改变基础检索行为」）。
+ * 缓存（8 秒）与「不是仓库」的负缓存都在它内部，见 `git.js`。
+ */
+const gitReader = createGitReader()
+
+/**
  * v0.23 Phase A：跑一轮**有界**语义候选。
  *
  * 三条不会变的行为（判据 1 / 5 / 7）：
@@ -1837,7 +1849,7 @@ export async function scan(root, limit, options = {}) {
     ordered = pool.map((doc) => ({ ...doc, score: null }))
   }
 
-  return {
+  const out = {
     ok: true,
     root,
     // v0.19 修订：`root` 是会话自己那条路径（可能含符号链接，用于显示）；
@@ -1865,6 +1877,11 @@ export async function scan(root, limit, options = {}) {
     // 全量列表（未按 limit 切片）。**内部输入**：v0.17 的 lifecycle 需要「被读过但
     // 不一定落在当前页」的文档的当前 mtime。由 `publicScanPayload()` 剥掉。
     allDocs: ordered,
+    // v0.25：**文档 + 代码**那一份语料（与类型档无关）。Git 变更关联要在「文档 ↔ 代码」
+    // 之间找证据（`documents` / `imports` / `tests` 三类都跨档），而面板的档位把语料切开了；
+    // 所以这里多带一份**不分档**的候选集给它。它只是一组引用（记录本身已在 `allDocs` 里），
+    // 由 `publicScanPayload()` 剥掉，不下发。
+    contextCorpus: collected.docs.concat(collected.code),
     // v0.19 扫描计数（需求 §50 要报的那几个数：见到的 / 准入的 / 被排除的 / 生成噪声）
     // 加上 `corpusSize`（本档语料的实际大小，即 `allDocs.length`）。
     // **内部输入**，由 `publicScanPayload()` 剥掉 —— HTTP 响应形状一个键都不加。
@@ -1874,6 +1891,59 @@ export async function scan(root, limit, options = {}) {
       semantic,
     },
   }
+  // v0.25：记一份给独立接口复用（见 `corpusForChanges`）。**只写不读**，扫描语义不变。
+  scanMemoState = { root, at: Date.now(), payload: out }
+  return out
+}
+
+/**
+ * **最近一次扫描**的备忘（v0.25）。
+ *
+ * 存在的唯一理由是：Git 变更关联现在走**独立接口** `/knit/api/changes`，而它需要与
+ * `/api/recent` **同一份**工作区语料。如果它自己再 `scan()` 一次，一轮轮询就会
+ * **走两遍目录树**——那正是「不得因为两个请求重复扫描整个工作区」要禁掉的事。
+ *
+ * ⚠️ 这份备忘**只被独立接口读**，`scan()` 自己从不读它 ⇒ 扫描的语义一个字节没变
+ * （同一进程里连续两次 `scan()` 依旧各自真扫，增量索引那套测试的前提因此不被动摇）。
+ * TTL 与 `git.js` 的 `GIT_CACHE_TTL_MS`（8 s）**同窗**：一个快照窗口 = 一次扫描 + 一次 git。
+ */
+const SCAN_MEMO_TTL_MS = 8000
+let scanMemoState = null
+
+/** 仅供测试：读当前备忘（`null` = 没有可复用的扫描）。 */
+export function scanMemo() {
+  if (!scanMemoState) return null
+  if (Date.now() - scanMemoState.at > SCAN_MEMO_TTL_MS) return null
+  return { root: scanMemoState.root, at: scanMemoState.at }
+}
+
+/** 仅供测试：清掉备忘，好把「复用」与「真扫」两条路分开断言。 */
+export function resetScanMemo() {
+  scanMemoState = null
+}
+
+/**
+ * 仅供测试：清掉 **git 状态缓存**。
+ *
+ * 与 `resetScanMemo()` 配对使用：只证明「缓存热的时候看不见变化」是不够的 ——
+ * 还要证明「缓存冷了变化就出现」。两条合起来才说明那个「看不见」是缓存造成的，
+ * 而不是接口本来就对文件增删无感。
+ */
+export function resetGitReaderCache() {
+  gitReader.reset()
+}
+
+/**
+ * 独立接口要的那份语料：**优先复用最近一次扫描**，没有（或过期）才真扫一遍。
+ *
+ * @param {string} root - 工作区根
+ * @param {object} fallback - 真扫时用的参数（与 `/api/recent` 同一组：同参数才能命中同一份语料）
+ * @returns {Promise<object>} `scan()` 的完整载荷
+ */
+export async function corpusForChanges(root, fallback) {
+  const memo = scanMemoState
+  if (memo && memo.root === root && Date.now() - memo.at <= SCAN_MEMO_TTL_MS) return memo.payload
+  return scan(root, fallback.limit, fallback.options)
 }
 
 /**
@@ -1889,10 +1959,11 @@ export async function scan(root, limit, options = {}) {
  */
 export function publicScanPayload(payload) {
   if (!payload || typeof payload !== 'object') return payload
-  const { ranked, task, allDocs, stats, ...rest } = payload
+  const { ranked, task, allDocs, contextCorpus, stats, ...rest } = payload
   void ranked
   void task
   void allDocs
+  void contextCorpus
   void stats
   return rest
 }
@@ -1986,7 +2057,122 @@ export async function buildContextFor(root, options = {}) {
   // 「固定上下文」区（`pack.pinned`，来源 `manual`）—— 三层的连续编号规则因此一个字不动。
   // 条目只从这一包现成的行里取，零新 I/O；固定了一篇但这一批里没有它，**不硬凑**。
   // 显式传入的 `control` 优先（测试用），否则问进程内的控制状态 —— 与 `scan()` 同一条口径。
-  return applyPinOverride(pack, options.control || controlRegistry.controlOf(root))
+  const withPin = applyPinOverride(pack, options.control || controlRegistry.controlOf(root))
+  // ⚠️ v0.25（第二轮修订）：**变更关联不在这里**。它不再往 Context Pack 里挂任何东西 ——
+  // 「三层 + 固定区」就是这个函数的全部产出，与 v0.24 逐字相同（有测试守着）。
+  // 变更关联走**独立的 `/knit/api/changes` 接口**（`changesPayload()`），
+  // 因为它是「另一个问题的答案」，不是这一份包的第四条目录。
+  return withPin
+}
+
+/**
+ * v0.25 · **Git 变更关联**：独立接口 `/knit/api/changes` 的载荷构造函数。
+ *
+ * 它**不碰** Context Pack：不改三层、不改固定区、不改编号、不改排序 —— 那份包由
+ * `buildContextFor()` 原样产出，两条路径唯一的交汇点是「同一个工作区扫描结果」与
+ * 「同一张关系事实表」。
+ *
+ * **数据结构是专用的**（不是 Context Pack 条目，也不复用 `provenance` / `reason` 那套词汇）：
+ *
+ * ```
+ * { ok, root, hostRoot, mode: 'changes',
+ *   git:   { available, reason, filesTotal, truncated, files: [{rel, kinds[], origRel?}] },
+ *   links: [ { target,            // 关联目标（工作区相对路径）
+ *              kind, source,       // 目标自身的分类（宿主给，客户端不看扩展名）
+ *              title, summary, mtimeMs,
+ *              evidence: [ { origin,   // **变更起点**：牵出这条关联的那个被改过的文件
+ *                            type,     // 关系类型：references | imports | tests | documents
+ *                            dir,      // 方向（见下）：相对**目标**而言
+ *                            line } ], // **真实存在时**才给行号；`tests` 是文件名约定 ⇒ null
+ *              evidenceTotal, types } ],
+ *   linksTotal, unresolved: [rel], outOfScope: [rel] }
+ * ```
+ *
+ * ⚠️ `dir` 是必需的第五个字段，不是冗余：没有它，「`src/foo.ts` 与 `docs/guide.md` 之间的
+ * `documents` 边」读起来会分不清**谁提到谁**（`dir='in'` = 起点指向目标；`dir='out'` = 目标
+ * 指向起点）。它与 v0.21 行级证据里的 `dir` 逐字同源，所以客户端**不需要第二条渲染路径**。
+ *
+ * @param {string} root - 工作区根
+ * @param {{corpus: Array<object>, changeSet?: object, gitReader?: object}} input
+ *   `corpus` = `scan()` 给的**不分档**候选集（文档 + 代码）；`changeSet` 只在测试里注入
+ * @returns {Promise<object>} 这个接口的完整载荷（**任何情况下都不抛**）
+ */
+export async function changesPayload(root, input = {}) {
+  const corpus = Array.isArray(input.corpus) ? input.corpus : []
+  const reader = input.gitReader && typeof input.gitReader.read === 'function' ? input.gitReader : gitReader
+  const changeSet = input.changeSet && typeof input.changeSet === 'object'
+    ? input.changeSet
+    : await reader.read(root)
+  const git = {
+    available: changeSet.available === true,
+    reason: changeSet.reason || null,
+    // 面板要说的第一句话是「你改了几个文件」。给出的是**解析后**的条数（截断时另标 truncated）。
+    filesTotal: Number(changeSet.filesTotal) || 0,
+    truncated: changeSet.truncated === true,
+    files: (Array.isArray(changeSet.files) ? changeSet.files : []).slice(0, MAX_REPORTED_FILES)
+      .map((f) => ({ rel: f.rel, kinds: Array.isArray(f.kinds) ? f.kinds : [], ...(f.origRel ? { origRel: f.origRel } : {}) })),
+  }
+  // ⚠️ 载荷里**不带 `root` / `hostRoot`**：它们是绝对文件系统路径，而客户端只用工作区相对
+  // 路径就能定位每一篇（`target` / `origin` 都是 rel）。面板要从别处拿根路径就去问
+  // `/api/recent`（它本来就有）—— 关联接口不重复暴露一遍绝对路径。
+  const shell = { ok: true, mode: 'changes', git, links: [], linksTotal: 0, unresolved: [], outOfScope: [] }
+  if (!git.available) return shell
+
+  const corpusRels = new Set(corpus.map((d) => String(d.rel)))
+  const docOf = new Map(corpus.map((d) => [String(d.rel), d]))
+  const { seeds, gone, outside, seedRels } = splitSeeds(changeSet, corpusRels)
+  // ⚠️ 种子要**带上 `gone`**：删掉的测试文件照样牵着它的被测文件（那正是要答的问题），
+  // 只是它自己不能当结果（`corpusRels` 里没有它）。
+  if (seedRels.length === 0) return { ...shell, outOfScope: outside }
+
+  // 变更文件**自己不当结果**（这一区回答的是「还该看什么」）。
+  // ⚠️ 与上一版的差别：这里**不再**排除「已经在三层里的条目」—— 那需要先有一份包才知道，
+  // 而独立接口不该为了一个减法去装配一份三层。两边都出现不是重复：一个是「这一轮该先看什么」，
+  // 一个是「我改的东西牵着谁」。客户端按 rel 去重（它手上两份都有）。
+  const exclude = new Set(seeds)
+
+  // 已删除 / 重命名前的路径当种子时要有「空壳」候选，否则别人指向它的边解析不出来。
+  // ⚠️ 没有 gone 时**不拼**这个数组 —— 那样候选集与装配层那一份逐字相同，
+  // `relations.js` 的缓存（按候选集签名）能直接命中，省掉一次 10 ms 级的重算。
+  const candidates = gone.length > 0 ? [...corpus, ...ghostCandidates(gone)] : corpus
+  const facts = buildRelationFacts(candidates, { root })
+  const projected = projectChangeRelated({
+    seeds: seedRels, incident: facts.incident, itemRels: corpusRels, exclude, limit: MAX_CHANGE_RELATED,
+  })
+  const links = projected.related.map((row) => {
+    const doc = docOf.get(row.rel)
+    if (!doc) return null
+    // 每条证据一行：起点 / 类型 / 方向 / 行号（`line` 没有就是 `null`，不省略 —— 专用结构里
+    // 「这里没有行号」本身是信息，而 `tests` 那一类就是没有）。
+    const evidence = row.evidence.map((e) => ({
+      origin: e.other,
+      type: e.type,
+      dir: e.dir,
+      line: Number.isInteger(e.line) ? e.line : null,
+    }))
+    return {
+      target: row.rel,
+      kind: doc.kind || KIND_DOCUMENT,
+      source: sourceTypeOf(row.rel),
+      title: doc.title || row.rel,
+      summary: doc.summary == null ? '' : String(doc.summary),
+      mtimeMs: Number.isFinite(doc.mtimeMs) ? doc.mtimeMs : 0,
+      evidence,
+      evidenceTotal: row.evidenceTotal,
+      types: row.types,
+    }
+  }).filter(Boolean)
+  return {
+    ...shell,
+    links,
+    linksTotal: projected.relatedTotal,
+    // ⚠️ 两个计数**不许重复算同一篇**（写完当场被测试抓到过一次）：
+    // · `unresolved` 只说「在语料里、但一条证据都没有」的那些（= 查过了，没有）；
+    // · 语料之外的（删除的、重命名前的、这一档不认的后缀）只进 `outOfScope`（= 根本没得查）。
+    //   它们仍然**当种子**用（`seedRels` 带着它们），只是不该被说成「查了没查到」。
+    unresolved: projected.unresolved.filter((rel) => corpusRels.has(rel)),
+    outOfScope: outside,
+  }
 }
 
 /**
@@ -2816,6 +3002,9 @@ export function apply(ctx) {
           const body = publicScanPayload(payload)
           // v0.14：相关模式下顺带给出任务上下文分层。
           // ⚠️ 带上 `context` 是**可选**的（老客户端忽略它），而 `docs` 一字未动。
+          // ⚠️ v0.25（第二轮修订）：**这里不再有任何 Git 变更关联**。`/api/recent` 的响应
+          // 与 v0.24 逐字相同（`changes` 那个键根本不存在）—— 变更关联走独立的
+          // `/knit/api/changes`。这条纪律有测试守着：常规检索请求里不许出现变更字段。
           body.context = await contextPayload(root, payload, sort, kind)
           // v0.21：面板要显示「固定了什么 / 排除了什么」（含恢复按钮），而这两份
           // 是**用户动作的原始记录**，不是 Context Pack 的投影 —— 固定项本身在
@@ -2869,6 +3058,40 @@ export function apply(ctx) {
             if (body.context) auditBridge.note(sessionId, body.context)
           }
           sendJson(res, 200, body)
+          return
+        }
+
+        if (url.pathname === `${ROUTE_PREFIX}/api/changes`) {
+          /* v0.25 · **Git 变更关联**：独立接口。
+             ⚠️ 与 `/api/recent` 分开不是洁癖，是契约纪律：
+               · `/api/recent` 的响应形状**一个键都不加**（与 v0.24 逐字相同）——
+                 它同时喂着「只要列表」的调用方，不该因为少数人打开的功能变重；
+               · 这个接口有**自己的数据结构**（起点 / 目标 / 类型 / 行号），不借 Context Pack
+                 条目的词汇（`provenance` / `reason` / `relations`）—— 那套词汇属于三层，
+                 硬套过来就得扩工具 schema 的枚举，而工具契约不动。
+             成本：**一次 git + 一次扫描**，而且两者都与 `/api/recent` **共用**——
+             `corpusForChanges()` 复用最近一次扫描（8 s 同窗），`gitReader` 自己缓存 + 并发去重。
+             关掉时客户端根本不请求这条路由 ⇒ 一个 git 进程都不 spawn。 */
+          const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 40, 1), 100)
+          const sort = url.searchParams.get('sort') === 'time' ? 'time' : 'relevance'
+          // ⚠️ **没有 `kind` 参数**（v0.25 收尾时删掉）。理由是可核验的：变更关联固定用
+          // 「文档 + 代码」那一份**不分档**语料（`collectDocs()` 的结果与档位无关，
+          // 档位只影响 `docs` 那一栏的输出），所以 `kind` 在这里**没有任何语义** ——
+          // 留一个「看着像能过滤、实际什么都不做」的参数比没有它更糟。
+          if (sort !== 'relevance') {
+            // 时间序没有 Context Pack，也就没有「该一起看什么」这回事。如实说，不给空壳。
+            sendJson(res, 200, {
+              ok: true, mode: 'changes', sort,
+              git: { available: false, reason: 'not-relevance-order', filesTotal: 0, truncated: false, files: [] },
+              links: [], linksTotal: 0, unresolved: [], outOfScope: [],
+            })
+            return
+          }
+          const payload = await corpusForChanges(root, {
+            limit,
+            options: { session: sessionOf(webCtx, sessionId), sessionId, sort, kind: 'context' },
+          })
+          sendJson(res, 200, await changesPayload(root, { corpus: payload.contextCorpus }))
           return
         }
 
@@ -2954,7 +3177,7 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/control (POST)`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/changes, ${ROUTE_PREFIX}/api/control (POST)`)
       return () => unregister()
     }, 'dsh-knit: host route')
   })

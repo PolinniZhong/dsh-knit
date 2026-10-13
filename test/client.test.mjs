@@ -4692,9 +4692,11 @@ test('v0.21.x 检索状态摘要：单行三组、竖线分隔、组内中点，
   // ① 逐个格子的**原文**，以及分隔符的种类与位置 —— 顺序就是这条设计要传达的信息
   // 用**直接子节点**（flattenUnder 会把状态格内部的按钮/箭头也压平 ⇒ 同一格数三次）
   const seq = (pipe[0].children || []).map(textOf)
+  // v0.25：第二组末尾多了一格「变更」（Git 变更关联的开关，**默认关**）。
+  // 它不是新分组 —— 与「关系 / 固定」同属「这一份包里还装了什么」那一组。
   assert.deepEqual(seq, [
     '收集 4', '·', '排除 1', '·', '候选 3', '|',
-    'BM25 检索›', '·', '关系 1 条', '·', '固定 1', '|',
+    'BM25 检索›', '·', '关系 1 条', '·', '固定 1', '·', '变更', '|',
     '入包 1',
   ], `三组 = 工作区候选 ｜ 检索与调整 ｜ 最终结果：${textOf(pipe[0])}`)
 
@@ -4705,10 +4707,11 @@ test('v0.21.x 检索状态摘要：单行三组、竖线分隔、组内中点，
   assert.match(seq[6], /BM25 检索/, '零模型这条路要说出来')
   assert.match(seq[8], /关系 1 条/, '关系 = 这一份包里带了几条关系证据')
   assert.match(seq[10], /固定 1/, '固定 = 被固定、从三层移出进了固定区的篇数')
-  assert.match(seq[12], /入包 1/, '入包 = 三层条目数（固定区不算）')
+  assert.match(seq[12], /^变更$/, '变更 = Git 变更关联的开关（默认关：只写「变更」，不带数字）')
+  assert.match(seq[14], /入包 1/, '入包 = 三层条目数（固定区不算）')
 
   // ③ 分隔符恰好是 4 个中点 + 2 根竖线；箭头与「管道」时代的类名一个都不留
-  assert.equal(seq.filter((s) => s === '·').length, 4, '组内中点：每组 n 格配 n-1 个')
+  assert.equal(seq.filter((s) => s === '·').length, 5, '组内中点：每组 n 格配 n-1 个')
   assert.equal(seq.filter((s) => s === '|').length, 2, '组间竖线：三组两根')
   assert.equal(byClass(nodes, 'knit-pipearrow').length, 0, '流程箭头已整体删除')
   assert.ok(!/[↓→←↑]/.test(textOf(pipe[0])), `状态摘要里不许再出现箭头：${textOf(pipe[0])}`)
@@ -5348,7 +5351,8 @@ test('v0.23 Phase A：混合真的在跑时 —— 摘要那一格改口径并�
   assert.ok(seq.includes('BM25 + 语义补充›'), `实际生效的是混合，摘要就必须这么说：${seq.join(' / ')}`)
   assert.ok(!seq.includes('BM25 检索›'), '不许在混合真的在跑时还写「词法检索」')
   assert.ok(seq.includes('语义候选 3 条'), `可用时要如实给候选数：${seq.join(' / ')}`)
-  assert.equal(seq.filter((t) => t === '·').length, 5, '语义那一格进第二组 ⇒ 组内中点从 4 变 5')
+  // v0.25：第二组末尾又多了一格「变更」⇒ 组内中点再 +1（4 → 5 → 6）
+  assert.equal(seq.filter((t) => t === '·').length, 6, '语义那一格进第二组、再算上「变更」那一格 ⇒ 组内中点 6')
   assert.equal(byExactClass(nodes, 'knit-retnote').length, 0, '混合在跑：没有「不可用」说明')
   assert.equal(byExactClass(nodes, 'knit-semcfg').length, 0, '混合在跑：不展开配置区')
 })
@@ -5531,4 +5535,266 @@ test('v0.23（2026-10-11）：菜单的键盘关闭 —— Esc 收起菜单、�
   assert.equal(btn().props['aria-expanded'], false, 'aria-expanded 跟着回到 false')
   assert.equal(globalThis.window.localStorage.getItem('dsh-knit:retrieval') || 'lexical', 'lexical',
     'Esc 只关菜单，不改检索模式')
+})
+
+/* ── v0.25：Git 变更关联（开关 + **独立接口**）────────────────────────
+   ⚠️ 第二轮修订：变更关联不再挂在 `/api/recent` 的 `context` 上，而是**独立接口**
+   `/knit/api/changes`。所以这组用例要同时盯两件事：
+     ① 列表那条请求里**没有任何变更参数**（`changes=1` 不许再出现）；
+     ② 开关打开后才发第二条请求，且它回的是**专用结构**（links/evidence），
+        客户端要把它映射成可渲染的行。 */
+
+/** `/knit/api/changes` 的**专用结构**载荷（宿主那一侧的真实形状）。 */
+function changesPayloadFixture(options = {}) {
+  const {
+    available = true, reason = null, filesTotal = 3, linksTotal = 1,
+    links = [{
+      target: 'test/semantic.test.mjs', kind: 'code', source: 'test',
+      title: 'semantic.test.mjs', summary: '摘要 semantic.test.mjs', mtimeMs: Date.now(),
+      evidence: [
+        { origin: 'src/host/semantic.js', type: 'tests', dir: 'out', line: null },
+        { origin: 'src/host/semantic.js', type: 'imports', dir: 'in', line: 30 },
+      ],
+      evidenceTotal: 2, types: ['imports', 'tests'],
+    }],
+    unresolved = [], outOfScope = [],
+  } = options
+  return {
+    ok: true, mode: 'changes',
+    git: { available, reason, filesTotal, truncated: false, files: [{ rel: 'src/host/semantic.js', kinds: ['unstaged'] }] },
+    links, linksTotal, unresolved, outOfScope,
+  }
+}
+
+/** 列表载荷 + 独立接口载荷：按 URL 分派（`/api/changes` 走第二条）。 */
+function installBoth(payload, changes) {
+  return installFetch((url) => (url.includes('/api/links')
+    ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
+    : (url.includes('/api/changes') ? changes : payload)))
+}
+
+test('v0.25：列表请求**一个变更参数都不带** —— 独立接口之前，recent 上不该有它的痕迹', async () => {
+  const { calls } = installBoth(v021Payload(), changesPayloadFixture())
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance', 'doc'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.ok(calls.every((u) => !u.includes('changes=1')), `recent 上不许再带这个参数：${calls.join(' ')}`)
+  assert.ok(!calls.some((u) => u.includes('/api/changes')), `默认关：连这条请求都不发：${calls.join(' ')}`)
+  const chip = byExactClass(nodes, 'knit-pipe-changes')
+  assert.equal(chip.length, 1, '开关那一格**关着也出现**（藏起来用户就永远打不开这个功能）')
+  assert.equal(chip[0].props['aria-pressed'], 'false')
+  assert.equal(textOf(chip[0]), '变更')
+  assert.ok(!byExactClass(nodes, 'knit-tiername').map(textOf).includes('变更关联'), '关着时不许出现这一区')
+})
+
+test('v0.25：打开开关 ⇒ 发**独立接口**请求、偏好落盘、专用结构渲染成一区', async () => {
+  let payload = v021Payload()
+  let changes = changesPayloadFixture({ available: false, reason: 'not-a-repo', filesTotal: 0, links: [], linksTotal: 0 })
+  const { calls } = installBoth(payload, changes)
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance', 'doc'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  // 打开前宿主那条独立接口先回「读不到」—— 点开之后应当如实说原因，而不是假装有数字
+  byExactClass(nodes, 'knit-pipe-changes')[0].props.onClick({ stopPropagation() {} })
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  assert.ok(calls.some((u) => u.includes('/api/changes')), `打开后必须请求独立接口：${calls.join(' ')}`)
+  assert.ok(calls.filter((u) => u.includes('/api/changes')).every((u) => !u.includes('changes=1')), '独立接口自己不需要那个参数')
+  assert.equal(globalThis.window.localStorage.getItem('dsh-knit:changes'), '1', '偏好落盘')
+  const chipOff = byExactClass(nodes, 'knit-pipe-changes')
+  assert.equal(chipOff[0].props['aria-pressed'], 'true')
+  assert.equal(textOf(chipOff[0]), '变更 —', '读不到时如实写「—」')
+  assert.match(String(chipOff[0].props.title), /不是 Git 工作区/, '悬停要说清是哪一种失败')
+
+  // 再把独立接口切成「有货」—— 关联应当渲染成一区，且带证据。
+  // ⚠️ 必须**重新装一次** fetch：responder 捕获的是调用那一刻的值，光改 `let` 变量它看不见。
+  changes = changesPayloadFixture()
+  const nextPayload = v021Payload()
+  nextPayload.docs.push({
+    path: '/p/test/semantic.test.mjs', rel: 'test/semantic.test.mjs', name: 'semantic.test.mjs',
+    title: 'semantic.test.mjs', summary: '摘要 semantic.test.mjs', mtimeMs: Date.now(), score: 3,
+  })
+  installBoth(nextPayload, changes)
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  const titles = byExactClass(nodes, 'knit-tiername').map(textOf)
+  assert.ok(titles.includes('变更关联'), `这一区必须单独成区：${titles.join(' / ')}`)
+  assert.ok(titles.indexOf('变更关联') < titles.indexOf('主要上下文'), '变更关联区排在主要上下文之前')
+  const provs = byExactClass(nodes, 'knit-prov').map(textOf)
+  assert.ok(provs.includes('变更关联'), `来源词必须能区分出来：${provs.join(' / ')}`)
+  for (const text of provs) assert.ok(!/\d|%/.test(text), `来源词里不许出现数字或百分比：${text}`)
+  // 证据来自**专用结构**的 evidence（起点 / 类型 / 行号），映射回既有那套弹层
+  const numbered = byExactClass(nodes, 'knit-num').map(textOf)
+  assert.equal(numbered.length, new Set(numbered).size, '编号不许重复')
+  assert.ok(numbered.every((n) => /^0[1-9]$/.test(n)), `编号只给三层：${numbered.join(',')}`)
+})
+
+test('v0.25 收尾：三种状态**互相可辨** —— 没变更 / 有变更但零关联 / 读不到', async () => {
+  /* 这是收尾时补的那条纪律：`null` 只表示「功能没开」，**不许**用它表示失败 ——
+     否则「读不到 git」和「没有变更」在界面上一模一样。三种状态各自的可见信号：
+       · 没有变更        → 那一格写 `变更 0`，列表里**不出**这一区（干净树的绝大多数时候不该有噪音）
+       · 有变更、零关联   → 那一格写 `变更 3`，列表里出**区头 + 提示句**（「3 个变更文件，没有找到关联证据」）
+       · 读不到          → 那一格写 `变更 —`，悬停写明原因（git 原因 或 接口请求失败）
+     三次各自独立挂载，免得状态互相污染。 */
+  const { KnitBody } = loadClientModule().exports.__test
+  const mount = async (changes) => {
+    // 每次重新装 fetch：responder 捕获的是装那一刻的值
+    installFetch((url) => (url.includes('/api/links')
+      ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
+      : (url.includes('/api/changes') ? (() => { if (changes instanceof Error) throw changes; return changes })() : v021Payload())))
+    // ⚠️ 偏好是**跨用例留存**的：上一个用例点过开关就会写 `'1'`。这里必须先明确置为关，
+    // 否则下面那次「点一下」是把它关掉（第一版就这么错了，界面显示成「变更」）。
+    globalThis.window.localStorage.setItem('dsh-knit:changes', '0')
+    harness.reset()
+    harness.seed(['', 'relevance', 'doc'])
+    const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+    let nodes = render()
+    await harness.flush()
+    nodes = render()
+    await harness.flush()
+    nodes = render()
+    byExactClass(nodes, 'knit-pipe-changes')[0].props.onClick({ stopPropagation() {} })
+    await harness.flush()
+    nodes = render()
+    await harness.flush()
+    return render()
+  }
+
+  // ① 没有未提交的变更
+  const clean = await mount(changesPayloadFixture({ filesTotal: 0, linksTotal: 0, links: [] }))
+  let chip = byExactClass(clean, 'knit-pipe-changes')[0]
+  assert.equal(textOf(chip), '变更 0', '没有变更要如实写 0（与「读不到」的「—」不同）')
+  assert.match(String(chip.props.title), /0 个变更文件/, `悬停也要说清：${chip.props.title}`)
+  assert.ok(!byExactClass(clean, 'knit-tiername').map(textOf).includes('变更关联'), '干净树里不出这一区（不要噪音）')
+
+  // ② 有变更，但一条关联证据都没有
+  const none = await mount(changesPayloadFixture({ filesTotal: 3, linksTotal: 0, links: [] }))
+  chip = byExactClass(none, 'knit-pipe-changes')[0]
+  assert.equal(textOf(chip), '变更 3')
+  const titles = byExactClass(none, 'knit-tiername').map(textOf)
+  assert.ok(titles.includes('变更关联'), `有变更、没关联时也要出区头：${titles.join(' / ')}`)
+  const hints = byExactClass(none, 'knit-tierhint').map(textOf)
+  assert.ok(hints.some((h) => /3 个变更文件/.test(h) && /没有找到关联证据/.test(h)),
+    `提示句要说明「有变更但没找到」：${hints.join(' / ')}`)
+  assert.equal(byClass(none, 'knit-doc').length, byClass(clean, 'knit-doc').length,
+    '这一区不带行 ⇒ 列表里的行数不变')
+
+  // ③ 读不到：宿主说得出的原因 —— **而且要在列表里直接看得见**（不只悬停）
+  //    这条是真人反馈加上来的（2026-10-13）：用户看到那一格写「变更 —」，
+  //    读成了「这个数据没记录到」—— 原因只藏在 `title` 里，不悬停就看不见。
+  const noRepo = await mount(changesPayloadFixture({ available: false, reason: 'not-a-repo', filesTotal: 0, links: [], linksTotal: 0 }))
+  chip = byExactClass(noRepo, 'knit-pipe-changes')[0]
+  assert.equal(textOf(chip), '变更 —', '读不到必须与「0 个变更」长得不一样')
+  assert.match(String(chip.props.title), /不是 Git 工作区/, `悬停要写明宿主给的原因：${chip.props.title}`)
+  const noRepoTitles = byExactClass(noRepo, 'knit-tiername').map(textOf)
+  assert.ok(noRepoTitles.includes('变更关联'), `读不到时也要出区头（否则用户只看到一个「—」）：${noRepoTitles.join(' / ')}`)
+  const noRepoHints = byExactClass(noRepo, 'knit-tierhint').map(textOf)
+  assert.ok(noRepoHints.some((h) => /读不到 Git 变更状态/.test(h) && /不是 Git 工作区/.test(h)),
+    `原因要**直接写在列表里**，不能只靠悬停：${noRepoHints.join(' / ')}`)
+  assert.equal(byClass(noRepo, 'knit-doc').length, byClass(clean, 'knit-doc').length, '这一区不带行')
+
+  // ④ 读不到：接口本身失败（这一条是收尾的重点 —— 原来它整段消失）
+  const broke = await mount(new Error('boom'))
+  chip = byExactClass(broke, 'knit-pipe-changes')[0]
+  assert.equal(textOf(chip), '变更 —', '接口失败也要落在「—」上，不许静默')
+  assert.match(String(chip.props.title), /接口请求失败/, `悬停要说清是请求失败：${chip.props.title}`)
+  assert.ok(byExactClass(broke, 'knit-tierhint').map(textOf).some((h) => /接口请求失败/.test(h)),
+    '接口失败的原因同样要直接写在列表里')
+  // 无论哪三种，列表本身一个字节都不许坏
+  for (const nodes of [clean, none, noRepo, broke]) {
+    assert.ok(byClass(nodes, 'knit-doc').length > 0, '三个状态都不许带坏普通列表')
+    assert.ok(byExactClass(nodes, 'knit-tiername').map(textOf).some((t) => t === '主要上下文' || t === '其他相关文档'),
+      'Context Pack 照旧渲染')
+  }
+})
+
+test('v0.25 收尾：刚打开、第一次取数还没回来时 **不许**先写「原因未知」（那是假话）', async () => {
+  // 「还没读到」与「读不到」是两件事：前者不该出任何结论，后者要写原因。
+  // 这个区分靠 `changesData !== null` 把住 —— 去掉它，界面会在几十毫秒里先撒一句「原因未知」。
+  installFetch((url) => (url.includes('/api/links')
+    ? { ok: true, rel: 'x', incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 }
+    : (url.includes('/api/changes') ? changesPayloadFixture({ available: false, reason: 'not-a-repo', filesTotal: 0, links: [], linksTotal: 0 }) : v021Payload())))
+  const { KnitBody } = loadClientModule().exports.__test
+  globalThis.window.localStorage.setItem('dsh-knit:changes', '0')
+  harness.reset()
+  harness.seed(['', 'relevance', 'doc'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  byExactClass(nodes, 'knit-pipe-changes')[0].props.onClick({ stopPropagation() {} })
+  nodes = render()   // ⚠️ **不等 flush**：这就是「请求还在路上」的那一帧
+  const hints = byExactClass(nodes, 'knit-tierhint').map(textOf)
+  assert.ok(!hints.some((h) => /原因未知/.test(h)),
+    `那一帧不许给出任何原因（还没读到）：${hints.join(' / ')}`)
+})
+
+test('v0.25 收尾：变更行**不再贴理由码** —— 解释交给区标题 + 提示句 + 证据弹层', async () => {
+  installBoth(v021Payload(), changesPayloadFixture())
+  const { KnitBody } = loadClientModule().exports.__test
+  globalThis.window.localStorage.setItem('dsh-knit:changes', '0')
+  harness.reset()
+  harness.seed(['', 'relevance', 'doc'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+  byExactClass(nodes, 'knit-pipe-changes')[0].props.onClick({ stopPropagation() {} })
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  // 行右端的来源词还在（那是这一区的身份）
+  assert.ok(byExactClass(nodes, 'knit-prov').map(textOf).includes('变更关联'))
+  // 但每一行**不再**有「为什么在这里」那一行 —— 依据在弹层的证据行里（类型 + 起点 + 行号）
+  const whyLines = byExactClass(nodes, 'knit-why').map(textOf)
+  assert.ok(!whyLines.some((w) => /变更|改动/.test(w)), `变更行不该再贴理由码：${whyLines.join(' / ')}`)
+  // 区里仍然说清「凭什么在这里」
+  assert.ok(byExactClass(nodes, 'knit-tierhint').map(textOf).some((h) => /未提交的改动/.test(h)),
+    '区头的提示句承担「为什么」')
+})
+
+test('v0.25：开关那一格复用命中段那套视觉语言（源码级守卫）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+  assert.match(css, /\.knit-pipe-changes\{[^}]*background:var\(--knit-chip-bg/)
+  assert.match(css, /\.knit-pipe-changes\{[^}]*border-radius:6px/)
+  assert.match(css, /\.knit-pipe-changes\{[^}]*padding:1px 6px/)
+  assert.match(css, /\.knit-pipe-changes\{[^}]*font-size:11px/)
+  assert.match(css, /\.knit-pipe-changes\{[^}]*line-height:15px/)
+  assert.ok(!/\.knit-pipe-changes\{[^}]*border-bottom/.test(css), '描边一根都没有（命中段也是）')
+  assert.match(css, /\.knit-pipe-changes\[aria-pressed="true"\]\{color:var\(--dsw-alias-label-primary/)
+})
+
+test('v0.25：客户端源码里**不许**再把变更关联挂到列表接口上', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  assert.ok(source.includes("const CHANGES_API = '/knit/api/changes'"), '独立接口的地址要有一个真源')
+  assert.ok(!source.includes('&changes=1'), '列表请求上不许再拼这个参数（整体删除，不是注释掉）')
+  assert.ok(!source.includes('pack.changes'), '包上不再有这个字段（读它就是读了不存在的形状）')
 })

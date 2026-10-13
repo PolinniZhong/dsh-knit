@@ -140,12 +140,18 @@ window.__ModuleLoader__.load({
       //    所以它们一色到底（都是 caption 灰），靠**字**区分，不靠颜色。
       'context.pinned': '固定上下文',
       'context.pinnedHint': '你自己标记的',
+      // v0.25：Git 变更关联。**与三层平行的一区**，不参与 01…0N 的编号。
+      'context.changes': '变更关联',
+      'context.changesHint': '由未提交的改动牵出来的',
+      'context.changesEmpty': '{files} 个变更文件，没有找到关联证据',
+      'context.changesUnreadable': '读不到 Git 变更状态：{reason}',
       'prov.retrieval': '检索',
       'prov.relation': '关系',
       'prov.manual': '用户固定',
       // v0.23：第四档来源。它**只**由「标题 + 摘要」的向量与任务相似而来 ——
       // 不是关键词命中、也不是关系证据，而且只可能落在「相关」那一层。
       'prov.semantic': '语义相关',
+      'prov.change': '变更关联',
       'control.pin': '固定',
       'control.unpin': '取消固定',
       'control.exclude': '排除',
@@ -173,6 +179,20 @@ window.__ModuleLoader__.load({
       // ⚠️ 「关系 N 条」说的是**这一份包里带了几条关系证据**（三层各条 relations 之和），
       // 不是工作区里的关系总数、也不是候选数（那两类数字宿主另有字段，这里不展示）。
       'pipe.relations': '关系 {n} 条',
+      // v0.25：状态行里那一格（**默认关**）。关着也出现 —— 藏起来用户就永远打不开这个功能。
+      'pipe.changesOff': '变更',
+      'pipe.changesOn': '变更 {n}',
+      'pipe.changesUnavailable': '变更 —',
+      'changes.titleOff': '按 Git 变更查找需要一起检查的文件（只读：只跑一条 git status，不执行任何写操作）',
+      'changes.titleOn': '{files} 个变更文件 · {related} 条关联证据 · 点一下关闭',
+      'changes.titleUnavailable': '读不到 Git 变更状态：{reason}',
+      'changes.reason.notARepo': '不是 Git 工作区',
+      'changes.reason.gitMissing': '找不到 git 命令',
+      'changes.reason.timeout': 'git 读取超时',
+      'changes.reason.tooLarge': 'git 输出过大（已截断）',
+      'changes.reason.failed': 'git 读取失败',
+      'changes.reason.request': '变更关联接口请求失败',
+      'changes.reason.unknown': '原因未知',
       // ⚠️ 「固定 N」= 有几篇被你固定、因此**从三层移出**进了固定区（pack.pinned 的长度）。
       // 不写「固定覆盖」这种内部说法；也不带量词 —— 固定对象可能是文档、代码或媒体。
       'pipe.pin': '固定 {n}',
@@ -460,11 +480,16 @@ window.__ModuleLoader__.load({
       //    in, not how strong it is — so they share one colour and differ by word.
       'context.pinned': 'Pinned',
       'context.pinnedHint': 'you marked these',
+      'context.changes': 'Tied to changes',
+      'context.changesHint': 'pulled in by your uncommitted edits',
+      'context.changesEmpty': '{files} changed file(s), no related evidence found',
+      'context.changesUnreadable': 'Git change status unavailable: {reason}',
       'prov.retrieval': 'retrieved',
       'prov.relation': 'relation',
       'prov.manual': 'pinned',
       // v0.23: the fourth provenance (semantic) — same neutral, lowercase word group.
       'prov.semantic': 'semantic',
+      'prov.change': 'change',
       'control.pin': 'Pin',
       'control.unpin': 'Unpin',
       'control.exclude': 'Exclude',
@@ -484,6 +509,19 @@ window.__ModuleLoader__.load({
       'pipe.candidates': '{n} candidates',
       'pipe.rank': 'BM25 retrieval',
       'pipe.relations': '{n} relations',
+      'pipe.changesOff': 'Changes',
+      'pipe.changesOn': 'Changes {n}',
+      'pipe.changesUnavailable': 'Changes —',
+      'changes.titleOff': 'Find the files to check alongside your Git changes (read-only: one git status, no write commands)',
+      'changes.titleOn': '{files} changed file(s) · {related} related by evidence · click to turn off',
+      'changes.titleUnavailable': 'Git change status unavailable: {reason}',
+      'changes.reason.notARepo': 'not a Git working tree',
+      'changes.reason.gitMissing': 'git command not found',
+      'changes.reason.timeout': 'git timed out',
+      'changes.reason.tooLarge': 'git output too large (truncated)',
+      'changes.reason.failed': 'git read failed',
+      'changes.reason.request': 'the change-links request failed',
+      'changes.reason.unknown': 'unknown reason',
       'pipe.pin': '{n} pinned',
       'pipe.pack': '{n} in pack',
       // v0.23 (Phase A): hybrid retrieval. This cell states the mode **in effect**, not the click.
@@ -750,6 +788,9 @@ window.__ModuleLoader__.load({
     const BS_TAB_ID = 'knit:recent'
 
     const LIST_API = '/knit/api/recent'
+    /* v0.25：Git 变更关联的**独立接口**。它与列表接口分开，所以「列表的响应形状」
+       不会被这个功能碰到；关掉功能时客户端连这个请求都不发。 */
+    const CHANGES_API = '/knit/api/changes'
     const DOC_API = '/knit/api/doc'
     const RAW_API = '/knit/api/raw'
     // v0.12：某篇的「谁引用了它 / 它引用了谁」。与上面三条一样是**同源相对地址**，
@@ -790,6 +831,8 @@ window.__ModuleLoader__.load({
        它要用户显式选、并且配了 provider 才会真的跑 —— 「零模型调用 / 零网络出口」
        这条对外承诺只在默认模式成立（细则见 v0.23 方案 §2 的文案纪律）。 */
     const RETRIEVAL_KEY = 'dsh-knit:retrieval'
+    /** v0.25：Git 变更关联的开关。**默认关** —— 不写这一项就是关。 */
+    const CHANGES_KEY = 'dsh-knit:changes'
     /** 语义 provider 的**唯一写路由**；读走 `/api/recent` 的 `semantic.provider`。 */
     const SEMANTIC_API = '/knit/api/semantic'
 
@@ -1107,6 +1150,21 @@ body[data-ds-dark-theme] .knit-root{
 .knit-pipe-method:hover .knit-pipe-method-label,
 .knit-pipe-method:focus-visible .knit-pipe-method-label{text-decoration:underline}
 .knit-pipe-method[aria-expanded="true"]{color:var(--dsw-alias-label-primary,#e8eaed)}
+/* v0.25：Git 变更关联那一格。**与检索方式复用同一份视觉语言**（同 --knit-chip-bg、同圆角 6px、
+   同内边距 1px 6px、同字号 11px / 行高 15px），但它是个**二态开关**：没有菜单、没有箭头。
+   开态只把字色提到主文本色（属性选择器 aria-pressed=true）—— **不换底色、不用品牌色**，
+   与检索方式「展开态」那条规则同一个手法：同一行里同类物，靠字重/字色分层，不靠颜色。
+   ⚠️ 尾随的 › 在检索方式那边才画；这一格没有箭头，所以下划线直接给文字层即可。 */
+.knit-pipe-changes{display:inline-flex;align-items:center;flex:none;white-space:nowrap;cursor:pointer;
+  padding:1px 6px;border:0;outline:none;border-radius:6px;
+  background:var(--knit-chip-bg,rgba(255,255,255,.12));
+  font:inherit;font-size:11px;line-height:15px;
+  color:var(--dsw-alias-label-secondary,#61666b);transition:color .14s ease}
+.knit-pipe-changes:hover,.knit-pipe-changes:focus-visible{color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-pipe-changes:hover .knit-pipe-changes-label,
+.knit-pipe-changes:focus-visible .knit-pipe-changes-label{text-decoration:underline}
+.knit-pipe-changes[aria-pressed="true"]{color:var(--dsw-alias-label-primary,#e8eaed)}
+@media (prefers-reduced-motion:reduce){.knit-pipe-changes{transition:none}}
 /* 箭头：与「最近读取」行最右端那个 › 同一套视觉语言（同字形），基础态旋转 90° 变成「朝下」。
    ⚠️ 展开态用 **横向翻转 scaleX(-1)**，不是对调角度、也不是 scaleY(-1)（2026-10-13 用户裁决：
       「修改成横向翻转……默认箭头向下，交互展开箭头向上」）。
@@ -1932,6 +1990,28 @@ video.knit-preview-media{width:100%;background:#000}
     }
 
     /**
+     * 读「Git 变更关联」开关。**没写过、写坏了都是关** —— 默认值必须是「不动基础检索行为」那一个。
+     * @returns {boolean} 是否开启
+     */
+    function readChangesPref() {
+      return readPref(CHANGES_KEY) === '1'
+    }
+
+    /** 宿主给的 Git 原因码 → i18n 键（与 `semanticReasonKey` 同一条纪律：宿主只给码）。 */
+    function changeReasonKey(reason) {
+      if (reason === 'not-a-repo') return 'changes.reason.notARepo'
+      if (reason === 'git-missing') return 'changes.reason.gitMissing'
+      if (reason === 'timeout') return 'changes.reason.timeout'
+      if (reason === 'output-too-large') return 'changes.reason.tooLarge'
+      if (reason === 'failed-fatal') return 'changes.reason.failed'
+      // v0.25 收尾：这一条**不是**宿主的原因码，而是客户端自己的 —— 独立接口那次请求本身
+      // 失败（网络/解析异常、非 ok 响应）。「读不到 git」与「没问到」是两件事，不许都写成
+      // 「原因未知」，否则用户分不清该去检查仓库还是该重试。
+      if (reason === 'request') return 'changes.reason.request'
+      return 'changes.reason.unknown'
+    }
+
+    /**
      * provider 地址是不是**本机回环**。只有回环才敢说「内容不离开这台机器」；
      * 其它（含空地址）一律按「会发送到你配置的服务」披露 —— 宁可说得重一点。
      * @param {string} base - 服务地址
@@ -2164,6 +2244,81 @@ video.knit-preview-media{width:100%;background:#000}
     /** 条目是不是图片/视频。 */
     function isMedia(doc) {
       return !!doc && (doc.kind === 'image' || doc.kind === 'video')
+    }
+
+    /**
+     * v0.25 收尾：把独立接口那份载荷归成**三种状态之一**（状态行与列表提示共用同一个判断）。
+     *
+     * @param {object|null} data - `state.changes`
+     * @returns {{read: boolean, reason: string|null, filesTotal: number, hasRows: boolean}}
+     *   `read=false` ⇒ 读不到（接口失败或 git 读不到），`reason` 是给用户看的原因码；
+     *   `read=true`  ⇒ 拿到了 git 事实，`filesTotal` 是变更文件数。
+     */
+    function changeStatusOf(data) {
+      if (!data) return { read: false, reason: null, filesTotal: 0 }
+      if (data.failed === true) return { read: false, reason: data.reason || 'request', filesTotal: 0 }
+      const git = data.git || null
+      if (!git || git.available !== true) {
+        return { read: false, reason: (git && git.reason) || 'unknown', filesTotal: 0 }
+      }
+      return { read: true, reason: null, filesTotal: Number(git.filesTotal) || 0 }
+    }
+
+    /**
+     * v0.25：`/knit/api/changes` 的**专用结构** → 列表行（只做形状映射，不做判断）。
+     *
+     * 宿主给的是「变更起点 / 关联目标 / 关系类型 / 行号」这套事实；这里把它摊成与列表行
+     * 同形状的一层，好让**既有那套行渲染 + 证据弹层**直接用上（零第二条渲染路径）。
+     * 两个刻意的决定：
+     *   · `provenance: 'change'` 是**客户端自己**给这一区贴的来源词（宿主的结构里没有这个词），
+     *     只决定行右端那个「变更关联」；**不给 `reason`** —— 见下面那段说明；
+     *   · 证据行映射回 `{type, dir, other: 起点, line}`：`other` = 那个被改过的文件，
+     *     与 v0.21 的行级证据**逐字同源**，所以弹层里「谁 · 什么 · 第几行」照旧可读。
+     *
+     * @param {object|null} data - `/knit/api/changes` 的载荷
+     * @returns {Array<object>} 行（没有数据 ⇒ 空数组，调用方据此不渲染这一区）
+     */
+    function changeRowsOf(data) {
+      const links = (data && Array.isArray(data.links)) ? data.links : []
+      return links.map((link) => ({
+        rel: link.target,
+        title: link.title || link.target,
+        summary: link.summary || '',
+        mtimeMs: link.mtimeMs,
+        kind: link.kind,
+        source: link.source,
+        provenance: 'change',
+        // ⚠️ **刻意不给 `reason`**（v0.25 收尾）：`changeRelated` 那个理由码曾经让宿主
+        // 「声明了一个自己不再产出」的码。现在「为什么在这一区」由**区标题 + 提示句**回答
+        // （「变更关联 / 由未提交的改动牵出」），每一行的**具体依据**在证据弹层里
+        // （类型 + 起点 + 行号）—— 行级渲染本来就不给没有 reason 的条目出那一行。
+        relations: (Array.isArray(link.evidence) ? link.evidence : []).map((e) => ({
+          type: e.type,
+          dir: e.dir,
+          other: e.origin,
+          // `line` 是 `null` 时**不给这个键** —— 弹层据此说「文件名约定，没行号」
+          ...(Number.isInteger(e.line) ? { line: e.line } : {}),
+        })),
+        ...(Number.isInteger(link.evidenceTotal) && link.evidenceTotal > (Array.isArray(link.evidence) ? link.evidence.length : 0)
+          ? { relationsTotal: link.evidenceTotal } : {}),
+      }))
+    }
+
+    /**
+     * 一个条目符不符合过滤框里的那串字（标题 / 摘要 / 相对路径）。
+     *
+     * v0.25 抽出来的：`visibleDocs`（列表那一份）与「变更关联」区都要用同一条判据 ——
+     * 用户在搜索框里打了字，两处都该跟着收窄，而**两处都不许**各自写一份。
+     *
+     * @param {object} doc - 条目（面板条目或宿主给的记录）
+     * @param {string} q - 已经 trim + toLowerCase 过的查询串；空串表示不过滤
+     * @returns {boolean}
+     */
+    function docMatchesQuery(doc, q) {
+      if (!q) return true
+      return String(doc.title || '').toLowerCase().includes(q)
+        || String(doc.summary || '').toLowerCase().includes(q)
+        || String(doc.rel || '').toLowerCase().includes(q)
     }
 
     /**
@@ -3818,6 +3973,16 @@ video.knit-preview-media{width:100%;background:#000}
       // v0.15「使用情况」的开闸状态（默认关，见 `USAGE_KEY`）。放在最后 —— 前几个 hook
       // 的顺序被测试按位预置，别插队。
       const [usageOn, setUsageOn] = React.useState(readUsagePref)
+      /* v0.25：Git 变更关联开关。偏好记在 localStorage（与排序 / 类型 / 检索模式同一族），
+         **默认关**。关着时请求里不带 `changes=1` ⇒ 宿主一个 git 进程都不 spawn。
+         ⚠️ **刻意声明在 `usageOn` 之后**：`test/client.test.mjs` 用**指数 seed** 来打开
+            「使用情况」（hook 下标 15），插在它前面会把后面所有下标顶开一位。
+            新 hook 一律往**末尾**追加，别插队。 */
+      const [changesOn, setChangesOn] = React.useState(readChangesPref)
+      /* v0.25（第二轮修订）：变更关联来自**独立接口** `/knit/api/changes`，不再挂在
+         `/api/recent` 的 `context` 上 —— 所以它有自己的状态槽。**必须追加在末尾**：
+         前面的 hook 位置被 `test/client.test.mjs` 按位预置。 */
+      const [changesData, setChangesData] = React.useState(null)
 
       // v0.17：两个折叠块的开合状态（上下文外读取 / 最近一次变化）。
       // **纯瞬时 UI 状态** —— 不写 pref、不进 `dsh-knit:*` 存储，刷新即回默认（收起）。
@@ -3879,6 +4044,8 @@ video.knit-preview-media{width:100%;background:#000}
           // 没打开「使用情况」的会话，宿主侧一个事件都不读。
           // v0.23：`retrieval` 是**选填**参数 —— 老宿主忽略它（那就等于词法），
           // 而词法模式下宿主**一次 provider 调用都不会发**（方案 §9.2 判据 1）。
+          // ⚠️ v0.25（第二轮修订）：`/api/recent` 上**一个字节的变更关联都没有** ——
+          // 它的响应形状与 v0.24 逐字相同。变更关联走**独立接口**，见下面那次 fetch。
           const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}&retrieval=${sort === 'relevance' && retrieval === 'hybrid' ? 'hybrid' : 'lexical'}${usageOn ? '&usage=1' : ''}`
           const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
           const data = await res.json()
@@ -3914,11 +4081,41 @@ video.knit-preview-media{width:100%;background:#000}
           if (!live()) return
           setState({ status: 'error', docs: [], root: '', total: 0, error: String((error && error.message) || error), mode: 'time', context: null, usage: null })
         }
+        /* v0.25（第二轮修订）：**独立接口** `/knit/api/changes`。
+           · 关着时**一个请求都不发**（宿主因此一个 git 进程都不 spawn）——判据 5 的客户端那一半；
+           · 只在「相关」序要它（时间序没有 Context Pack，变更关联无处可落）；
+           · 复用宿主刚刚那次扫描（服务端 8 s 同窗）⇒ 两个请求 = 一次扫描 + 一次 git；
+           · 失败一律降级成 `null`（这一区消失），**绝不带坏列表** —— 列表已经落好了。 */
+        const wantChanges = sort === 'relevance' && changesOn
+        if (!wantChanges) {
+          setChangesData((prev) => (prev === null ? prev : null))
+          return
+        }
+        try {
+          // ⚠️ **没有 `kind` 参数**：这一路固定用「文档 + 代码」那一份不分档语料，
+          // 和面板当前在哪个档位无关（档位只切列表那一栏）。
+          const res = await fetch(`${CHANGES_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=relevance`, {
+            headers: { accept: 'application/json' }, cache: 'no-store',
+          })
+          const data = await res.json()
+          if (!live()) return
+          setChangesData((prev) => {
+            // ⚠️ 「请求失败」与「读不到 git」**不许**都变成 `null`：`null` 是「这个功能没开」，
+            // 用它表示失败会让用户以为「没有变更」。失败有自己的形状（见 `changeStatusOf`）。
+            if (!data || !data.ok) return { failed: true, reason: 'request' }
+            // 载荷一字未变就返回**同一个对象**，React 跳过这次更新（与列表同一套去重理由）
+            const sig = JSON.stringify(data)
+            return (prev && prev.sig === sig) ? prev : { ...data, sig }
+          })
+        } catch {
+          if (!live()) return
+          setChangesData({ failed: true, reason: 'request' })
+        }
         // 「读了多久」是按分钟变的相对时间：只有**分钟数**真的变了才落一次刷新信号（其余时候
         // 返回同一个值，React 直接跳过这次更新）。标签读的是渲染时刻的钟，不受这里影响。
         const now = Date.now()
         bumpTick((prev) => (Math.floor(now / 60000) === Math.floor(prev / 60000) ? prev : now))
-      }, [sessionId, sort, kind, usageOn, retrieval])
+      }, [sessionId, sort, kind, usageOn, retrieval, changesOn])
 
       React.useEffect(() => {
         // 看不见就一个定时器都不挂：`visible` 变回 true 时本 effect 重跑，立刻 load 一次。
@@ -3970,10 +4167,7 @@ video.knit-preview-media{width:100%;background:#000}
         const all = Array.isArray(state.docs) ? state.docs : []
         const q = query.trim().toLowerCase()
         if (!q) return all
-        return all.filter((doc) =>
-          String(doc.title || '').toLowerCase().includes(q)
-          || String(doc.summary || '').toLowerCase().includes(q)
-          || String(doc.rel || '').toLowerCase().includes(q))
+        return all.filter((doc) => docMatchesQuery(doc, q))
       }, [state.docs, query])
 
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
@@ -4043,7 +4237,9 @@ video.knit-preview-media{width:100%;background:#000}
       // （AGENTS.md §6.5 同一个坑踩过三次）。
       h('div', { className: 'knit-tierline', role: 'presentation' },
         h('span', { className: 'knit-tiername' }, t(section.titleKey)),
-        section.hintKey ? h('span', { className: 'knit-tierhint' }, t(section.hintKey)) : null),
+        section.hintKey
+          ? h('span', { className: 'knit-tierhint' }, t(section.hintKey, section.hintParams))
+          : null),
       // ⚠️ 幽灵行（正在离开的）也走 `docsGrid`，所以它照样是一个 `.knit-doc` ——
       // 会被 `byClass` 数到，但**不在** `navDocs` 里（键盘与 cursor 都到不了）。
       docsGrid(withGhosts(section.key, section.docs), view.numbers, section.key === 'primary', true)))
@@ -4112,6 +4308,45 @@ video.knit-preview-media{width:100%;background:#000}
         if (pinned.length > 0) {
           sections.push({ key: 'pinned', titleKey: 'context.pinned', hintKey: 'context.pinnedHint', docs: pinned })
         }
+        /* v0.25：**Git 变更关联**。它与固定区是同一类东西：一组有证据、但**不属于这一轮名次**的
+           条目，所以独立成一区、不编号（`numbers` 那边一并跳过它）。
+           ⚠️ 这里**不能**用 `visible`（它来自 `state.docs` 那 40 条的切片）—— 一条变更关联的
+              文件很可能排在 40 名之外，用 `visible` 过滤会让整区凭空空掉。它只受**过滤框**约束，
+              与用户在搜索框里打的字保持一致。 */
+        const changeRows = changeRowsOf(changesData)
+        // ⚠️ 这里**自己派生一次**，不复用状态行那份 `changeStatus`：那个常量声明在这个
+        // useMemo **之后**（靠近状态行的渲染），引它会 `Cannot access before initialization`
+        // —— 运行时直接白屏（写完当场被测试抓到）。同一个纯函数、同一个入参，不会分叉。
+        const changeState = changeStatusOf(changesData)
+        const q = query.trim().toLowerCase()
+        const changeDocs = changeRows.filter((item) => !isMedia(item) && docMatchesQuery(item, q)).map(withHits)
+        if (changeDocs.length > 0) {
+          sections.push({ key: 'changes', titleKey: 'context.changes', hintKey: 'context.changesHint', docs: changeDocs })
+        } else if (changesOn && changesData !== null && !changeState.read) {
+          /* v0.25 收尾：**读不到时把原因直接写出来**，不再只放在悬停里。
+             为什么加这一条：真人反馈（2026-10-13）—— 用户看到那一格写「变更 —」，
+             读成了「这个数据没记录到」，而真正的原因是「这个工作区不是 Git 仓库」，
+             它只藏在 `title` 里，不悬停就看不见。
+             ⚠️ 条件里的 `changesData !== null` 是必须的：功能刚打开、第一次取数还没回来时
+             `read` 也是 false，那时写「原因未知」是**假话**（不是读不到，是还没读到）。
+             那一瞬间不出这一区，等下一条轮询落地。 */
+          sections.push({
+            key: 'changes', titleKey: 'context.changes', hintKey: 'context.changesUnreadable',
+            hintParams: { reason: t(changeReasonKey(changeState.reason)) },
+            docs: [],
+          })
+        } else if (changesOn && changeState.read && changeState.filesTotal > 0) {
+          /* v0.25 收尾：**有变更、但一条关联证据都没有**时要说得出来。
+             这一区是**只带提示句、不带行**的（区头照常出现）—— 用户因此能区分
+             「没有变更」（那一格写 0，这里什么都不出）与「有变更但没找到该一起看的」。
+             读不到 git 的那种情况**不在这里**：它的提示在状态行那一格（「变更 —」 + 悬停原因），
+             因为「读不到」不是一条列表内容。 */
+          sections.push({
+            key: 'changes', titleKey: 'context.changes',
+            hintKey: 'context.changesEmpty', hintParams: { files: changeState.filesTotal },
+            docs: [],
+          })
+        }
         for (const [tierKey, titleKey, hintKey] of tiers) {
           const items = Array.isArray(pack[tierKey]) ? pack[tierKey] : []
           const docs = items.filter((item) => visible.has(item.rel)).map(withHits)
@@ -4125,6 +4360,8 @@ video.knit-preview-media{width:100%;background:#000}
         }
         // 固定区里的也在包里 —— 它们同样不该出现在「其他相关文档」。
         for (const item of (Array.isArray(pack.pinned) ? pack.pinned : [])) placed.add(item.rel)
+        // 变更关联区里的也不再出现在「其他相关文档」（同一篇不该在两处出现）
+        for (const item of changeRows) placed.add(item.rel)
         const rest = visibleDocs.filter((doc) => !isMedia(doc) && !placed.has(doc.rel))
         if (rest.length > 0) {
           sections.push({ key: 'other', titleKey: 'context.other', hintKey: '', docs: rest })
@@ -4136,14 +4373,14 @@ video.knit-preview-media{width:100%;background:#000}
         // v0.21：**固定区也不编号** —— 它的位置由用户决定，不由阅读顺序决定。
         const numbers = new Map()
         for (const section of sections) {
-          if (section.key === 'other' || section.key === 'pinned') continue
+          if (section.key === 'other' || section.key === 'pinned' || section.key === 'changes') continue
           for (const doc of section.docs) numbers.set(doc.rel, numbers.size + 1)
         }
         // 键盘到达顺序 = 屏幕上从上到下的顺序（分组顺序 + 组内顺序）
         const flat = []
         for (const section of sections) for (const doc of section.docs) flat.push(doc)
         return { sections, flat, numbers }
-      }, [relevance, kind, state.context, visibleDocs])
+      }, [relevance, kind, state.context, changesData, visibleDocs, query])
 
       /**
        * 键盘与 cursor 真正能到达的条目。
@@ -4518,6 +4755,16 @@ video.knit-preview-media{width:100%;background:#000}
         writePref(RETRIEVAL_KEY, value)
         setRetrieval(value)
         setSemNotice('')
+      }, [])
+
+      /**
+       * v0.25：切换「Git 变更关联」并记住偏好。**只切偏好** —— 真正跑 git 的是宿主，
+       * 下一次 `load()` 会带上 `changes=1`。关掉时请求里就不带了（宿主零开销）。
+       * @param {boolean} value - 是否开启
+       */
+      const pickChanges = React.useCallback((value) => {
+        writePref(CHANGES_KEY, value ? '1' : '0')
+        setChangesOn(value)
       }, [])
 
       /** 切换列表类型并记住偏好；同时收起上一类型的预览。 */
@@ -5329,6 +5576,42 @@ video.knit-preview-media{width:100%;background:#000}
           className: 'knit-retmenu-cfg',
           onClick: () => { setRetMenuOpen(false); setSemCfgOpen((value) => !value) },
         }, t(semCfgOpen ? 'sem.cfg.hide' : 'sem.cfg.show')) : null) : null)
+      /* v0.25：Git 变更关联那一格（见上面 CSS 的说明）。三种话术，都由**宿主的事实**决定：
+         关着 / 开着且有数 / 开着但读不到（写原因）。读完就关也不会留下悬念。 */
+      /* v0.25（第二轮修订）：这一格的数字来自**独立接口**的那份载荷，不再来自 Context Pack。
+         v0.25 收尾：**三种状态必须互相可辨**（这是原来那版最实的一个缺口 ——
+         请求失败时那一格显示成「关着」的样子，用户会把「读不到」读成「没有变更」）：
+           · 关着            → 归一成 `null`  → 「变更」
+           · 开着但读不到     → `failed` / `git.available === false` → 「变更 —」+ 悬停写原因
+           · 开着且读到了     → `git.available === true` → 「变更 N」（N = 变更文件数）
+         ⚠️ 「有变更但没有关联」与「有变更且有关联」在状态行上是同一个 `变更 N` ——
+         它们的区别在**列表里那一区的提示句**（见 `contextView`），不在这一格。 */
+      const changeStatus = changeStatusOf(changesData)
+      const changeInfo = changeStatus.read ? { ...changeStatus, relatedTotal: Number(changesData.linksTotal) || 0 } : null
+      const changeFiles = changeInfo && Number.isFinite(changeInfo.filesTotal) ? changeInfo.filesTotal : 0
+      const changesLabel = !changesOn
+        ? t('pipe.changesOff')
+        : (!changeStatus.read
+          ? t('pipe.changesUnavailable')
+          : t('pipe.changesOn', { n: changeFiles }))
+      const changesTitle = !changesOn
+        ? t('changes.titleOff')
+        : (!changeStatus.read
+          ? t('changes.titleUnavailable', { reason: t(changeReasonKey(changeStatus.reason)) })
+          : t('changes.titleOn', {
+            files: changeFiles,
+            related: changeInfo ? (Number(changeInfo.relatedTotal) || 0) : 0,
+          }))
+      const changesNode = h('button', {
+        type: 'button',
+        className: 'knit-pipe-changes',
+        'aria-pressed': changesOn ? 'true' : 'false',
+        title: changesTitle,
+        onClick: (event) => {
+          if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+          pickChanges(!changesOn)
+        },
+      }, h('span', { className: 'knit-pipe-changes-label' }, changesLabel))
       const pipeNode = h('div', { className: 'knit-pipe' },
         pipeCell(t('pipe.collect', { n: collected })),
         pipeDot(),
@@ -5344,6 +5627,10 @@ video.knit-preview-media{width:100%;background:#000}
         pipeCell(t('pipe.relations', { n: relCount })),
         pipeDot(),
         pipeCell(t('pipe.pin', { n: pinnedCount })),
+        pipeDot(),
+        // v0.25：入口就是这一格 —— **默认关**，关着也出现（藏起来用户就永远打不开）。
+        // 它说的是宿主回的**事实**（几个变更文件 / 读不到的原因），不是「你点了什么」。
+        changesNode,
         pipeSep(),
         // 唯一略微加重的一格：它是这一行里被后续阶段消费的那个数字（需求 §三.8：
         // 只提字重，不用品牌色、不做徽章）。

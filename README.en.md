@@ -11,8 +11,10 @@ read, and whether they changed after being read**.
 
 **Find → Organise → Track**, all of it plain string work on your own machine in the **default lexical
 mode** — no model calls, no network, no latency, nothing leaves the machine. The optional **hybrid mode
-is off by default** (it needs a provider you configure; with a **remote** provider it receives file
-**titles and summaries**, never bodies) — see below.
+is off by default**: only if you configure a provider **and** switch to hybrid by hand does anything
+leave the machine, and what leaves is **your query text plus each candidate file's title and summary**
+(**never full bodies or absolute paths**) — with two easy-to-miss caveats spelled out under
+**What hybrid mode actually sends** below.
 
 ```text
                        Current task
@@ -117,10 +119,36 @@ The three differences that matter:
    verifiable reason) and **tracking** (which were really read, and whether they changed).
 
 **No model calls, no network** in the default lexical mode: all plain string work, no latency, no cost,
-nothing leaves the machine. Optional hybrid mode is off by default; with a **remote** provider it sends
-file **titles and summaries** (never bodies) to that service, and a **loopback** provider keeps
+nothing leaves the machine. Optional hybrid mode is off by default, and a **loopback** provider keeps
 everything on this machine. ⚠️ The **benefit** of semantic retrieval still awaits a real-provider run
 (tracked in-repo as `value-evidence: pending`) — no recall improvement is claimed.
+
+### What hybrid mode actually sends
+
+This section is written from **recorded request bodies**, not from design intent — for the exact
+commands and per-claim assertions see
+[`docs/evaluations/hybrid-retrieval.md`](https://github.com/PolinniZhong/dsh-knit/blob/main/docs/evaluations/hybrid-retrieval.md) (the audit script
+`tools/semantic-request-audit.mjs` records the body of every request and then checks it claim by claim).
+
+**What leaves the machine** (the request body has exactly two top-level fields, `{ model, input }`, and
+`input` is a list of strings):
+
+| # | What | Exact boundary |
+|---|---|---|
+| ① | **Your query text** | On the panel path it is the latest user message with substance, truncated to **80 characters**; on the `knit_docs(query=…)` path up to 2000. **Re-sent on every refresh** (document vectors are cached, the query is not) |
+| ② | **Each candidate file's title** | Markdown: the first `# heading` in the body (falling back to the file name). Code: the file name **with** its extension. Images / video: the file name **without** its extension |
+| ③ | **Each candidate file's summary** | Markdown: the **first real prose paragraph, truncated to ≤ 60 characters** — it **comes from the body**. Code: the **workspace-relative directory** (e.g. `src/host/`). Media: none |
+
+**What does not leave the machine**: full bodies (the audit probed every long-enough file in the
+workspace at both "first 200 chars" and "middle 200 chars" — not one hit), absolute paths (workspace
+root / home directory / `file://` — not one hit), conversation history, files in your workspace that
+were not selected.
+
+⚠️ **Two things that are easy to assume wrongly**:
+① **"summary" does not mean "metadata unrelated to the body"** — a Markdown summary is an excerpt of the
+body, so **up to 60 characters of body text do leave the machine**;
+② **image / video file names are sent too** (they have no summary, so what is sent is the file name
+itself, e.g. `screenshot-media`).
 
 ---
 
@@ -177,7 +205,8 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Auto-refresh every 5s plus a manual button; docs changed in the last 2 min get 🆕 | ✅ |
 | Bilingual (zh/en), follows the DSH language live — no plugin reload needed | ✅ |
 | **Zero model calls / zero network egress by default**: the default **lexical mode** is plain string work on this machine | ✅ |
-| **Optional hybrid mode (off by default)** (v0.23): needs a provider you configure (Ollama / OpenAI-compatible). With a **remote** provider, what leaves the machine is the workspace files' **titles and summaries** (**never bodies**); vectors live in memory only and the config sits in its own DSH storage unit (`knit_semantic`). A **loopback** provider keeps everything local. ⚠️ The **benefit** of semantic retrieval still awaits a real-provider run (`value-evidence: pending`) — no recall improvement is claimed | ✅ |
+| **Optional hybrid mode (off by default)** (v0.23): needs a provider you configure (Ollama / OpenAI-compatible). With a **remote** provider, what leaves the machine is **your query text plus each candidate file's title and summary** — never full bodies or absolute paths, but note that a Markdown "summary" is a **≤ 60-character excerpt of the body** and image / video files send their **file name** (the exact boundaries are in **What hybrid mode actually sends** above); vectors live in memory only and the config sits in its own DSH storage unit (`knit_semantic`). A **loopback** provider keeps everything local. ⚠️ The **benefit** of semantic retrieval still awaits a real-provider run (`value-evidence: pending`) — no recall improvement is claimed | ✅ |
+| **Git change links (off by default)** (v0.24): lists "what else to look at" from your **uncommitted changes**, using the evidence Knit already has (references / imports / test pairing / doc mentions) — every row names its **origin, kind and line**. **Read-only**: one `git status` (fsmonitor and optional index refresh disabled, child-process environment whitelisted so no `GIT_*` is inherited), **no diff, no file bodies, no network**; when it cannot read, it writes the reason in the panel instead of hiding it in a tooltip. ⚠️ This version adds a host route — **restart DSH after upgrading** | ✅ |
 | **A `knit_docs` tool for the agent** — read-only, so the model can find this project's relevant docs itself | ✅ |
 
 > Relevance is deliberately **not visualised** (no percentages, no bars) — the ranking itself is
@@ -798,7 +827,7 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 775 tests, zero dependencies, no npm install needed
+npm test          # 828 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -826,7 +855,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 775 tests
+└── test/                 # 828 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

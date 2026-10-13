@@ -37,6 +37,74 @@ import {
   summarize, table,
 } from '../test/retrieval-eval.mjs'
 
+/* ── H2 的引擎构造（唯一路径；`--selftest` 反过来钉住它）────────── */
+
+/**
+ * H2 的引擎：**故意**指向一个关着的回环端口 + 真 `fetch` ⇒ 探测必然失败（这就是要验的回退路径）。
+ *
+ * ⚠️ **2026-10-13 修**：原来引擎拿到的是**裸 `fetch`**，而计数器包的是另一个函数
+ * （`const deadFetch = countingFetch(fetch)` 建在引擎**之后**），于是 H2 一行的
+ * `provider 调用` 恒为 **0 —— 一个假的 0**。这里把「**先**建计数 fetch、**再**交给引擎」
+ * 固定成唯一的构造路径，`--selftest` 的 S2 会在顺序被改回去时当场红。
+ *
+ * @param {number} [port] - 关着的回环端口（默认 9）
+ * @returns {Promise<{engine: object, counter: Function}>} 引擎与它的计数 fetch
+ */
+export async function makeDeadEngine(port = 9) {
+  const counter = countingFetch(fetch)
+  const engine = createSemanticEngine({ store: null, fetchImpl: counter, probeTimeoutMs: 300 })
+  await engine.configure({ kind: 'ollama', base: `http://127.0.0.1:${port}`, model: 'dead' })
+  return { engine, counter }
+}
+
+/**
+ * **针对性自测**：只测「评测工具自己算得对不对」，不测产品行为。
+ *
+ * 为什么放在 `tools/` 而不是 `test/`：`tools/` **不随 npm 包发布**，
+ * 而 `test/` 会 —— 一个 `import '../tools/…'` 的用例会让净室闸门在解包目录里
+ * `ERR_MODULE_NOT_FOUND`（这正是 v0.20.0 的 638/1 那次翻车）。所以能在 `test/` 里跑的
+ * 只有产品代码；**评测工具的自测必须住 `tools/`**。
+ *
+ * 跑法：`node tools/hybrid-retrieval-eval.mjs --selftest`（退出码非 0 = 有断言不成立）
+ *
+ * @returns {Promise<boolean>} 是否全部通过
+ */
+export async function runSelfTest() {
+  const results = []
+  const check = (id, title, ok, detail) => {
+    results.push({ id, title, ok: !!ok, detail: detail || '' })
+  }
+
+  // S1：计数 fetch 每次调用 +1（这是「provider 调用次数」这个数字的地基）
+  {
+    const stub = countingFetch(async () => ({ status: 200, json: async () => ({}) }))
+    await stub('a'); await stub('b'); await stub('c')
+    check('S1', 'countingFetch 每次调用 +1', stub.count === 3, `实测 count = ${stub.count}（期望 3）`)
+  }
+
+  // S2：**回归守卫** —— 引擎必须拿着那个计数 fetch。
+  //     修复前（引擎拿裸 fetch）这里恒为 0，H2 一行的 provider 调用数因此是假的 0。
+  {
+    const { engine, counter } = await makeDeadEngine()
+    const before = counter.count
+    const checked = await engine.check()
+    const seen = counter.count - before
+    check('S2', 'H2 的引擎确实拿着计数 fetch（修复前这里是 0）', seen >= 1,
+      `check() 之后计数器 +${seen}（期望 ≥ 1）`)
+    check('S3', '探测失败时如实回 available:false + reason，不伪装成可用',
+      checked.available === false && checked.reason === 'probe-failed',
+      `实测 available=${checked.available} reason=${checked.reason}`)
+  }
+
+  console.log('Knit · 评测工具自测（hybrid-retrieval-eval）')
+  for (const r of results) console.log(`  ${r.ok ? '✅' : '❌'} ${r.id}  ${r.title}\n        ${r.detail}`)
+  const failed = results.filter((r) => !r.ok)
+  console.log(failed.length === 0
+    ? '\n✅ 全部通过 —— 评测工具自己算的数可信。'
+    : `\n❌ ${failed.length} 条不成立 —— 先修工具，再拿它的数字下结论。`)
+  return failed.length === 0
+}
+
 /* ── 主流程 ─────────────────────────────────────────── */
 
 export async function main() {
@@ -64,10 +132,7 @@ export async function main() {
   }
 
   // ── H2：混合 + provider 探测失败（真 fetch 打一个关着的端口）
-  // ⚠️ H2 故意用一个**打不通的回环端口** + 真 fetch ⇒ 探测必然失败（这就是要验的回退路径）。
-  const deadEngine = createSemanticEngine({ store: null, fetchImpl: fetch, probeTimeoutMs: 300 })
-  await deadEngine.configure({ kind: 'ollama', base: 'http://127.0.0.1:9', model: 'dead' })
-  const deadFetch = countingFetch(fetch)
+  const { engine: deadEngine, counter: deadFetch } = await makeDeadEngine()
   const H2 = await runPath({ root, retrieval: 'hybrid', engine: deadEngine, label: 'H2', counter: deadFetch })
 
   // ── H1：混合 + 真 provider（探测不到就如实 skip）
@@ -139,7 +204,10 @@ export async function main() {
     paths: {
       L: { metrics: summarize(rowsL), wallMs: L.wallMs, providerCalls: 0 },
       H0: { metrics: summarize(rowsH0), wallMs: H0.wallMs, providerCalls: H0.calls, rescued, falsePositives },
-      H2: { metrics: summarize(H2.rows), wallMs: H2.wallMs, identicalToL: h2same },
+      // ⚠️ 2026-10-13：原来这一行**没有 `providerCalls`** —— 于是修好计数器之后，
+      // 「H2 到底打了几次」在 JSON 里仍然看不到（只有打印出来的表里有）。
+      // 与 `real-workspace-eval.mjs` 对齐：每条路径都带这一格。
+      H2: { metrics: summarize(H2.rows), wallMs: H2.wallMs, providerCalls: H2.calls, identicalToL: h2same },
       H1: H1
         ? { metrics: summarize(H1.rows), wallMs: H1.wallMs, providerCalls: H1.calls, provider: { kind: provider.kind, model: provider.model } }
         : null,
@@ -157,4 +225,8 @@ export async function main() {
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-if (isMain) await main()
+// `--selftest` 只测「评测工具自己算得对不对」，不跑语料。
+if (isMain && process.argv.includes('--selftest')) {
+  const ok = await runSelfTest()
+  process.exitCode = ok ? 0 : 1
+} else if (isMain) await main()

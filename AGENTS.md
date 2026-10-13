@@ -296,9 +296,8 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 ### 7.2 三档类型 / 媒体网格 / 键盘
 
-- **「文档 / 代码 / 媒体 / 全部」四档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签** —— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
-  文档档选中**不要加品牌色/绿色描边**（用户原话：「选中的时候不用加绿色、蓝色的描边，
-  就跟下面列表一样，选中填充背景灰就可以」）。
+- **「文档 / 代码 / 媒体」三档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签** —— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
+  文档档选中**不要加品牌色/绿色描边**（用户裁决 2026-09-29；原话见 L3）。
 - **媒体网格**：方形缩略图，**格子基准固定 104px、与条目数无关**；列数由 CSS
   `repeat(auto-fill,minmax(104px,1fr))` 连续数出来（实测 320→2 / 632→5 / 900→7 / 1200→10 列）。
   **纵向有多少行铺多少行**：网格**不设 maxHeight、也不自己滚**，滚动统一交给 `.knit-list`。
@@ -331,7 +330,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 - **使用反馈（v0.16）**：默认关的「使用情况」开关 + `knit_docs` 的 `audit: true`，把「先看的那篇读没读 /
   辅助层 read÷total / 读了几次 / 包外几篇 / 上下文换过几次」摊成**一行事实**，行首多一个累计的
   「当前上下文 · Epoch N」。归因**读时冻结**，之后换多少份上下文都不会改口。见 §6.11。
-- **v0.24 检索方式**：**状态行里的可点状态格**（`BM25 检索 ›`，视觉照命中段 `.knit-hit`：`--knit-chip-bg` + 6px 圆角 + `1px 6px` + 次级灰字 + 字号/行高同命中段；hover 下划线只划文字层（箭头不划），箭头展开时横向翻转）；菜单**相对这一格**弹出（`left:0;top:22px`）；工具栏第二行只剩排序 / 类型 / 搜索；「最新」档整条状态行不渲染 ⇒ 格子不在，但**不重置**偏好；未配 provider 也出现，菜单如实写状态 + 配置入口。
+- **v0.24 检索方式**：**状态行里的可点状态格**（`BM25 检索 ›`，视觉照命中段 `.knit-hit`：`--knit-chip-bg` + 6px 圆角 + `1px 6px` + 次级灰字 + 字号/行高同命中段）（几何 / 翻转 / 定位由 `client.test.mjs` 逐值钉住）；工具栏第二行只剩排序 / 类型 / 搜索；「最新」档整条状态行不渲染 ⇒ 格子不在，但**不重置**偏好；未配 provider 也出现，菜单如实写状态 + 配置入口。
 
 
 ---
@@ -441,8 +440,8 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 | `test/document-lifecycle.test.mjs` | **v0.17 文档生命周期**：`backfillFeedback()` 的回填顺序（见 §6.11 第 2 条）、首读归因冻结、`churn.epochs` 与快照栈同生共死 |
 | `test/classification.test.mjs` | **v0.19 文件分类层**：17 个支持后缀 / 13 个不支持 / `.map`·min·generated·lock → generated / 后缀知识只活在分类层 |
 | `test/code-context.test.mjs` | **v0.19 Code Context 链路**：代码字段权重、理由码、混合包、引用图、read evidence、四态生命周期、Epoch |
-| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：§21 的 12 个用例 + 媒体反例、四指标、R1（1000 文件 ≤1.5 s）、R2（面板 ≤16 KB / 工具 ≤1.4×）；语料工厂 `test/deep-corpus.mjs` 随包发布 |
-| `test/relations.test.mjs` + `test/control.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认）、`references`/`documents` 与反向 `in` 边、截断顺序、端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、只写差量、无 storage 降级 |
+| `test/deep-context.test.mjs` + `test/deep-eval.test.mjs` + `test/deep-scale.test.mjs` | **v0.20 片段层**：§21 的 12 个用例 + 媒体反例、四指标、R1（1000 文件 ≤1.5 s）、R2（面板 ≤16 KB / 工具 ≤1.4×） |
+| `test/relations.test.mjs` + `test/control.test.mjs` + `test/git-changes.test.mjs` | **v0.21 关系层**：imports 逐行正则与行号、相对路径解析与扩展名补全、tests 命名约定（唯一才认）、`references`/`documents` 与反向 `in` 边、截断顺序、端到端；**控制层**：固定/排除互斥与幂等、固定移出三层且来源=manual、排除先于检索、只写差量、无 storage 降级；**v0.25 Git 变更关联**：状态解析五态、五种降级、接口隔离、真机夹具验证据与误报、**子进程环境白名单**（注入 + 证伪） |
 | `test/semantic.test.mjs` + `test/hybrid-retrieval.test.mjs` | **v0.23 混合检索（A+B）**：provider 两协议 / 配置收敛 / 有界嵌入与缓存 / 五条回退 reason；判据 1/2/2c/3/3b/5/6/7（零调用、既有条目原样、只追加进「相关」、`capRelated` 让位、排除不可绕过、理由不冒充命中） |
 | `test/hybrid-eval.test.mjs`（+ `test/retrieval-corpus.mjs` / `test/retrieval-eval.mjs`） | **v0.23 Phase C 消融**：四路径（L / H0 替身 / H1 真 provider⇒skip / H2 回退逐字一致）+ 指标与有界性；语料 19 篇 13 查询。⚠️ 量尺放 `test/`（`tools/` 不进包） |
 | `test/index-store.test.mjs` + `test/index-incremental.test.mjs` | **v0.22 增量索引**：持久层 16 项（键含 root 指纹、`per-record` 键形状、`mtime+size` 筛子 + `headHash` 复核、版本 / 指纹不符或无存储 ⇒ 空 Map + `reason` 不抛、遗留键**有界清理**）与端到端 15 项（重启后复用、改一个只重读 1 篇、增删改名不留过期项、同 `mtime+size` 改写被抽验） |
@@ -466,7 +465,7 @@ knit/                            ← 插件本体（**路径不能动**，见文
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        775 项，分工见 §9.3
+└── test/                        828 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

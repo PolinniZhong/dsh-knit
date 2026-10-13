@@ -14,8 +14,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stat } from 'node:fs/promises'
 
-import { apply } from '../src/host/index.js'
 import { makeWorkspace } from './fixture.mjs'
+import { startKnitServer as startKnitHarness } from './http-harness.mjs'
 
 /**
  * 测试自带样本工作区（临时目录），里面有 docs/screenshot.png 当媒体样本。
@@ -32,63 +32,9 @@ const PROJECT_ROOT = makeWorkspace([
   ['amb.md', '# amb\n\n见 `SKILL.md`（同名两处，不该产生边）\n'],
 ])
 
-/**
- * 起一个挂着 Knit 路由的回环 server（伪造 cordis 的 webServer / sessions / effect）。
- *
- * ⚠️ `inject` 必须**照抄 cordis 的真实语义**：只有它真的能提供所请求的依赖时才回调。
- * v0.7 给 `apply` 加了第二个 `ctx.inject(['tools'], …)`，如果这里对所有 deps 都无脑回调，
- * 那个回调会拿到一个没有 `tools` 的假 ctx —— 那是**替身的谎**，不是代码的 bug
- * （AGENTS.md §6.1 的教训）。真实的 cordis 在回调前保证依赖可用。
- *
- * @param {object} [session] - 假会话（默认只有一个 header.cwd，没有任何事件）
- * @returns {Promise<{base:string, close:Function}>} 地址根与关闭函数
- */
-async function startKnitServer(session, sessionId = 's') {
-  let handler = null
-  const listeners = new Map()
-  // ⚠️ v0.16：订阅回调按 `session.id` 认会话，所以假会话必须有 id，
-  // 且必须与请求里的 `sessionId` 一致 —— 这正是真机的形状。
-  const fakeSession = {
-    ...(session || {}),
-    id: sessionId,
-    header: { cwd: PROJECT_ROOT, id: sessionId, ...((session && session.header) || {}) },
-  }
-  const provided = {
-    webServer: {
-      register({ handler: h }) { handler = h; return () => {} },
-    },
-    sessions: { get: () => fakeSession },
-    effect(fn) { fn() },
-  }
-  apply({
-    on(name, fn) {
-      if (!listeners.has(name)) listeners.set(name, [])
-      listeners.get(name).push(fn)
-      return () => {}
-    },
-    inject(deps, cb) {
-      // 只提供 webServer / sessions；tools 不存在 → 那条回调不该被调用
-      if (!deps.every((dep) => dep in provided)) return
-      cb(provided)
-    },
-  })
-  assert.ok(handler, 'apply 应注册路由 handler')
-  assert.equal((listeners.get('session/event') || []).length, 1, 'apply 应恰好订阅一次 session/event')
-  /**
-   * 模拟宿主 append 之后派发的会话事件（v0.16：Knit 唯一的读证据来源）。
-   * @param {object|null} event - 会话事件
-   * @returns {void}
-   */
-  const emit = (event) => {
-    for (const fn of listeners.get('session/event') || []) fn(fakeSession, event)
-  }
-
-  const server = http.createServer((req, res) => handler(req, res))
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const base = `http://127.0.0.1:${server.address().port}/knit`
-  const close = () => new Promise((resolve) => server.close(resolve))
-  return { base, close, emit }
-}
+// v0.25：服务器替身抽到 `test/http-harness.mjs`（`/api/changes` 那条独立接口也要用它）。
+// 这里保留一层**只绑样本工作区**的包装，所以下面所有调用点一行都不用改。
+const startKnitServer = (session, sessionId) => startKnitHarness({ root: PROJECT_ROOT, session, sessionId })
 
 test('HTTP 端到端：媒体列表、/raw 整文件、Range 206、安全拒绝', async () => {
   const { base, close } = await startKnitServer()
