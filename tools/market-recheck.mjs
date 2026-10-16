@@ -152,6 +152,9 @@ async function main() {
       row('stars', BASELINE.stars, now.stars ?? '❌ null')
       row('downloads', `${BASELINE.downloads}（${BASELINE.downloadsWindow}）`, now.downloads ?? '❌ null')
       row('install', BASELINE.install, now.install ?? '❌ null')
+      // ⚠️ 2026-10-16 起这里的 **3 → 2 是预期的**：`screenshot-all.png` 画的是「全部」档，
+      //    而那个 UI 视图在 v0.23.1 已被删除 ⇒ 已主动从 `knit/screenshots.json` 撤下
+      //    （等站点每日 UTC 02:23 重建后生效）。**不是站点丢了截图。**
       row('screenshots', BASELINE.screenshots, now.screenshots)
 
       line()
