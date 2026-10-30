@@ -827,7 +827,7 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 828 tests, zero dependencies, no npm install needed
+npm test          # 883 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -855,7 +855,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 828 tests
+└── test/                 # 883 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

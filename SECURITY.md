@@ -2,9 +2,13 @@
 
 > **Knit 的安全属性 —— 每一条都指向一个真实存在的检查。**
 >
-> 最后更新：2026-10-14（v0.24.0）—— **本版动过安全面**：`src/` 里第一次起子进程（只读 git），
-> 因此新增两条 —— 子命令 / argv 白名单，以及**子进程环境白名单**（任何 `GIT_*` 都不从父进程继承）；
+> 最后更新：2026-10-31（v0.25.0）—— **本版动过安全面**：新增「**读工作区之外的唯一一处**」——
+> 对话里工具产出的图（`GET /knit/api/attachment`）：只认 `sha256:<64 hex>`、**不接受任何路径**、
+> id 必须在本会话的工具产出里出现过；三条边界都有 e2e 与**证伪记录**，见下表新增的那一行。
 > 版本号随每版前移，好让「安全表被漏掉」与「本版没动安全面」在版本一致性检查里能分开
+>
+> 📌 **v0.24.0（2026-10-14）那次改了什么**：`src/` 里第一次起子进程（只读 git），因此新增两条 ——
+> 子命令 / argv 白名单，以及**子进程环境白名单**（任何 `GIT_*` 都不从父进程继承）
 >
 > 📌 **v0.23.0（2026-10-12）那次改了什么**：写通道由一条变两条（新增 `POST /knit/api/semantic`，只存 provider 配置）、
 > 会落盘的单元由两个变三个（`knit_index` 起于 v0.22、`knit_semantic` 起于 v0.23）；
@@ -41,6 +45,7 @@ Knit 的安全属性其实一直成立 —— 但它们此前只散落在文档�
 | 会写盘的东西只有三类，且只写 DSH 给的存储单元 —— **不碰工作区里的任何文件** | ✅ | 三个 kv 单元各开各的：`knit_control`（`src/host/control.js`，v0.21，固定 / 排除）、`knit_index`（`src/host/index-store.js`，v0.22，增量索引，**非 HTTP 触发**）、`knit_semantic`（`src/host/semantic.js`，v0.23，**只存 provider 配置**，向量只在内存）。落盘路径由 DSH 的 storage 服务决定，Knit 不自己拼；`test/control.test.mjs` + `test/index-store.test.mjs` |
 | 第二条写通道 `POST /knit/api/semantic` 的主机侧 e2e 守卫 | ⚠️ | **如实说明（v0.23 新增，尚未补）**：它目前只有**客户端侧**断言（`test/client.test.mjs` 认这条 URL），**没有**像 `/api/control` 那样在真实回环端口上验「GET→405 / 别的路由 POST→405 / 坏 body→400」。两条写路由在 `src/host/index.js` 里共用同一段前置守卫，但「共用同一段代码」**不等于**「被验过」 |
 | **Git 变更关联只跑一条只读的 `git status`**（v0.25；这是 `src/` 里**唯一**会起子进程的地方） | ✅ | `src/host/git.js` 只允许两个子命令（`GIT_STATUS_ARGS` = `status --porcelain=v1 -z --untracked-files=all`、`GIT_PREFIX_ARGS` = `rev-parse --show-prefix`），argv 是**数组**、从不走 shell；`test/git-changes.test.mjs` 把这两个 argv 与 19 个写动词（`add`/`commit`/`checkout`/`reset`/`clean`/`stash`/`push`…）逐个比对，并断言**不开** `--ignored`。**并且**子进程环境是**白名单筛过的**（`gitEnv()` / `GIT_ENV_ALLOW`）：只继承 `PATH` / locale / `HOME` / `XDG_CONFIG_HOME` / 临时目录等运行时必需品，**任何 `GIT_*` 一律不从父进程继承**（前缀规则，git 将来新增的变量自动覆盖）—— 实测这些变量真的会改变行为：`GIT_DIR`+`GIT_WORK_TREE` 会让 `git status` **去读另一个仓库**（本工作区的改动直接消失）、`GIT_INDEX_FILE` 会**换掉索引**（已提交的文件被报成 `D`+`??`，结果里混进别的仓库的文件名）、`GIT_TRACE` 会**往指定路径写日志**；`spawn` 另带 `--no-optional-locks --no-pager -c core.fsmonitor=false` + 环境 `GIT_OPTIONAL_LOCKS=0` / `GIT_PAGER=cat` / `GIT_TERMINAL_PROMPT=0` —— 这一层挡的是「git 自己被配置牵着去写盘 / 去起进程」：实测（git 2.50.1）裸 `status` 会**重写 `.git/index`**（300 文件 + untrackedCache + stat 缓存过期时 3/3 次）、会**执行 `core.fsmonitor` 指向的钩子**、会在 `core.fsmonitor=true` 时**拉起 builtin 守护进程**（`.git/fsmonitor--daemon` 落盘）；加了上面这些之后三种副作用全部为 0。有界：2.5 s 超时、1 MiB stdout、200 条解析；五种失败各自收敛成一个 reason，**一条都不抛**。它**不读 diff、不读文件内容、不发网络请求** |
+| **读工作区之外的唯一一处：对话里「工具产出」的图**（v0.25，`/knit/api/attachment`） | ✅ | 三条边界**都可机检**：① 只收 `sha256:<64 hex>`，**不接受任何路径**（`objectPath()` 由哈希算出路径 ⇒ 给不出穿越）；② id 必须出现在**本会话的 `tool/result` 事件**里（`createAttachmentStore.has()`；跨会话 / 没出现过 / 用户自己贴的图一律 404）；③ 只回 `image/*` `video/*`，走既有的 `sendMedia`。证据：`test/attachments.test.mjs` 的 6 条 e2e（真实回环端口 + 真的附件库形状）与 5 条突变证伪 —— 去掉去重 / 去掉会话 id 校验 / 去掉 `tool/result` 收窄 / 放宽类型 / 读不存在的对象，各自都会红 |
 | 响应带 `nosniff` 与 `default-src 'none'; sandbox` | ✅ | `test/host-http.test.mjs`（两个指令各自断言） |
 | 客户端半边零网络出口：`src/client/client.js` 的全部 `fetch` 都是同源相对路径 | ✅ | `src/client/client.js` 的三个接口常量都是 `/knit/api/*`；`test/security.test.mjs` 断言无协议头。HTML 的「网页预览」按钮是把文件交给 **DSH 自己的**文档预览标签页去渲染（Knit 这一侧一个请求都不发），渲染的沙箱与 CSP 归 DSH 管 —— 所以这条承诺不变。⚠️ **这只覆盖浏览器半边**；宿主半边在**可选混合模式**下会出网，见下面那一条 |
 | 宿主半边的出网只有一个点，且**默认一次都不发**：`src/host/semantic.js` 的 `createSemanticProvider()` | ⚠️ | **如实说明**：默认词法模式下**一次 provider 调用都不发**（`test/hybrid-retrieval.test.mjs` 判据 1 钉住，连探测都不发）；只有「用户配好 provider **且**手动切到混合检索」才会走那条路。发出的是**查询原话 + 标题 + 摘要**，不含完整正文与绝对路径 —— 报文级实测在仓库根 tools/semantic-request-audit.mjs（**该脚本不随包发布**，所以这条目前是**人工跑的量尺**，不是 `npm test` 里的守卫） |

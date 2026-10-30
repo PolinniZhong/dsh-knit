@@ -1184,7 +1184,7 @@ H2  540    1
      标注答案：knit/src/host/semantic.js[有] knit/test/semantic.test.mjs[有]
      语义状态：mode=lexical candidates=0 reason=-
 ✗ [synonym] 「为什么读过的历史不会再变」
-     包：99_暂存文档/01_ Knit PRD-历史版本/README.md | 01_ Knit PRD/Knit-PRD-SDD-v0.17-Document-Lifecycle.md | 00_调研与规划/调研-Agent上下文可观测性与Read证据-2026-10-07.md | 调研_Knit×豆包工作_能力边界与迁移报告.md | 03_发布/验收清单-v0.18.0.md | 03_发布/发布清单-v0.17.0.md | knit/README.md
+     包：99_暂存文档/01_ Knit PRD-历史版本/README.md | 01_ Knit PRD/Knit-PRD-SDD-v0.17-Document-Lifecycle.md | 00_调研与规划/调研-Agent上下文可观测性与Read证据-2026-10-07.md | 00_调研与规划/调研-Knit×豆包工作-能力边界与迁移-2026-10-07.md | 03_发布/验收清单-v0.18.0.md | 03_发布/发布清单-v0.17.0.md | knit/README.md
      标注答案：knit/src/host/feedback.js[无]
      语义状态：mode=lexical candidates=0 reason=-
 ✗ [synonym] 「怎么证明发出去的包里测试也跑得通」

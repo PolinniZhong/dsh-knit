@@ -99,6 +99,18 @@ export function loadClientModule(options = {}) {
         // （归一化 + 取针）在这里；DOM 那半（`docAnchorHit` / `docBlockElement`）
         // 需要真 document，走真机验证，不进这个替身。
         + 'docNeedleText, docAnchorNeedles, docPickOffset, scrollToDocAnchor, DocPane, '
+        // v0.25 预览里的查找：与上面同一条分界线 —— **纯函数那半**（匹配 / 下标映射 / 环形步进）
+        // 在这里，能被真断言钉住；DOM 那半（paintFindMarks / clearFindMarks / scrollMarkIntoView）
+        // 需要真 document，也一并导出但只在真机上验。
+        + 'findRanges, normalizedIndexMap, stepFindIndex, paintFindMarks, clearFindMarks, scrollMarkIntoView, PreviewPanel, '
+        // v0.25 媒体收藏：全是纯函数（落盘解析 / 取某一格 / 加取消 / 稳定分区）—— 能被真断言钉住
+        + 'parseFavorites, favoriteRelsFor, toggleFavoriteList, orderFavorites, MediaCard, FAV_KEY, '
+        // v0.25 媒体档「悬停看大图」：盒子几何是纯函数（上限 800 / 翻转 / 夹进视口都能真断言）
+        + 'hoverShotBox, HOVER_SHOT_MAX, HOVER_SHOT_GAP, HOVER_SHOT_MARGIN, HOVER_SHOT_DELAY_MS, '
+        // v0.25 媒体档「双击全屏」：左侧带子的窗口算法是纯函数
+        + 'lightboxRail, LIGHTBOX_RAIL, LIGHTBOX_RAIL_LEAD, '
+        + 'mountLightbox, '
+
         + 'DOC_NEEDLE_CHARS, DOC_NEEDLE_MIN, DOC_NEEDLE_MAX, '
         + 'MOTION_ENTER_MS, MOTION_EXIT_MS, MOTION_STAGGER_MS, MOTION_STAGGER_MAX, MOTION_EASE, '
         + 'MOTION_MOVE_MS, MOTION_MOVE_EPS, '

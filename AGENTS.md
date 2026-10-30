@@ -186,11 +186,11 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
    不过就 `return`）与工具里的 `auditRequested`；`feedback.js` 的 `ingestEvents`/`noteSnapshot`
    **自己不检查 `isAudited`**。
 2. **读证据唯一来源 = `ctx.on('session/event', …, { global: true })`**（`apply(ctx)` 顶部注册、单事件入库）。
-   🔴 `session.snapshotEvents()` 已 deprecated（`dsh-session/README.md:62`）—— **不许新增生产调用**；`rankByRelevance` 那处是检索输入。
-   ✅ **唯一例外（v0.17 验收修订）**：闸门打开那一刻 `backfillFeedback()` 回填一次本会话已有事件
-   （同 tick、零 I/O），否则「未读」是没证据的断言。⚠️ **顺序是机制**：先
-   `noteSnapshot(store, sid, pack)`（**不传 `at`**）**再** `ingestEvents()`，反了会把补记的读冻成包外
-   （回填的读按**已知最早的那份包**归因）。
+   🔴 `session.snapshotEvents()` 已 deprecated（`dsh-session/README.md:62`）—— **不许再加第 4 处**；现有**三处**：
+   `rankByRelevance`（检索输入）、`backfillFeedback`（开闸回填）、对话图回填（v0.25）。
+   ✅ 两处回填的边界照抄 v0.17：**一会话一次 / 同 tick 零 I/O / 失败全吞**。
+   ⚠️ **顺序是机制**：先 `noteSnapshot(store, sid, pack)`（**不传 `at`**）**再** `ingestEvents()`，
+   反了会把补记的读冻成包外（按**已知最早的那份包**归因）。
    ⚠️ 不传 `{ global: true }` 收不到 agent 作用域的会话事件。**一个代价**：fork 继承的父会话读**不算进来**（seed 不派发）。
 3. **不落盘、不发请求**：状态全在内存（`createStore()`），进程重启即失。
 4. **五个上限**：`MAX_SESSIONS 24`（LRU）、`MAX_READS_PER_SESSION 200`、`MAX_SNAPSHOTS_PER_SESSION 20`、
@@ -308,8 +308,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   网格内边距 24）；`height:var(--knit-media-cell)` 与 `aspect-ratio:1/1` 同时写（变量缺失时不塌成 0 高）。
   视频取首帧当海报 + 播放三角 + 时长角标。
 - **键盘**：`↑↓` 移动即预览 / `Enter` 切换 / `Esc` 收起；媒体档 `←→` 按屏幕位置跨行、`Home`/`End` 到首尾。
-  ⚠️ **文档档永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦
-  （以前误传 `docLayout.columns`）。导航算术在纯函数 `nextIndexFor` 里（真实列数要 `ResizeObserver` 量）。
+  ⚠️ **文档档永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦。导航算术在纯函数 `nextIndexFor` 里（真实列数要 `ResizeObserver` 量）。
 - **类型档只有三个**：`文档 / 代码 / 媒体`（v0.23.1 起）——**「全部」档连同它的混合浏览视图已从 UI 删除**（老偏好 `all` 回落「文档」）；**内部跨类型检索 / `knit_docs` / 统一 Context Pack 保留**（宿主 `kind=all` 一行没改，e2e 仍在）。
 
 ---
@@ -337,7 +336,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 ### 7.4 阅读与预览
 
-- 单击列表行下方**就地预览**、再点收起；**双击仍能开新标签页**（`onOpenTab` 没删）。
+- 单击就地预览、再点收起；双击开新标签页。⚠️ **媒体档例外**（2026-10-22 用户裁决）：单击**不弹预览**、`↑↓` 只移光标，看大图＝双击/`Enter`（图片全屏查看器，视频就地预览）。
 - **预览面板底色恒为纯阅读底色**（`bg-base`：浅 `#fff` / 深 `#151517`）—— 一展开就是白的，
   不随滚动变、也不随换篇变。v0.10 那套「先灰、滚过 >4px 才变白」的机制
   **已整体删除**（`READING_SCROLL_PX` / `readingDocs` / `.knit-preview.reading` 都不存在了），**不要再加回来**。⚠️ 分层不靠底色，靠**顶部圆角 + 向上柔影 + 更强的上边界**这三件仍在的东西；
@@ -362,8 +361,8 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   ⚠️ **只给命中段那一带上色**（2026-10-07 用户第二次裁决）：窗口 = 命中段前后各 `CODE_HL_PAD = 60` 行，
   上限 `CODE_HL_MAX_LINES = 800`；**没有命中段就一个 token 都不上色**，其余行
   保持默认正文色（跟随主题令牌）。窗口之上 / 之下的行各是**一个**纯文本节点。
-  代价明说：窗口从半截注释 / 字符串中间开始时缺上下文，那一段可能**错色**（命中横带仍精确标出行）。
-  **必须限制窗口**：官方高亮器同步跑，实测 170–560 ms / 千行，整篇 4000 行首开 2.5–5.5 s（4× 节流）。
+  代价明说：窗口从半截注释 / 字符串中间开始时缺上下文，那一段可能**错色**。
+  **必须限制窗口**：官方高亮器同步跑，实测 170–560 ms / 千行，整篇 4000 行首开 2.5–5.5 s。
   宿主没导出这个 hook（旧版 DSH）或返回行数对不上 ⇒ **静默回落纯文本**。
   被否决：自造配色、`setTimeout(0)` 让出首帧、整篇 / 前缀着色、按锚点放宽。
 - 相对路径图片真渲染、可拖高度、全屏、原生 Markdown。
@@ -458,14 +457,14 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── cordis.patch.yml             挂进 plugin tree 的 insert 行
 ├── assets/                      图标源文件（path 已内联进 client.js）
 ├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
-│                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层） + git.js + changes.js（v0.24 变更关联）
+│                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层） + git.js + changes.js（v0.24 变更关联） + attachments.js
 ├── src/client/client.js         浏览器半边（无构建）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        828 项，分工见 §9.3
+└── test/                        883 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

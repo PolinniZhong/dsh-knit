@@ -784,7 +784,7 @@ test('媒体：媒体视图渲染方形网格，图片出 img、视频出首帧 
     'v0.21.x：媒体档也只剩阿拉伯数字（不再「个媒体」）')
 })
 
-test('媒体：点图片卡片就地预览大图，且不请求 /api/doc', async () => {
+test('媒体：**单击图片只移光标**（就地预览 2026-10-22 已撤掉），双击才进全屏查看器', async () => {
   const { calls } = installFetch(kindResponder({ media: mediaPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -798,14 +798,20 @@ test('媒体：点图片卡片就地预览大图，且不请求 /api/doc', async
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  const pm = byClass(nodes, 'knit-preview-media')
-  assert.equal(pm.length, 1)
-  assert.equal(pm[0].type, 'img')
-  assert.ok(String(pm[0].props.src).includes('/knit/api/raw'))
+  // 2026-10-22 用户裁决：媒体档不再有「单击就地预览」—— 下方不许弹面板
+  assert.equal(byExactClass(nodes, 'knit-preview').length, 0, '单击图片不该弹就地预览')
+  assert.equal(byExactClass(nodes, 'knit-preview-media').length, 0, '更不该出现媒体预览体')
   assert.ok(!calls.some((u) => u.includes('/api/doc')), '图片不应触发正文请求')
+  // 单击只移光标（键盘导航与双击的落点靠它）
+  assert.ok(String(byClass(nodes, 'knit-media-card')[0].props.className).includes('cursor'), '单击只移光标')
+
+  // 双击 = 全屏查看器（这才是现在「看大图」的唯一入口）
+  byClass(nodes, 'knit-media-card')[0].props.onDoubleClick()
+  const after = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(after, 'knit-lightbox').length, 1, '双击应进查看器')
 })
 
-test('媒体：点视频卡片就地预览，播放器 controls 且静音自动播放', async () => {
+test('媒体：**单击视频不弹预览**，双击才就地预览（播放器 controls 且静音自动播放）', async () => {
   const { calls } = installFetch(kindResponder({ media: mediaPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -814,7 +820,12 @@ test('媒体：点视频卡片就地预览，播放器 controls 且静音自动�
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
-  byClass(nodes, 'knit-media-card')[1].props.onClick()   // 第二张是视频
+  const videoOf = (n) => byClass(n, 'knit-media-card').find((c) => String(c.props['data-knit-rel']).endsWith('.mp4'))
+  videoOf(nodes).props.onClick()                          // 单击：2026-10-22 起不再弹预览
+  assert.equal(byExactClass(harness.render(h(KnitBody, { sessionId: 's1' })), 'knit-preview').length, 0,
+    '单击视频不该弹就地预览')
+
+  videoOf(harness.render(h(KnitBody, { sessionId: 's1' }))).props.onDoubleClick()   // 双击才弹
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
   await harness.flush()
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
@@ -5797,4 +5808,1061 @@ test('v0.25：客户端源码里**不许**再把变更关联挂到列表接口�
   assert.ok(source.includes("const CHANGES_API = '/knit/api/changes'"), '独立接口的地址要有一个真源')
   assert.ok(!source.includes('&changes=1'), '列表请求上不许再拼这个参数（整体删除，不是注释掉）')
   assert.ok(!source.includes('pack.changes'), '包上不再有这个字段（读它就是读了不存在的形状）')
+})
+
+/* ── v0.25：预览里的查找（Cmd+F）────────────────────────────────────────
+   分工与 `docAnchorNeedles`（纯）/ `docAnchorHit`（DOM）那条既有分界线一致：
+   **纯函数那半**（匹配 / 下标映射 / 环形步进）在这里被真断言钉住；
+   **DOM 那半**（画标记、滚动）需要真 document，替身给不了，只在真机验证。
+   ⚠️ 替身没有 document ⇒ 命中数恒 0 ⇒ 界面会显示「无结果」。那不是 bug，是替身的边界，
+   所以下面凡涉及「命中数」的断言都按 0 命中写 —— 不许拿假 DOM 造一个假绿。 */
+
+test('查找（纯）：匹配是**字面量**、不重叠、大小写不敏感', () => {
+  const { findRanges } = loadClientModule().exports.__test
+  const spans = (text, query) => findRanges(text, query).map((r) => [r.start, r.end])
+
+  assert.deepEqual(spans('Hello hello', 'HELLO'), [[0, 5], [6, 11]], '大小写不敏感')
+  assert.deepEqual(spans('aaaa', 'aa'), [[0, 2], [2, 4]], '不重叠：aa 在 aaaa 里是 2 处不是 3（与 Chrome 同口径）')
+  assert.deepEqual(spans('响应式文档列表', '文档'), [[3, 5]], '中文按 UTF-16 码元下标（与 slice 同一套）')
+
+  // **字面量**：正则元字符必须原样找 —— 用户搜的是关键词，不是模式；也不许抛
+  assert.deepEqual(spans('a(b)c', '('), [[1, 2]], '( 不许当分组符号')
+  assert.deepEqual(spans('axb', '.'), [], '. 不许当「任意字符」')
+  assert.deepEqual(spans('a**b**c', '**'), [[1, 3], [4, 6]], '* 不许当量词（字面量：找的是两个星号本身）')
+  assert.deepEqual(spans('价格 [必读]', '['), [[3, 4]], '[ 不许当字符类')
+  assert.deepEqual(spans('a?b', '?'), [[1, 2]], '? 不许当可选标记')
+
+  assert.equal(findRanges('abc', '').length, 0, '空关键词 = 不找（不是「全部命中」）')
+  assert.equal(findRanges('', 'a').length, 0)
+  assert.equal(findRanges(null, 'a').length, 0, '畸形输入不许抛')
+  assert.equal(findRanges('abc', null).length, 0)
+
+  // 性质：每一段切出来就是关键词本身 —— 把「下标错位」这一类 bug 一次盖住
+  for (const [text, query] of [['abcABC', 'abc'], ['文档里找文档', '文档'], ['x(1) x(1)', 'x(1)'], ['🔥🔥', '🔥']]) {
+    const ranges = findRanges(text, query)
+    assert.ok(ranges.length > 0, `${text} / ${query} 应该有命中`)
+    for (const r of ranges) {
+      assert.equal(text.slice(r.start, r.end).toLowerCase(), query.toLowerCase(), `${text} / ${query} 切出来的必须是关键词`)
+    }
+  }
+})
+
+test('查找（纯）：折叠后**变长**的字符退回大小写敏感 —— 宁可少匹配，也不许标错位置', () => {
+  const { findRanges } = loadClientModule().exports.__test
+  assert.equal('İ'.toLowerCase().length, 2, '前提：这个字符折叠后确实变长（否则这条守的是空气）')
+  // 折叠串比原文长 ⇒ 用它算出来的下标会整体错位、画出来的命中就偏了。
+  assert.deepEqual(findRanges('İstanbul', 'istanbul'), [], '退回大小写敏感：找不到就是找不到')
+  assert.deepEqual(findRanges('İstanbul', 'İstanbul').map((r) => [r.start, r.end]), [[0, 8]], '大小写一致时仍然精确')
+  assert.deepEqual(findRanges('aaİbb', 'aa').map((r) => r.start), [0], '同一串里其他命中不受影响')
+})
+
+test('查找（纯）：归一化下标 → 原文下标这座桥是准的（渲染会把换行折成空格）', () => {
+  const { normalizedIndexMap } = loadClientModule().exports.__test
+  assert.deepEqual(normalizedIndexMap('abc'), [0, 1, 2], '没有空白时是恒等映射')
+  assert.deepEqual(normalizedIndexMap('a\n\nb'), [0, 1, 3], '一串空白折成一个空格，映射取那串的第一个字符')
+  // 前导空白折成一个空格 ⇒ 映射到那串的第一个字符（下标 0）；'a' 在原文下标 2；尾随空格在 3
+  assert.deepEqual(normalizedIndexMap('  a '), [0, 2, 3])
+
+  // 性质：第 i 项指向的字符，就是归一化后第 i 个位置上的字符
+  const normalize = (text) => text.replace(/\s+/g, ' ')
+  for (const text of ['a b', 'a\n\nb', '  前后  ', '行1\n\n行2\n  行3', '一\n二', 'no-space']) {
+    const flat = normalize(text)
+    const map = normalizedIndexMap(text)
+    assert.equal(map.length, flat.length, `${JSON.stringify(text)} 的映射长度应等于归一化长度`)
+    for (let i = 0; i < flat.length; i += 1) {
+      // 映射指向的是「这一位来自原文哪里」。空白位来自**那串空白的第一个字符**
+      // （原文里是 \n，归一化后是空格）—— 所以空白位只要求「原文那里也是空白」；
+      // 非空白位必须逐字相同。切片正是靠这条才切得准。
+      if (/\s/.test(flat[i])) assert.ok(/\s/.test(text[map[i]]), `${JSON.stringify(text)} 第 ${i} 位应是空白`)
+      else assert.equal(text[map[i]], flat[i], `${JSON.stringify(text)} 第 ${i} 位对不上`)
+      if (i > 0) assert.ok(map[i] > map[i - 1], `${JSON.stringify(text)} 的映射必须严格递增（切片的前提）`)
+    }
+  }
+})
+
+test('查找（纯）：上一个 / 下一个**环绕**，越界先夹紧，总数 0 时恒 0', () => {
+  const { stepFindIndex } = loadClientModule().exports.__test
+  assert.equal(stepFindIndex(0, 3, 1), 1)
+  assert.equal(stepFindIndex(2, 3, 1), 0, '最后一个再按「下一个」回到第一个（与 Chrome 一致）')
+  assert.equal(stepFindIndex(0, 3, -1), 2, '第一个再按「上一个」回到最后一个')
+  assert.equal(stepFindIndex(0, 1, 1), 0, '只有一个时原地不动')
+  assert.equal(stepFindIndex(0, 0, 1), 0, '没有命中时恒 0（不许出 NaN / -0）')
+  assert.equal(stepFindIndex(9, 3, 1), 0, '下标越界（命中数变少时真会发生）先夹到末条，再环绕回 0')
+})
+
+/** 造一个键盘事件替身，同时记下 preventDefault / stopPropagation 被调了几次。 */
+function keyEvent(props) {
+  const calls = { prevented: 0, stopped: 0 }
+  const event = {
+    key: '', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false,
+    ...props,
+    preventDefault: () => { calls.prevented += 1 },
+    stopPropagation: () => { calls.stopped += 1 },
+  }
+  return { event, calls }
+}
+
+/**
+ * 打开第一行的预览 —— 查找的宿主必须是「已经打开一篇正文」。
+ * @returns {Promise<{nodes: object[], render: Function}>} 节点与重渲染函数
+ */
+async function openPreviewForFind(seed = ['', 'time']) {
+  const { KnitBody } = loadClientModule().exports.__test
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  harness.reset()
+  harness.seed(seed)
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  byClass(nodes, 'knit-doc')[0].props.onClick()
+  return { nodes: render(), render }
+}
+
+test('查找：Cmd+F 在**面板根**的捕获阶段打开查找条，且必须 preventDefault', async () => {
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { nodes, render } = await openPreviewForFind()
+  assert.equal(byExactClass(nodes, 'knit-findbar').length, 0, '默认不出现（不许白占一行）')
+
+  const root = byClass(nodes, 'knit-root')[0]
+  assert.equal(typeof root.props.onKeyDownCapture, 'function',
+    '快捷键必须挂**捕获阶段**：焦点通常在左边列表上（↑↓ 开着预览，挂 .knit-preview 收不到事件），'
+    + '而且查找开着时 Esc 要抢在列表那个「关预览」之前')
+  assert.equal(root.props.onKeyDown, undefined, '不许同时挂冒泡 —— 那会让 Esc 的优先级反过来')
+
+  const { event, calls } = keyEvent({ key: 'f', metaKey: true })
+  root.props.onKeyDownCapture(event)
+  const after = render()
+  assert.equal(byExactClass(after, 'knit-findbar').length, 1, 'Cmd+F 应打开查找条')
+  assert.equal(calls.prevented, 1, '必须 preventDefault —— 否则宿主 / 浏览器的原生查找也会一起打开')
+  assert.equal(calls.stopped, 1, '必须 stopPropagation')
+
+  const input = byClass(after, 'knit-findinput')[0]
+  assert.ok(input, '应有查找输入框')
+  assert.equal(input.props.value, '', '打开时是空的（不许带上一次的关键词）')
+
+  // 替身没有 document ⇒ 画不出命中 ⇒ 命中数如实为 0，界面要说「无结果」而不是假装 0/0
+  input.props.onChange({ target: { value: '文档' } })
+  const typed = render()
+  assert.equal(byClass(typed, 'knit-findinput')[0].props.value, '文档', '输入受控')
+  assert.deepEqual(byExactClass(typed, 'knit-findcount').map(textOf), ['无结果'],
+    '命中数为 0 时必须说「无结果」；这里恒 0 是替身没有 DOM 所致，不是被测行为')
+})
+
+test('查找：Esc 先关查找条，**不许**把预览一起关掉（列表那个 Esc 要让位）', async () => {
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { nodes, render } = await openPreviewForFind()
+  byClass(nodes, 'knit-root')[0].props.onKeyDownCapture(keyEvent({ key: 'f', metaKey: true }).event)
+  const opened = render()
+  assert.equal(byExactClass(opened, 'knit-findbar').length, 1, '前提：查找开着')
+  assert.equal(byExactClass(opened, 'knit-preview').length, 1, '前提：预览开着')
+
+  const { event, calls } = keyEvent({ key: 'Escape' })
+  byClass(opened, 'knit-root')[0].props.onKeyDownCapture(event)
+  const closed = render()
+  assert.equal(byExactClass(closed, 'knit-findbar').length, 0, 'Esc 应关掉查找条')
+  assert.equal(byExactClass(closed, 'knit-preview').length, 1, '预览必须还在 —— Esc 一次只吃一层')
+  assert.equal(calls.stopped, 1, '必须 stopPropagation，否则列表自己的 Esc 会把预览也关掉')
+})
+
+test('查找：媒体档不打开查找条（没有可搜的正文），也不拦快捷键', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  // 前提：媒体预览**开着** —— 图片档现在单击不弹预览了，所以用视频双击把它打开
+  byClass(nodes, 'knit-media-card')
+    .find((c) => String(c.props['data-knit-rel']).endsWith('.mp4')).props.onDoubleClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(nodes, 'knit-preview').length, 1, '前提：媒体预览开着')
+
+  const { event, calls } = keyEvent({ key: 'f', metaKey: true })
+  byClass(nodes, 'knit-root')[0].props.onKeyDownCapture(event)
+  const after = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(after, 'knit-findbar').length, 0, '媒体档不该出现查找条')
+  assert.equal(calls.prevented, 0, '不拦 —— 媒体没有可搜的正文，快捷键交回宿主 / 浏览器')
+  const labels = byClass(after, 'knit-btn').map(textOf)
+  assert.ok(!labels.includes('查找'), `媒体档预览头不该出现「查找」按钮（不留死按钮）：${labels.join(' / ')}`)
+})
+
+test('查找：预览头有「查找」按钮 —— 外层应用抢走 Cmd+F 时的兜底入口', async () => {
+  // 为什么必须有这个按钮（2026-10-15 用户实测）：在飞书客户端的内置浏览器里按 Cmd+F，
+  // 出来的是**飞书自己的**查找框 —— 原生快捷键在按键进入网页之前就被处理了，网页侧抢不回来。
+  // 所以能力必须有一个不依赖快捷键的入口。
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { nodes, render } = await openPreviewForFind()
+  const btn = byClass(nodes, 'knit-btn').find((n) => textOf(n) === '查找')
+  assert.ok(btn, `预览头应有「查找」按钮，实际按钮：${byClass(nodes, 'knit-btn').map(textOf).join(' / ')}`)
+  assert.equal(byExactClass(nodes, 'knit-findbar').length, 0, '前提：查找条还没开')
+
+  btn.props.onClick()
+  const after = render()
+  assert.equal(byExactClass(after, 'knit-findbar').length, 1, '点按钮应打开查找条')
+  assert.ok(byClass(after, 'knit-findinput')[0], '并且输入框要在（按钮是给鼠标用户用的）')
+})
+
+test('查找：滚动**只**由显式导航触发 —— 5 秒轮询重画命中时不许把用户的视图拽回去', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+
+  // 命中数组**走 ref 读**、不进依赖：进了依赖就会把「重画」当成「用户动了光标」，
+  // 每 5 秒把读到一半的位置拽回第一条（AGENTS.md §6.13 ② 那条坑，同一个道理）。
+  const at = source.indexOf('const marks = findMarksRef.current')
+  assert.ok(at > 0, '应能找到「滚动到当前命中」那条 effect')
+  const tail = source.slice(at, at + 700)
+  const deps = tail.match(/\}, \[([^\]]*)\]\)/)
+  assert.ok(deps, '那条 effect 应当有依赖数组')
+  assert.equal(deps[1], 'findSeq',
+    '依赖只许是 findSeq（显式导航才 +1）；加进 findCount / state.docs 之类的轮询值，'
+    + '就会每 5 秒把视图拽回去一次')
+})
+
+test('查找：命中只上底色 —— 不许有 padding / border（会改行高与折行，代码预览的横带就错位了）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  const base = css.match(/mark\.knit-find\{([^}]*)\}/)
+  assert.ok(base, '应有 mark.knit-find 的样式')
+  // `padding:0` 是显式清零，允许；不许的是给它一个非零内边距（会改行高与折行）
+  for (const decl of (base[1].match(/\bpadding\s*:[^;}]*/g) || [])) {
+    assert.equal(decl, 'padding:0', `命中只许把 padding 显式写成 0，不许给内边距：${decl}`)
+  }
+  // `border:0` 是**显式关掉**浏览器给 mark 的默认边框，允许；不许的是给它一个可见宽度
+  for (const decl of (base[1].match(/\bborder\s*:[^;}]*/g) || [])) {
+    assert.equal(decl, 'border:0', `命中只许把 border 显式写成 0，不许给宽度：${decl}`)
+  }
+  assert.match(base[1], /color:inherit/, '必须继承字色 —— 否则浏览器默认的 mark（黄底黑字）会漏出来')
+  assert.match(base[1], /background:var\(--knit-/, '底色只吃已定义的灰阶变量，不许自造颜色')
+
+  const current = css.match(/mark\.knit-find-current\{([^}]*)\}/)
+  assert.ok(current, '应有「当前命中」的样式')
+  assert.match(current[1], /background:var\(--knit-chip-bg\)/,
+    '当前命中用命中段那一档灰（比普通命中深）—— 用灰阶而不是第二种颜色建立层级')
+})
+
+/* ── v0.25：媒体收藏 ────────────────────────────────────────────────────
+   顺序规则只有一条：**稳定分区**（收藏的按原有顺序前移，其余按原有顺序跟在后面）。
+   不做第二套排序 —— 所以这里钉的是「分区」，不是「新排序」。 */
+
+test('收藏（纯）：落盘的畸形值一律回空表，不许抛', () => {
+  const { parseFavorites } = loadClientModule().exports.__test
+  assert.deepEqual(parseFavorites(null), {})
+  assert.deepEqual(parseFavorites(''), {})
+  assert.deepEqual(parseFavorites('not json'), {}, '手改坏的 / 上个版本留下的：回空，不抛')
+  assert.deepEqual(parseFavorites('[1,2]'), {}, '数组不是表')
+  assert.deepEqual(parseFavorites('"x"'), {}, '字符串不是表')
+  // 正常表：非字符串 / 空串 / 重复项都要被摘掉
+  assert.deepEqual(parseFavorites('{"/p":["a.png","a.png","",3,"b.mp4"]}'), { '/p': ['a.png', 'b.mp4'] })
+  assert.deepEqual(parseFavorites('{"/p":[]}'), {}, '空数组不占一个键')
+  assert.deepEqual(parseFavorites('{"/p":"a.png"}'), {}, '值不是数组 ⇒ 丢掉整个键')
+})
+
+test('收藏（纯）：加 / 取消返回新数组，不改入参；新加的在最前', () => {
+  const { toggleFavoriteList } = loadClientModule().exports.__test
+  const before = ['a.png']
+  const added = toggleFavoriteList(before, 'b.mp4')
+  assert.deepEqual(added, ['b.mp4', 'a.png'], '新加的排最前（同一次会话里立刻可见）')
+  assert.deepEqual(before, ['a.png'], '不许改入参（React 状态要新引用才会重渲染）')
+  assert.deepEqual(toggleFavoriteList(added, 'a.png'), ['b.mp4'], '再点一次＝取消')
+  assert.deepEqual(toggleFavoriteList(['a.png'], 'a.png'), [])
+  assert.deepEqual(toggleFavoriteList(undefined, 'a.png'), ['a.png'], '没有历史时也能加')
+  assert.deepEqual(toggleFavoriteList(['a.png'], ''), ['a.png'], '空 rel 不动（不许写进一个空条目）')
+})
+
+test('收藏（纯）：收藏的排最前，且两组内部**都保持原有顺序**（不是重新排序）', () => {
+  const { orderFavorites } = loadClientModule().exports.__test
+  const docs = [
+    { rel: 'a.png' }, { rel: 'b.png' }, { rel: 'c.png' }, { rel: 'd.mp4' }, { rel: 'e.png' },
+  ]
+  const ordered = orderFavorites(docs, ['d.mp4', 'b.png'])
+  assert.deepEqual(ordered.map((d) => d.rel), ['b.png', 'd.mp4', 'a.png', 'c.png', 'e.png'],
+    '收藏的两个前移（按**原顺序** b 在 d 前，而不是按收藏顺序），其余原样跟随')
+  assert.equal(orderFavorites(docs, ['b.png'])[0].rel, 'b.png')
+  assert.equal(orderFavorites(docs, []), docs, '没有收藏时**原样返回同一个数组**（省一次重渲染）')
+  assert.deepEqual(orderFavorites([], ['a']), [], '空列表不炸')
+  assert.deepEqual(orderFavorites(null, ['a']), [], '畸形输入不炸')
+  // 新引用的 Set 与数组两种入参都要认
+  assert.equal(orderFavorites(docs, new Set(['e.png']))[0].rel, 'e.png')
+})
+
+/** 打开媒体档并把预览打开到第一张（收藏按钮的宿主）。 */
+
+test('收藏：媒体网格里收藏的排最前，并在名字前带 ★', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody, FAV_KEY } = loadClientModule().exports.__test
+  // 载荷里 a.png 在前、demo.mp4 在后 ⇒ 把**后面那个**收藏，它就该跑到第一格
+  globalThis.window.localStorage.setItem(FAV_KEY, JSON.stringify({ '/p': ['demo.mp4'] }))
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  // ⚠️ 再 flush 一次：收藏那条 effect 依赖 `state.root`，而根是**异步**到手的 ——
+  //    第一次 render 时它还是空串。替身只在 flush 里跑 effect，少这一下就等于没加载。
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const order = byClass(nodes, 'knit-media-card').map((n) => n.props['data-knit-rel'])
+  assert.deepEqual(order, ['demo.mp4', 'a.png'], '收藏的排最前；没有收藏的按原顺序跟在后面')
+  const stars = byExactClass(nodes, 'knit-fav')
+  assert.equal(stars.length, 1, '只有收藏的那一张带 ★')
+  assert.equal(textOf(stars[0]), '★')
+})
+
+test('收藏：**全屏查看器**里有「收藏」按钮（预览头那条路已随单击预览一起撤掉），点一下就变成「已收藏」并落盘', async () => {
+  const { FAV_KEY } = loadClientModule().exports.__test
+  // 用查看器自己的挂载助手：双击第 1 张图 ⇒ 查看器里必须能找到「收藏」
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 0)
+  const labels = byClass(nodes, 'knit-btn').map(textOf)
+  assert.ok(labels.includes('收藏'), `查看器工具条应有「收藏」：${labels.join(' / ')}`)
+
+  const btn = byClass(nodes, 'knit-btn').find((n) => textOf(n) === '收藏')
+  btn.props.onClick()
+  const after = render()
+  const nowLabels = byClass(after, 'knit-btn').map(textOf)
+  assert.ok(nowLabels.includes('已收藏'), `点过之后应显示「已收藏」：${nowLabels.join(' / ')}`)
+  assert.ok(!nowLabels.includes('收藏'), '两个状态不许同时出现')
+  // 落盘：同一个工作区下记了这张
+  const saved = JSON.parse(globalThis.window.localStorage.getItem(FAV_KEY) || '{}')
+  assert.deepEqual(saved['/p'], ['m0.png'], '按工作区根存，记的就是查看器里这张')
+
+  // 再点一次＝取消（收藏能撤回，不是单向操作）
+  byClass(after, 'knit-btn').find((n) => textOf(n) === '已收藏').props.onClick()
+  const third = render()
+  assert.ok(byClass(third, 'knit-btn').map(textOf).includes('收藏'), '取消后回到「收藏」')
+  assert.deepEqual(JSON.parse(globalThis.window.localStorage.getItem(FAV_KEY) || '{}'), {}, '取消后不留下空数组')
+})
+
+test('收藏：**文档档**没有这个按钮（「收藏」是媒体专属，别和 Context Pack 的「固定」混）', async () => {
+  installFetch(kindResponder({ doc: listPayload() }))
+  const { nodes } = await openPreviewForFind()
+  const labels = byClass(nodes, 'knit-btn').map(textOf)
+  assert.ok(!labels.includes('收藏') && !labels.includes('已收藏'),
+    `文档预览头不该有收藏：${labels.join(' / ')}`)
+})
+
+/* ── v0.25：对话里「工具产出」的图（媒体档）────────────────────────────────
+   数据来自独立接口 `/api/attachments`；字节按 **sha256** 取。去重在工作区那一侧做
+   （宿主按内容哈希判断「已经在本地了」），所以这里只钉 UI 与接线。 */
+
+/** 一条附件载荷（宿主 `/api/attachments` 的 `items[]` 形状）。 */
+function attachmentFixture(overrides = {}) {
+  return {
+    id: 'sha256:' + 'a'.repeat(64),
+    name: 'D1_测试生成.png',
+    mediaType: 'image/png',
+    kind: 'image',
+    width: 64,
+    height: 64,
+    bytes: 1024,
+    at: Date.now() - 60000,
+    ...overrides,
+  }
+}
+
+test('对话图：媒体档把它和文件混排，带「对话」标记，src 指向附件路由（不是 raw）', async () => {
+  const items = [attachmentFixture()]
+  const { calls } = installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'a.png', title: 'a', text: '', truncated: false }
+      : mediaPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.ok(calls.some((u) => u.includes('/api/attachments')), '媒体档要取一次附件列表')
+  const rels = byClass(nodes, 'knit-media-card').map((n) => n.props['data-knit-rel'])
+  // v0.25（2026-10-22）：媒体档**只按时间倒序**（不再看相关性）。载荷里 a.png 是 60 秒前、
+  // demo.mp4 是 9 亿毫秒前 ⇒ 文件之间就是 [a.png, demo.mp4]；对话图的时间由夹具给（更早），
+  // 所以它排在 a.png 后面 —— 这条钉的是「同一条时间轴上合并」，不是「对话图永远第一」。
+  assert.deepEqual(rels, ['a.png', items[0].id, 'demo.mp4'],
+    `顺序：按时间倒序，对话图与文件在同一条时间轴上；实际 ${rels.join(' / ')}`)
+
+  const marks = byExactClass(nodes, 'knit-conv').map(textOf)
+  assert.deepEqual(marks, ['对话'], '对话里生成的图带一个「对话」标记（文字，承担信息）')
+
+  const imgs = byClass(nodes, 'knit-thumb').flatMap((n) => (n.children || []).filter((c) => c && c.type === 'img'))
+  const srcs = imgs.map((n) => String(n.props.src))
+  assert.ok(srcs.some((u) => u.includes('/api/attachment?') && u.includes(encodeURIComponent(items[0].id))),
+    `对话图的 src 必须走附件路由（只带 sha256）：${srcs.join(' | ')}`)
+  assert.ok(srcs.some((u) => u.includes('/api/raw?')), '文件图仍然走 /api/raw（没有改动既有路径）')
+})
+
+test('对话图：文档档**不取**附件列表，也不出现「对话」标记（这条只在媒体档）', async () => {
+  const { calls } = installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items: [attachmentFixture()] }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x.md', title: 'x', text: '正文', truncated: false }
+      : listPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.ok(!calls.some((u) => u.includes('/api/attachments')), '文档档不该打这个请求')
+  assert.equal(byExactClass(nodes, 'knit-conv').length, 0, '文档档不该有「对话」标记')
+})
+
+test('对话图：接口失败/老宿主没有这条路由 ⇒ 静默（文件列表照常，不弹错）', async () => {
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: false, code: 'knit/not-found-route' }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'a.png', title: 'a', text: '', truncated: false }
+      : mediaPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const rels = byClass(nodes, 'knit-media-card').map((n) => n.props['data-knit-rel'])
+  assert.deepEqual(rels, ['a.png', 'demo.mp4'], '附件取不到 ⇒ 只显示文件，不空屏、不报错')
+  assert.equal(byExactClass(nodes, 'knit-conv').length, 0)
+})
+
+/* ── v0.25：媒体档「悬停看大图」──────────────────────────────────────────
+   用户要「鼠标停在图片上弹个大图，默认 800×800」。
+   **800 是上限不是尺寸** —— 面板只有几百像素宽，所以盒子按可用空间收缩，
+   这一段把几何（纯函数）与交互（延迟 / 离开 / 只对图片 / 滚动收起）都钉住。 */
+
+test('悬停大图（纯）：边长按 `HOVER_SHOT_MAX` 封顶，按可用空间收缩，且优先摆在卡片左侧', () => {
+  const { hoverShotBox, HOVER_SHOT_MAX } = loadClientModule().exports.__test
+  const view = { width: 1440, height: 900 }
+  // 卡片在右侧面板里（left=1000），左边有一大片空间 ⇒ 摆在左侧、且不超过 800
+  const box = hoverShotBox({ left: 1000, top: 300, width: 200, height: 140 }, view)
+  assert.equal(box.side, 'left', '面板在右边 ⇒ 浮窗往左让，不压住网格')
+  assert.ok(box.width <= HOVER_SHOT_MAX && box.height <= HOVER_SHOT_MAX, `不许超过上限 ${HOVER_SHOT_MAX}：${box.width}×${box.height}`)
+  assert.ok(box.left + box.width <= 1000, '不许压到卡片')
+  assert.ok(box.left >= 12, '不许出视口左边')
+  // 垂直：**放得下就居中，放不下就夹进视口**（800 高的盒子没法整块塞进一条低卡片的中线里）
+  assert.ok(box.top >= 12 && box.top + box.height <= view.height - 12, '垂直方向必须夹在视口内')
+  const tall = hoverShotBox({ left: 1000, top: 400, width: 200, height: 140 }, view)
+  assert.equal(tall.top + tall.height / 2, 400 + 70, '放得下时中线对齐卡片')
+
+  // 左边没地方 ⇒ 翻到右边
+  const flipped = hoverShotBox({ left: 20, top: 40, width: 200, height: 100 }, view)
+  assert.equal(flipped.side, 'right')
+  assert.ok(flipped.left >= 20 + 200, '翻到右边时不许压住卡片')
+  assert.ok(flipped.left + flipped.width <= view.width - 12, '不许出视口右边')
+
+  // 窄视口 ⇒ 盒子跟着变小（不是硬撑 800）
+  const tiny = hoverShotBox({ left: 300, top: 100, width: 120, height: 90 }, { width: 360, height: 640 })
+  assert.ok(tiny.width <= 360 - 24, `窄视口要收缩：${tiny.width}`)
+  assert.ok(tiny.left >= 12 && tiny.left + tiny.width <= 360 - 12)
+
+  // 拿不到卡片矩形（替身 / 事件不带 currentTarget）⇒ 视口居中，仍然守 800
+  const noRect = hoverShotBox(null, view)
+  assert.ok(noRect.width <= HOVER_SHOT_MAX && noRect.height <= HOVER_SHOT_MAX)
+  assert.ok(Math.abs(noRect.left + noRect.width / 2 - view.width / 2) <= 1, '没有矩形就居中')
+})
+
+test('悬停大图：停一下才出现（不许鼠标扫过就闪），离开即收', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const card = byClass(nodes, 'knit-media-card')[0]
+  assert.equal(typeof card.props.onMouseEnter, 'function', '媒体卡片要能感知悬停')
+  card.props.onMouseEnter({ currentTarget: null })
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '刚移上去不该立刻弹（会闪）')
+
+  harness.tick()   // 替身没有时间概念：把挂起的定时器跑掉 = 延迟到了
+  nodes = render()
+  const shot = byExactClass(nodes, 'knit-shot')
+  assert.equal(shot.length, 1, '延迟到了才出现')
+  const img = (shot[0].children || []).find((c) => c && c.type === 'img')
+  assert.ok(img, '浮窗里是一张图')
+  assert.match(String(img.props.src), /\/api\/raw\?.*a\.png/, `src 应指向这张图：${img.props.src}`)
+  assert.equal(img.props.alt, '', '纯装饰，alt 留空（文件名在卡片上已经有了）')
+
+  // 移开：立刻收回
+  byClass(nodes, 'knit-media-card')[0].props.onMouseLeave()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '移开就收')
+})
+
+test('悬停大图：没停够就移开 ⇒ 一次都不出现（不许闪一下）', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const card = byClass(nodes, 'knit-media-card')[0]
+  card.props.onMouseEnter({ currentTarget: null })
+  card.props.onMouseLeave()                      // 还没到点就移开
+  harness.tick()                                 // 就算定时器还在，也不该弹
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0)
+})
+
+test('悬停大图：只对图片 —— 视频卡片不弹（视频交给点击预览）', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const video = byClass(nodes, 'knit-media-card').find((n) => String(n.props['data-knit-rel']).endsWith('.mp4'))
+  assert.ok(video, '载荷里应有视频卡片')
+  video.props.onMouseEnter({ currentTarget: null })
+  harness.tick()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '视频不弹悬停大图')
+})
+
+test('悬停大图：滚动列表就收起（fixed 定位不会跟着卡片走，留着就是错位）', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  byClass(nodes, 'knit-media-card')[0].props.onMouseEnter({ currentTarget: null })
+  harness.tick()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 1, '前提：它已经弹出来了')
+
+  const list = byExactClass(nodes, 'knit-list')[0]
+  assert.equal(typeof list.props.onScroll, 'function', '列表要能感知滚动')
+  list.props.onScroll()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '一滚就收')
+})
+
+test('悬停大图：对话里生成的图走**附件地址**（不是 /api/raw）', async () => {
+  const items = [attachmentFixture()]
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x', title: 'x', text: '', truncated: false }
+      : mediaPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const conv = byClass(nodes, 'knit-media-card').find((n) => n.props['data-knit-rel'] === items[0].id)
+  assert.ok(conv, '前提：对话图在网格里')
+  conv.props.onMouseEnter({ currentTarget: null })
+  harness.tick()
+  nodes = render()
+  const shot = byExactClass(nodes, 'knit-shot')[0]
+  assert.ok(shot, '对话图也要能悬停看大图')
+  const img = (shot.children || []).find((c) => c && c.type === 'img')
+  assert.match(String(img.props.src), /\/api\/attachment\?/, `应走附件路由：${img.props.src}`)
+  assert.ok(String(img.props.src).includes(encodeURIComponent(items[0].id)), '只带 sha256')
+})
+
+test('悬停大图：CSS 必须 pointer-events:none（只许看一眼，不许挡点击），且与入口浮窗同一层级', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start)).replace(/\/\*[\s\S]*?\*\//g, '')
+  const box = css.match(/\.knit-shot\{([^}]*)\}/)
+  assert.ok(box, '应有 .knit-shot 的样式')
+  assert.match(box[1], /position:fixed/, 'fixed：不参与面板布局')
+  assert.match(box[1], /pointer-events:none/, '不许挡住卡片的点击与双击')
+  assert.match(box[1], /z-index:60/, '与入口浮窗（.knit-peek）同一层级，别自己拍一个')
+  const img = css.match(/\.knit-shot img\{([^}]*)\}/)
+  assert.ok(img, '应有图的样式')
+  assert.match(img[1], /object-fit:contain/, '等比铺满盒子，不许裁切变形')
+})
+
+/* ── v0.25（2026-10-22 用户裁决）：媒体档**只看时间**，文档/代码才看相关性 ─────────
+   原话：「媒体这里不用跟随 Agent 读了它进行排序，目前就是以上传时间排序就可以，
+   最新的放在前面就够了……文档可以是调用，但是图片不需要有这种逻辑」。 */
+
+test('媒体档排序：请求**一律 time**（不看「相关」偏好）；切回文档档照旧听偏好', async () => {
+  const { calls } = installFetch(kindResponder({ media: mediaPayload(), doc: listPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  const mount = async (seed) => {
+    harness.reset()
+    harness.seed(seed)
+    let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+    await harness.flush()
+    return harness.render(h(KnitBody, { sessionId: 's1' }))
+  }
+  // 偏好 = 相关 + 媒体档
+  await mount(['', 'relevance', 'media'])
+  const mediaUrls = calls.filter((u) => u.includes('kind=media'))
+  assert.ok(mediaUrls.length > 0, '媒体档应该发过列表请求')
+  assert.ok(mediaUrls.every((u) => u.includes('sort=time')),
+    `媒体档必须请求时间序（宿主就不做无用的相关度计算）：${mediaUrls.join(' | ')}`)
+
+  // 偏好 = 相关 + 文档档 ⇒ 仍然按相关（这条保证「只改媒体档」）
+  await mount(['', 'relevance', 'doc'])
+  const docUrls = calls.filter((u) => u.includes('kind=doc'))
+  assert.ok(docUrls.some((u) => u.includes('sort=relevance')),
+    `文档档不该被这条改动影响：${docUrls.join(' | ')}`)
+})
+
+test('媒体档排序：网格**按时间倒序**，宿主给的顺序乱了也要自己排（对话图在同一条时间轴上）', async () => {
+  // 故意把载荷顺序打乱：老的放前面
+  const payload = mediaPayload()
+  const reversed = mediaPayload({ docs: [payload.docs[1], payload.docs[0]] })
+  installFetch(kindResponder({ media: reversed }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'relevance', 'media'])   // 偏好是「相关」，也不许影响媒体档
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const rels = byClass(nodes, 'knit-media-card').map((n) => n.props['data-knit-rel'])
+  assert.deepEqual(rels, ['a.png', 'demo.mp4'],
+    `最新在前（a.png 是 60 秒前、demo.mp4 是 9 亿毫秒前）；实际 ${rels.join(' / ')}`)
+})
+
+test('媒体档排序：那一组按钮**禁用**并如实显示「最新」在生效（偏好本身不丢）', async () => {
+  installFetch(kindResponder({ media: mediaPayload(), doc: listPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  const mount = async (seed) => {
+    harness.reset()
+    harness.seed(seed)
+    let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+    await harness.flush()
+    return harness.render(h(KnitBody, { sessionId: 's1' }))
+  }
+  // 媒体档：按钮禁用，且「最新」显示为生效（不是存着的「相关」）
+  const media = await mount(['', 'relevance', 'media'])
+  const segs = byClass(media, 'knit-seg-btn')
+  assert.equal(segs.length, 2, '排序组仍是两个按钮（不删控件、布局不跳）')
+  assert.ok(segs.every((b) => b.props.disabled === true), '媒体档里这组必须禁用')
+  const active = segs.filter((b) => String(b.props.className).includes('active')).map(textOf)
+  assert.deepEqual(active, ['最新'], `生效的是「最新」，不该显示「相关」：${active.join(' / ')}`)
+  assert.match(String(segs[0].props.title), /图片一律按时间排序/, '悬停要解释为什么不能点')
+
+  // 文档档：恢复可用，且按偏好显示「相关」
+  const doc = await mount(['', 'relevance', 'doc'])
+  const docSegs = byClass(doc, 'knit-seg-btn')
+  assert.ok(docSegs.every((b) => b.props.disabled !== true), '文档档不禁用')
+  assert.deepEqual(docSegs.filter((b) => String(b.props.className).includes('active')).map(textOf), ['相关'])
+})
+
+/* ── v0.25：媒体档「双击全屏」查看器（2026-10-22，参照用户给的 Codex 截图）────
+   用户要的三件事：双击进全屏 / 点图片以外关闭 / 左侧一列「近 10 张」缩略图；
+   另加：图片以外是毛玻璃且随主题变、←→ 翻页。 */
+
+test('全屏查看器（纯）：左侧带子取「当前这张附近」的 10 张，两头夹紧', () => {
+  const { lightboxRail, LIGHTBOX_RAIL } = loadClientModule().exports.__test
+  const docs = Array.from({ length: 30 }, (_, i) => ({ rel: `p${i}.png` }))
+  const ids = (r) => r.items.map((d) => d.rel)
+
+  const mid = lightboxRail(docs, 15)
+  assert.equal(mid.items.length, LIGHTBOX_RAIL, `最多 ${LIGHTBOX_RAIL} 张`)
+  assert.ok(ids(mid).includes('p15.png'), '当前这张必须在带子里（不然导航断在画面外）')
+  assert.equal(mid.start, 11, '前面留 4 张（偏「刚看过的」）')
+
+  // 头尾夹紧：第 0 张前面没有 4 张可留；第 29 张后面没有了
+  assert.equal(lightboxRail(docs, 0).start, 0)
+  assert.deepEqual(ids(lightboxRail(docs, 0)).slice(0, 2), ['p0.png', 'p1.png'])
+  const tail = lightboxRail(docs, 29)
+  assert.equal(tail.start, 30 - LIGHTBOX_RAIL, '到尾部时带子往前顶，正好铺满 10 张')
+  assert.ok(ids(tail).includes('p29.png'))
+
+  // 少于 10 张：全给
+  assert.deepEqual(ids(lightboxRail(docs.slice(0, 3), 1)), ['p0.png', 'p1.png', 'p2.png'])
+  // 空 / 畸形
+  assert.deepEqual(lightboxRail([], 0).items, [])
+  assert.deepEqual(lightboxRail(null, 3).items, [])
+  // 可注入上限（测试与将来的「显示几张」共用一条）
+  assert.equal(lightboxRail(docs, 15, { size: 4 }).items.length, 4)
+})
+
+/** 造一份 14 张图 + 1 个视频的媒体载荷（为了验「带子最多 10 张」）。 */
+function manyMediaPayload() {
+  const now = Date.now()
+  const docs = Array.from({ length: 14 }, (_, i) => ({
+    path: `/p/m${i}.png`, rel: `m${i}.png`, name: `m${i}.png`, title: `m${i}`,
+    kind: 'image', summary: '', size: 1000 + i, mtimeMs: now - i * 60000, score: null,
+  }))
+  docs.push({
+    path: '/p/v.mp4', rel: 'v.mp4', name: 'v.mp4', title: 'v',
+    kind: 'video', summary: '', size: 9000, mtimeMs: now - 9e7, score: null,
+  })
+  return { ok: true, root: '/p', total: docs.length, mode: 'time', topic: '', kind: 'media', docs }
+}
+
+/** 挂到媒体档并双击第 n 张图，返回渲染节点与重渲染函数。 */
+async function mountLightbox(payload, openIndex = 0) {
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items: [] }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x', title: 'x', text: '', truncated: false }
+      : payload))
+  const { KnitBody } = loadClientModule().exports.__test
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  const card = byClass(nodes, 'knit-media-card').filter((n) => String(n.props['data-knit-rel']).endsWith('.png'))[openIndex]
+  assert.ok(card, '前提：有图片卡片')
+  card.props.onDoubleClick()
+  return { nodes: render(), render }
+}
+
+test('全屏查看器：双击图片就打开；图与带子都在，带子里最多 10 张且含当前这张', async () => {
+  const payload = manyMediaPayload()
+  const { nodes } = await mountLightbox(payload, 2)
+  const box = byExactClass(nodes, 'knit-lightbox')
+  assert.equal(box.length, 1, '双击应打开查看器')
+  assert.equal(box[0].props.role, 'dialog')
+  assert.equal(box[0].props['aria-modal'], 'true')
+
+  const img = byExactClass(nodes, 'knit-lightbox-img')[0]
+  assert.ok(img, '应有一张放大的图')
+  assert.match(String(img.props.src), /\/api\/raw\?.*m2\.png/, `打开的是双击的那张：${img.props.src}`)
+
+  // ⚠️ 用 byClass（子串）而不是 byExactClass：当前那张的 class 是「knit-lightbox-thumb active」，
+  // 完全相等匹配会把它排除在外 —— 于是「一张 active 都没有」看起来像代码 bug，其实是断言写错。
+  const thumbs = byClass(nodes, 'knit-lightbox-thumb')
+  assert.ok(thumbs.length > 0 && thumbs.length <= 10, `带子最多 10 张：${thumbs.length}`)
+  const active = thumbs.filter((t) => String(t.props.className).includes('active'))
+  assert.equal(active.length, 1, '带子里正好一张是「当前」')
+  assert.match(String(active[0].props.title), /m2\.png/, '当前那张的缩略图被标出来')
+})
+
+test('全屏查看器：点**图片以外**关闭；点图片本身不关（否则想看清细节就点没了）', async () => {
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 0)
+  assert.equal(byExactClass(nodes, 'knit-lightbox').length, 1, '前提：开着')
+
+  // 点图片本身：它的 handler 只做 stopPropagation，不许关
+  const img = byExactClass(nodes, 'knit-lightbox-img')[0]
+  let stopped = 0
+  img.props.onClick({ stopPropagation: () => { stopped += 1 } })
+  assert.equal(stopped, 1, '点图片必须 stopPropagation（冒泡到遮罩就关了）')
+  assert.equal(byExactClass(render(), 'knit-lightbox').length, 1, '还开着')
+
+  // 点遮罩（图片以外）：关
+  byExactClass(nodes, 'knit-lightbox')[0].props.onClick()
+  assert.equal(byExactClass(render(), 'knit-lightbox').length, 0, '点图片以外应关闭')
+})
+
+test('全屏查看器：点左侧缩略图换图（且不冒泡去关）', async () => {
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 0)
+  const thumbs = byClass(nodes, 'knit-lightbox-thumb')
+  assert.ok(thumbs.length >= 2, '前提：带子里至少两张')
+
+  let stopped = 0
+  const rail = byExactClass(nodes, 'knit-lightbox-rail')[0]
+  rail.props.onClick({ stopPropagation: () => { stopped += 1 } })
+  assert.equal(stopped, 1, '点带子不许冒泡去关')
+
+  thumbs[1].props.onClick()
+  const after = render()
+  assert.equal(byExactClass(after, 'knit-lightbox').length, 1, '换图不该关掉')
+  const img = byExactClass(after, 'knit-lightbox-img')[0]
+  const expect = String(thumbs[1].props.title)
+  assert.ok(String(img.props.src).includes(encodeURIComponent(expect.replace('/p/', ''))) || String(img.props.src).includes(expect),
+    `换成了第二张：${img.props.src}`)
+})
+
+test('全屏查看器：Esc 关、← → 翻页（键盘归它，不许漏到列表导航）', async () => {
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 3)
+  // 每次都取**当前这次渲染**的根节点：真实界面里事件处理器每次渲染都是新的
+  const rootOf = (n) => byClass(n, 'knit-root')[0]
+  const key = (name) => {
+    const calls = { prevented: 0, stopped: 0 }
+    return [{
+      key: name, preventDefault: () => { calls.prevented += 1 }, stopPropagation: () => { calls.stopped += 1 },
+    }, calls]
+  }
+  // → 翻到下一张
+  const [right, rCalls] = key('ArrowRight')
+  rootOf(nodes).props.onKeyDownCapture(right)
+  assert.equal(rCalls.prevented, 1, '必须拦下（否则列表的键盘导航也跟着动）')
+  let after = render()
+  const img = byExactClass(after, 'knit-lightbox-img')[0]
+  assert.match(String(img.props.src), /m4\.png/, `→ 应换成下一张（列表是 m0,m1,m2,m3,m4…；当前 m3）：${img.props.src}`)
+
+  // ← 回到上一张
+  const [left] = key('ArrowLeft')
+  rootOf(after).props.onKeyDownCapture(left)
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '← 应回去')
+
+  // Esc 关
+  const [esc, eCalls] = key('Escape')
+  rootOf(after).props.onKeyDownCapture(esc)
+  assert.equal(eCalls.stopped, 1, 'Esc 必须 stopPropagation（否则列表也会跟着关预览）')
+  assert.equal(byExactClass(render(), 'knit-lightbox').length, 0, 'Esc 应关闭')
+})
+
+test('全屏查看器：**视频**双击不走这里（仍开新标签页）—— 视频没有「全屏看一张图」这个语义', async () => {
+  const payload = manyMediaPayload()
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items: [] }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x', title: 'x', text: '', truncated: false }
+      : payload))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  const video = byClass(nodes, 'knit-media-card').find((n) => String(n.props['data-knit-rel']).endsWith('.mp4'))
+  assert.ok(video, '前提：有视频卡片')
+  video.props.onDoubleClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(nodes, 'knit-lightbox').length, 0, '视频不该打开查看器')
+})
+
+test('全屏查看器：毛玻璃**随主题**（两套遮罩都定义），且图片以外的区域才可点关闭', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start))
+
+  const scrims = [...css.matchAll(/--knit-scrim:([^;]+);/g)].map((m) => m[1].trim())
+  assert.equal(scrims.length, 2, `浅色 / 深色各一套遮罩，实际 ${scrims.length} 套`)
+  assert.match(scrims[0], /^rgba\(255,255,255,/, '浅色：半透明白')
+  assert.match(scrims[1], /^rgba\(/, '深色：半透明（近黑）')
+  assert.notEqual(scrims[0], scrims[1], '两套必须不同 —— 否则「随深色模式变化」是假的')
+
+  const box = css.match(/\.knit-lightbox\{([^}]*)\}/)
+  assert.ok(box, '应有 .knit-lightbox 的样式')
+  assert.match(box[1], /position:fixed/, '整窗遮罩')
+  assert.match(box[1], /background:var\(--knit-scrim\)/, '底色吃遮罩变量（这样才随主题）')
+  assert.match(box[1], /backdrop-filter:blur\(/, '毛玻璃：必须真的模糊背后的内容')
+  assert.match(box[1], /z-index:\d{6,}/, '必须是**模态级**层级：70 那一档压不住宿主自己的侧栏与对话（用户实测只盖住了面板那一块）')
+  const img = css.match(/\.knit-lightbox-img\{([^}]*)\}/)
+  assert.ok(img, '应有放大图的样式')
+  assert.match(img[1], /object-fit:contain/, '等比铺满，不裁切')
+  assert.match(img[1], /cursor:default/, '图片本身不是「点一下关闭」的抓手')
+})
+
+test('全屏查看器（纯）：能 portal 就 portal 到 document.body —— 否则 fixed 被侧栏的 transform 困住', () => {
+  const { mountLightbox } = loadClientModule().exports.__test
+  const node = { type: 'div', props: { className: 'knit-lightbox' } }
+  const seen = []
+  const renderer = { createPortal: (n, target) => { seen.push({ n, target }); return { $$portal: n, target } } }
+  const body = { tag: 'body' }
+
+  const out = mountLightbox(node, { dom: { body }, renderer })
+  assert.equal(seen.length, 1, '有 document.body + createPortal ⇒ 必须走 portal')
+  assert.equal(seen[0].target, body, '挂载点是 document.body')
+  assert.ok(out.$$portal, '返回的是 portal 结果')
+
+  // 降级：没有 document（测试替身 / 老宿主）、没有 createPortal、portal 抛错 —— 一律原地渲染，不许白屏
+  assert.equal(mountLightbox(node, { dom: null, renderer }), node)
+  assert.equal(mountLightbox(node, { dom: { body }, renderer: null }), node)
+  assert.equal(mountLightbox(node, { dom: { body }, renderer: { createPortal: () => { throw new Error('boom') } } }), node,
+    'portal 抛错要降级成就地渲染')
+})
+
+test('全屏查看器：渲染**必须**走 mountLightbox（这条是「整屏」的机制，测试替身验不到只能用形状守）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  assert.ok(source.includes("mountLightbox(h('div', {"),
+    '查看器必须经 mountLightbox 挂载 —— 直接在 .knit-root 里渲染会退回「只盖住面板」')
+  assert.match(source, /createPortal\(node, dom\.body\)/, 'portal 的挂载点是 document.body')
+  // 遮罩变量必须挂在查看器自己身上：portal 之后它不在 .knit-root 里，读不到那层的变量
+  assert.ok(source.includes('--knit-scrim:rgba(255,255,255,.62);'),
+    '遮罩变量要定义在 .knit-lightbox 上（不是 .knit-root）')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start))
+  assert.ok(css.includes('body[data-ds-dark-theme] .knit-lightbox'), '深色模式要在**全局选择器**上覆盖（portal 之后没有 .knit-root 可依赖）')
+  // `.knit-root` 那一层不许再声明遮罩（否则两处真源，哪天漂了没人知道）
+  const rootRule = css.match(/\.knit-root\{([^}]*)\}/)
+  assert.ok(rootRule && !rootRule[1].includes('--knit-scrim'), '--knit-scrim 只许有一处真源（.knit-lightbox）')
+})
+
+test('全屏查看器：右上角有 ✕（照 DSH 自带查看器 —— 全屏之后必须有看得见的出口）', async () => {
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items: [] }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x', title: 'x', text: '', truncated: false }
+      : manyMediaPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  byClass(nodes, 'knit-media-card')[0].props.onDoubleClick()
+  nodes = render()
+
+  const close = byExactClass(nodes, 'knit-lightbox-close')
+  assert.equal(close.length, 1, '应有一个关闭按钮')
+  // ⚠️ 必须是 <button>：换成 span 看着一样，但键盘 Tab 不到、读屏也不当按钮 ——
+  // 这条是证伪时发现「只查类名不查元素类型」会漏掉的真回归。
+  assert.equal(close[0].type, 'button', '必须是真的 <button>（可聚焦、可读屏）')
+  assert.equal(textOf(close[0]).trim(), '✕', '按钮上就是 ✕（和宿主那个一致）')
+  assert.match(String(close[0].props.title), /Esc/, '悬停提示要告诉人还有 Esc 这条路')
+  assert.ok(close[0].props['aria-label'], '要有 aria-label（读屏用户靠它）')
+
+  close[0].props.onClick()
+  assert.equal(byExactClass(render(), 'knit-lightbox').length, 0, '点 ✕ 应关闭')
+
+  // CSS：右上角、可点、悬停有反馈
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  const start = source.indexOf('const CSS = `') + 'const CSS = `'.length
+  const css = source.slice(start, source.indexOf('`', start))
+  const rule = css.match(/\.knit-lightbox-close\{([^}]*)\}/)
+  assert.ok(rule, '应有 .knit-lightbox-close 的样式')
+  assert.match(rule[1], /position:absolute/, '定位在遮罩里')
+  assert.match(rule[1], /top:/, '靠上')
+  assert.match(rule[1], /right:/, '靠右')
+  assert.match(rule[1], /cursor:pointer/, '要让人知道能点')
+  assert.ok(/\.knit-lightbox-close:hover\{/.test(css), '悬停要有反馈')
+})
+
+test('键盘：媒体档 ↑↓ 只移光标不弹预览；Enter 在图片上进查看器、在视频上就地预览', async () => {
+  installFetch(kindResponder({ media: mediaPayload() }))
+  const { KnitBody } = loadClientModule().exports.__test
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  const listOf = (n) => byExactClass(n, 'knit-list')[0]
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  // ↓：光标往下走，但**不弹预览**（2026-10-22 用户裁决）
+  listOf(nodes).props.onKeyDown({ key: 'ArrowDown', preventDefault() {} })
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-preview').length, 0, '方向键不许弹就地预览')
+  assert.ok(String(byClass(nodes, 'knit-media-card')[1].props.className).includes('cursor'), '光标应移到第二张')
+
+  // ↑ 回到第一张（图片），Enter ⇒ 全屏查看器
+  listOf(nodes).props.onKeyDown({ key: 'ArrowUp', preventDefault() {} })
+  nodes = render()
+  listOf(nodes).props.onKeyDown({ key: 'Enter', preventDefault() {} })
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-lightbox').length, 1, '图片上 Enter 应进查看器')
+  assert.equal(byExactClass(nodes, 'knit-preview').length, 0, '而不是弹就地预览')
+
+  // 关掉查看器，移到视频上按 Enter ⇒ 就地预览（视频只能这么看）
+  byExactClass(nodes, 'knit-lightbox-close')[0].props.onClick()
+  nodes = render()
+  listOf(nodes).props.onKeyDown({ key: 'ArrowDown', preventDefault() {} })
+  nodes = render()
+  listOf(nodes).props.onKeyDown({ key: 'Enter', preventDefault() {} })
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-preview').length, 1, '视频上 Enter 应就地预览')
+  assert.equal(byClass(nodes, 'knit-preview-media').length, 1, '而且是播放器那个预览体')
+  assert.equal(byExactClass(nodes, 'knit-lightbox').length, 0, '视频不该进查看器')
+})
+
+test('查看器：对话里生成的图**没有**「收藏 / 本地打开」（它还没有工作区路径，别给死按钮）', async () => {
+  const items = [attachmentFixture()]
+  installFetch((url) => (url.includes('/api/attachments')
+    ? { ok: true, items }
+    : url.includes('/api/doc')
+      ? { ok: true, rel: 'x', title: 'x', text: '', truncated: false }
+      : mediaPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  const render = () => harness.render(h(KnitBody, { sessionId: 's1' }))
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = render()
+  await harness.flush()
+  nodes = render()
+  await harness.flush()
+  nodes = render()
+
+  const conv = byClass(nodes, 'knit-media-card').find((n) => n.props['data-knit-rel'] === items[0].id)
+  assert.ok(conv, '前提：对话图在网格里')
+  conv.props.onDoubleClick()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-lightbox').length, 1, '对话图也能全屏看')
+  const labels = byClass(nodes, 'knit-btn').map(textOf)
+  assert.ok(!labels.includes('收藏'), `对话图不该有「收藏」：${labels.join(' / ')}`)
+  assert.ok(!labels.includes('本地打开'), `对话图不该有「本地打开」：${labels.join(' / ')}`)
+  assert.equal(byExactClass(nodes, 'knit-lightbox-close').length, 1, '但关闭按钮必须在')
+})
+
+test('查看器：**↑↓ 也能翻页**（左列是竖的），滚轮在图片区翻页、但不抢左列的滚动', async () => {
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 3)
+  const rootOf = (n) => byClass(n, 'knit-root')[0]
+  const key = (name) => ({ key: name, preventDefault() {}, stopPropagation() {} })
+
+  // ↓ = 下一张（与 → 等价）
+  rootOf(nodes).props.onKeyDownCapture(key('ArrowDown'))
+  let after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m4\.png/, '↓ 应到下一张')
+
+  // ↑ = 上一张（与 ← 等价）
+  rootOf(after).props.onKeyDownCapture(key('ArrowUp'))
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '↑ 应回上一张')
+
+  // 滚轮：在图片区（stage）上滚 = 翻页
+  const stage = byExactClass(after, 'knit-lightbox-stage')[0]
+  assert.ok(stage, '应有图片区（stage）')
+  assert.equal(typeof stage.props.onWheel, 'function', '滚轮要能翻页')
+  stage.props.onWheel({ deltaY: 120 })
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m4\.png/, '往下滚 = 下一张')
+  stage.props.onWheel({ deltaY: -120 })
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '往上滚 = 上一张')
+  // delta 为 0 不许乱翻
+  const before = String(byExactClass(after, 'knit-lightbox-img')[0].props.src)
+  byExactClass(after, 'knit-lightbox-stage')[0].props.onWheel({ deltaY: 0 })
+  assert.equal(String(byExactClass(render(), 'knit-lightbox-img')[0].props.src), before, '零位移不许翻')
+
+  // 左列自己会滚 ⇒ 它上面**不许**挂翻页（否则「滚列表」变成「换图」）
+  const rail = byExactClass(after, 'knit-lightbox-rail')[0]
+  assert.equal(rail.props.onWheel, undefined, '滚轮在左列上应该滚列表，不许被翻页抢走')
+})
+
+test('查看器：换图时把当前缩略图滚进可视区（替身没有 DOM，这条只能守形状）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  /* ⚠️ 别只断言 `scrollIntoView({ block: 'nearest' })` —— 那个串在**预览查找**里早就有一处，
+     断言会被它「借」过去（第一版就是这么空转的，把 bug 放回去照样绿）。必须绑到 `active` 这一行。 */
+  assert.ok(source.includes("active.scrollIntoView({ block: 'nearest' })"),
+    '换图要把「当前那张」滚进视野（block:nearest —— 已在视野里就一格不动）')
+  assert.ok(source.includes("rail.querySelector('.knit-lightbox-thumb.active')"), '找的是「当前那张」')
+  assert.ok(source.includes("typeof rail.querySelector !== 'function'"), '没有 DOM（替身 / 老宿主）要能跳过')
 })

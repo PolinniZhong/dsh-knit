@@ -13,6 +13,7 @@
  *
  * 零模型、零网络出口：只读本地文件与会话日志。
  */
+import { createHash } from 'node:crypto'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { createReadStream, realpathSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -26,6 +27,11 @@ import { buildLinkGraph, extractRefsWithLines, linksOf } from './links.js'
 // v0.21：关系事实表（谁提到谁）。**同步、零 I/O** —— 只吃记录上现成的 `refs` / `head`。
 // v0.22 修法 ①：`importsOf` 同样提前到读盘时执行，结果进索引的 `refs.imports`。
 import { buildRelationFacts, importsOf } from './relations.js'
+// v0.25：对话里「工具产出」的图（在媒体档里显示）。它**是唯一读工作区之外**的地方，
+// 所以边界全在那个模块里写死：只认 sha256、只认本会话出现过的 id、只读那一个对象文件。
+import {
+  createAttachmentStore, isAttachmentId, objectPath, attachmentsRoot, dropSaved, MAX_ATTACHMENT_BYTES,
+} from './attachments.js'
 // v0.21：上下文控制层（固定 / 排除）。**纯逻辑 + 可选持久化**：本文件负责把
 // `ctx.storage`（拿得到才有）递给它，它自己不 import 任何官方包。
 import {
@@ -2631,6 +2637,74 @@ function sendMedia(req, res, info) {
 const feedbackStore = createStore()
 
 /**
+ * 本会话「工具产出的图」的登记簿（v0.25）。
+ *
+ * 内存里、有界、进程重启即失 —— 与 feedback 那一套同样只做**事实登记**，不落盘、不发请求。
+ */
+const attachmentStore = createAttachmentStore()
+
+/**
+ * 已经回填过附件的会话（每个会话只回填一次）。
+ *
+ * ⚠️ **这是本文件第 3 处调用 `session.snapshotEvents()`**（前两处：`rankByRelevance` 当检索输入、
+ * v0.17 的 `backfillFeedback`）。那个 API 已被 DSH 标 deprecated（「new production calls are prohibited」），
+ * 所以这里刻意照抄 v0.17 那条例外的三条边界：**一个会话只做一次、同步零 I/O、只读内存**，
+ * 失败一律吞掉（回填坏了不许带影响面板）。
+ *
+ * 为什么非要有它：只靠订阅的话，**插件启动之前**生成的图一条都收不到 —— 用户看到的是一个
+ * 永远空着的列表（`重启 DSH 前的历史全部消失`），那等于没做。
+ */
+const attachmentBackfilled = new Set()
+
+/**
+ * 一次性回填某会话已有的附件（幂等、有界、失败静默）。
+ * @param {object|undefined} session - 宿主会话
+ * @param {string} sessionId - 会话 id
+ * @returns {void}
+ */
+function backfillAttachments(session, sessionId) {
+  if (!sessionId || attachmentBackfilled.has(sessionId)) return
+  // ⚠️ 只有「请求里的 id」与「真的解析出这个会话」一致时才回填。
+  // 否则一个伪造的 sessionId 只要解析到**任意**会话，就能把那个会话的图登记到伪造 id 名下 ——
+  // 那等于绕过「读字节必须在本会话出现过」这条闸门。
+  if (!session || session.id !== sessionId) return
+  attachmentBackfilled.add(sessionId)
+  try {
+    if (typeof session.snapshotEvents !== 'function') return
+    const events = session.snapshotEvents() || []
+    for (const event of events) attachmentStore.note(sessionId, event)
+  } catch { /* 回填失败 = 少几张历史图，绝不影响面板 */ }
+}
+
+/** 测试用：清空附件登记簿与回填记账。 */
+export function resetAttachments() {
+  attachmentStore.reset()
+  attachmentBackfilled.clear()
+}
+
+/**
+ * 工作区内某个文件的 sha256（十六进制）。**越界一律不读**。
+ * @param {string} root - 工作区根
+ * @param {string} rel - 相对路径
+ * @returns {Promise<string>} 十六进制（读不到回空串）
+ */
+async function sha256OfRel(root, rel) {
+  try {
+    const base = resolve(root)
+    const abs = resolve(base, rel)
+    if (abs !== base && !abs.startsWith(base + sep)) return ''
+    const st = await stat(abs)
+    if (!st.isFile() || !(st.size > 0) || st.size > MAX_IMAGE_BYTES) return ''
+    const hash = createHash('sha256')
+    const stream = createReadStream(abs)
+    for await (const chunk of stream) hash.update(chunk)
+    return hash.digest('hex')
+  } catch {
+    return ''
+  }
+}
+
+/**
  * 宿主会话注册表（`webCtx.sessions`）的引用，只给**工具**那条路用。
  *
  * 面板那条路拿得到 `webCtx`；`knit_docs` 的 `audit: true` 走的是 `auditBridge`，
@@ -2692,6 +2766,9 @@ function onSessionEvent(session, event) {
   try {
     const sessionId = session && typeof session.id === 'string' ? session.id : ''
     if (!sessionId || !event) return
+    // v0.25：附件收集**不看审计闸门** —— 媒体档要显示工具产出的图，与「使用反馈」
+    // 是两件事。记一条的成本是一次 `event.type` 判断（不是带图的事件立刻返回）。
+    attachmentStore.note(sessionId, event)
     if (!isAudited(feedbackStore, sessionId)) return
     const root = rootOfSession(session)
     // v0.17：成功读被确认的那一刻取一次版本标记。取样只发生在**新事件**上，
@@ -3169,6 +3246,59 @@ export function apply(ctx) {
           return
         }
 
+        if (url.pathname === `${ROUTE_PREFIX}/api/attachments`) {
+          /* v0.25：本会话「工具产出」的图（媒体档里显示）。
+             列表**全部来自会话事件**（零 I/O）；这里只多做一件事：把「工作区里已经有同内容
+             文件」的条目去掉 —— 先按 `bytes` 筛候选，只给大小相同的候选算 sha256。 */
+          const sessionId = url.searchParams.get('sessionId') || ''
+          backfillAttachments(sessionOf(webCtx, sessionId), sessionId)
+          const items = sessionId ? attachmentStore.list(sessionId) : []
+          if (!items.length) {
+            sendJson(res, 200, { ok: true, items: [] })
+            return
+          }
+          /* ⚠️ 候选必须用**媒体档**扫一遍（`kind: 'media'`）：
+             · `contextCorpus` 是「文档 + 代码」，**媒体从不在里面**（媒体不参与 Context Pack）；
+             · `allDocs` 是**按档位切开**的 —— `kind: 'context'` 下连一张图都没有（实测）。
+             这次扫描只取 `{rel, bytes}` 两个字段，随后交给 `dropSaved` 按大小筛、只给
+             大小相同的候选算 sha256。扫描结果进备忘也没问题：`contextCorpus` 与档位无关
+             （`collectDocs()` 不分档），所以 `/api/changes` 读到的那份**一字不差**。 */
+          const mediaPayload = await scan(root, 40, {
+            session: sessionOf(webCtx, sessionId), sessionId, sort: 'relevance', kind: 'media',
+          })
+          const scanDocs = (mediaPayload && mediaPayload.allDocs) || []
+          const candidates = scanDocs
+            .filter((doc) => doc && (doc.kind === KIND_IMAGE || doc.kind === KIND_VIDEO))
+            .map((doc) => ({ rel: doc.rel, bytes: Number.isFinite(doc.size) ? doc.size : -1 }))
+          const kept = await dropSaved(items, { candidates, sha256Of: (rel) => sha256OfRel(root, rel) })
+          sendJson(res, 200, { ok: true, items: kept })
+          return
+        }
+
+        if (url.pathname === `${ROUTE_PREFIX}/api/attachment`) {
+          /* v0.25：按 **sha256** 读一个附件对象的字节 —— **本插件唯一越出工作区的读**。
+             三条边界缺一不可：
+               ① 只收 `sha256:<64 hex>`，**不接受任何路径**（路径由哈希算出来，给不出穿越）；
+               ② 这个 id 必须在**本会话**的 `tool/result` 里出现过（跨会话 / 没出现过一律 404）；
+               ③ 只回图片 / 视频，走既有的 `sendMedia`（nosniff + sandbox CSP）。 */
+          const sessionId = url.searchParams.get('sessionId') || ''
+          const id = url.searchParams.get('id') || ''
+          backfillAttachments(sessionOf(webCtx, sessionId), sessionId)
+          const meta = sessionId && isAttachmentId(id) ? attachmentStore.get(sessionId, id) : undefined
+          if (!meta) {
+            sendJson(res, 404, { ok: false, code: ERROR_CODES.notFound })
+            return
+          }
+          const abs = objectPath(attachmentsRoot(), id)
+          const info = abs ? await stat(abs).catch(() => null) : null
+          if (!info || !info.isFile() || !(info.size > 0) || info.size > MAX_ATTACHMENT_BYTES) {
+            sendJson(res, 404, { ok: false, code: ERROR_CODES.notFound })
+            return
+          }
+          sendMedia(req, res, { abs, type: meta.mediaType, size: info.size })
+          return
+        }
+
         sendJson(res, 404, { ok: false, code: ERROR_CODES.notFoundRoute })
       } catch (error) {
         sendJson(res, 500, { ok: false, code: ERROR_CODES.internal, detail: String((error && error.message) || error) })
@@ -3177,7 +3307,7 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/changes, ${ROUTE_PREFIX}/api/control (POST)`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/changes, ${ROUTE_PREFIX}/api/attachments, ${ROUTE_PREFIX}/api/attachment, ${ROUTE_PREFIX}/api/control (POST)`)
       return () => unregister()
     }, 'dsh-knit: host route')
   })

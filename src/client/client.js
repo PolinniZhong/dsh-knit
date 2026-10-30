@@ -15,6 +15,12 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
+    /* v0.25（2026-10-22）：全屏查看器要**盖住整个屏幕**，所以必须挂到 `document.body` 上。
+       为什么不能就地渲染：`position:fixed` 会被**祖先的 transform / filter / contain 困住**
+       —— 宿主的右侧栏是滑入的（有 transform），那一层就成了 containing block，
+       `fixed` 于是变成「相对侧边栏」而不是视口，于是只能盖住面板那一块（用户实测如此）。
+       这是 CSS 逃不出来的坑，只有 portal 能解。取不到 react-dom（老宿主 / 测试替身）就退回就地渲染。 */
+    const ReactDOM = (() => { try { return require('react-dom') } catch { return null } })()
     const h = React.createElement
 
     /* ── 国际化（DSH 官方 ctx.locale）─────────────────── */
@@ -42,6 +48,7 @@ window.__ModuleLoader__.load({
 
       'sort.relevance': '相关',
       'sort.time': '最新',
+      'sort.mediaTimeTitle': '图片一律按时间排序（最新在前）',
       'sort.relevanceTitle': '按与当前对话的相关性排序（纯本地关键词匹配，不调模型）',
       'sort.timeTitle': '按文件修改时间倒序',
 
@@ -308,6 +315,25 @@ window.__ModuleLoader__.load({
 
       'preview.loading': '正在读取…',
       'preview.truncated': '（文件较大，仅预览前 512 KB）',
+      // v0.25 预览里的查找（Cmd+F）。数字用 {current}/{total}，两种语言同形。
+      'lightbox.aria': '查看大图：{name}',
+      'lightbox.close': '关闭（Esc）',
+      'attach.badge': '对话',
+      'attach.title': '对话里生成的图，还没保存到本地',
+      'fav.off': '收藏',
+      'fav.on': '已收藏',
+      'fav.addTitle': '收藏（排在媒体列表最前面）',
+      'fav.removeTitle': '取消收藏',
+      'fav.mark': '已收藏',
+      'find.openBtn': '查找',
+      'find.openTitle': '在本文里查找（Cmd+F）',
+      'find.placeholder': '在本文里查找',
+      'find.aria': '在预览的文档里查找',
+      'find.count': '{current}/{total}',
+      'find.none': '无结果',
+      'find.prev': '上一个',
+      'find.next': '下一个',
+      'find.close': '关闭查找',
       'preview.fullscreen': '全屏',
       'preview.exitFullscreen': '退出全屏',
       'preview.fullscreenTitle': '全屏阅读',
@@ -395,6 +421,7 @@ window.__ModuleLoader__.load({
 
       'sort.relevance': 'Relevant',
       'sort.time': 'Recent',
+      'sort.mediaTimeTitle': 'Images are always sorted by newest first',
       'sort.relevanceTitle': 'Sort by relevance to the current conversation (local keyword matching, no model call)',
       'sort.timeTitle': 'Sort by file modified time, newest first',
 
@@ -611,6 +638,24 @@ window.__ModuleLoader__.load({
 
       'preview.loading': 'Loading…',
       'preview.truncated': '(large file — showing the first 512 KB)',
+      'lightbox.aria': 'Image viewer: {name}',
+      'lightbox.close': 'Close (Esc)',
+      'attach.badge': 'Chat',
+      'attach.title': 'Generated in this chat — not saved locally yet',
+      'fav.off': 'Favorite',
+      'fav.on': 'Favorited',
+      'fav.addTitle': 'Favorite this (it moves to the front of the media list)',
+      'fav.removeTitle': 'Remove favorite',
+      'fav.mark': 'Favorited',
+      'find.openBtn': 'Find',
+      'find.openTitle': 'Find in this document (Cmd+F)',
+      'find.placeholder': 'Find in this document',
+      'find.aria': 'Find in the previewed document',
+      'find.count': '{current}/{total}',
+      'find.none': 'No results',
+      'find.prev': 'Previous',
+      'find.next': 'Next',
+      'find.close': 'Close find',
       'preview.fullscreen': 'Fullscreen',
       'preview.exitFullscreen': 'Exit fullscreen',
       'preview.fullscreenTitle': 'Read fullscreen',
@@ -791,6 +836,10 @@ window.__ModuleLoader__.load({
     /* v0.25：Git 变更关联的**独立接口**。它与列表接口分开，所以「列表的响应形状」
        不会被这个功能碰到；关掉功能时客户端连这个请求都不发。 */
     const CHANGES_API = '/knit/api/changes'
+    /* v0.25：媒体档额外显示「对话里工具产出的图」——**独立接口**，`/api/recent` 一个字节没动。
+       列表零 I/O（元数据全在会话事件里）；字节按 **sha256** 取（见 `attachmentUrl`）。 */
+    const ATTACH_LIST_API = '/knit/api/attachments'
+    const ATTACH_RAW_API = '/knit/api/attachment'
     const DOC_API = '/knit/api/doc'
     const RAW_API = '/knit/api/raw'
     // v0.12：某篇的「谁引用了它 / 它引用了谁」。与上面三条一样是**同源相对地址**，
@@ -969,6 +1018,227 @@ window.__ModuleLoader__.load({
      *   格子基准宽（= CSS 的 minmax 下限）、当前宽度下能排几列、单格实际宽度、
      *   是否让卡片文字让位
      */
+    /* ── v0.25：媒体档「悬停看大图」────────────────────────────────────────
+       用户要的是「鼠标停在图片上，弹一个大图」。
+
+       三条取舍：
+       ① **800×800 是上限，不是尺寸** —— 面板本身只有几百像素宽，硬占 800 会把对话区盖住。
+          所以盒子按「卡片左边还剩多少」与视口算，最后再夹到 800。
+       ② **只做图片**（视频要解码 + 起播放器，噪声与代价都不是一个量级）。
+       ③ **延迟出现**（`HOVER_SHOT_DELAY_MS`）：鼠标扫过网格时不许一路闪；
+          离开即收。`pointer-events:none` —— 它只是「看一眼」，不许挡点击。
+    */
+
+    /**
+     * 悬停浮窗的边长上限。
+     *
+     * ⚠️ 2026-10-21 从 800 改成 420：用户在真机上看了之后说「现在浮窗太大了」，
+     * 并在截图上用红框标出他想要的大小 —— 约等于原来的**一半**。
+     * 这是**一个人眼定的大小**，不是算出来的；要再调就只改这一个数。
+     */
+    const HOVER_SHOT_MAX = 420
+    /* ── v0.25：媒体档「双击全屏」（2026-10-22，参照用户给的 Codex 截图）────────
+       用户要的三件事：① 双击图片进全屏；② 点图片以外关闭；③ 左侧一列「近 10 张」缩略图。
+       另加两件（不然光看图就断手）：图片以外是**毛玻璃**且随主题变（他第 4 点要的），
+       以及 `←` `→` 在带子里前后翻。
+       刻意**没做**（他没要，也不该顺手塞）：缩放百分比、下载、用其他应用打开。
+    */
+
+    /**
+     * 把查看器挂到哪：**能 portal 就一定 portal**（否则 `fixed` 会被侧边栏的 transform 困住）。
+     *
+     * 单独抽成一个函数是为了「这件事有没有做」能被源码守卫直接看见 ——
+     * 测试替身没有 `document`，这条路径只能在真机上走，所以形状守卫是它唯一的护栏。
+     *
+     * @param {object} node - 要挂的 React 元素
+     * @param {{doc?:object, dom?:object}} [env] - 可注入的 document / ReactDOM（默认取模块里的）
+     * @returns {object} portal 结果，或原节点（降级）
+     */
+    function mountLightbox(node, env = {}) {
+      const dom = env.dom === undefined ? (typeof document === 'undefined' ? null : document) : env.dom
+      const renderer = env.renderer === undefined ? ReactDOM : env.renderer
+      try {
+        if (node && dom && dom.body && renderer && typeof renderer.createPortal === 'function') {
+          return renderer.createPortal(node, dom.body)
+        }
+      } catch { /* portal 失败就就地渲染，不许白屏 */ }
+      return node
+    }
+
+    /** 全屏查看器左侧缩略图带显示几张。 */
+    const LIGHTBOX_RAIL = 10
+    /** 当前这张在带子里前面留几张（偏「刚看过的」，不是偏「后面的」）。 */
+    const LIGHTBOX_RAIL_LEAD = 4
+
+    /**
+     * 全屏查看器的左侧缩略图带：取**当前这张附近**的 N 张。
+     *
+     * 为什么不是「最新的 N 张」：双击第 30 张时，「最新 10 张」里根本没有它 ——
+     * 带子里看不到当前这张，前后翻也断在画面外。所以取一个以当前为中心的窗口，两头夹紧。
+     * **纯函数**：只吃数组与下标，能真断言。
+     *
+     * @param {object[]} docs - 当前媒体列表（已排好序）
+     * @param {number} index - 当前这张的下标
+     * @param {{size?:number, lead?:number}} [opts] - 带子长度与前置张数
+     * @returns {{start:number, items:object[]}} 起点与带子内容
+     */
+    function lightboxRail(docs, index, opts = {}) {
+      const list = Array.isArray(docs) ? docs : []
+      const size = Number.isFinite(opts.size) ? Math.max(1, Math.round(opts.size)) : LIGHTBOX_RAIL
+      const lead = Number.isFinite(opts.lead) ? Math.max(0, Math.round(opts.lead)) : LIGHTBOX_RAIL_LEAD
+      if (!list.length) return { start: 0, items: [] }
+      const at = Number.isFinite(index) ? Math.min(Math.max(0, Math.round(index)), list.length - 1) : 0
+      const start = Math.min(Math.max(0, at - lead), Math.max(0, list.length - size))
+      return { start, items: list.slice(start, start + size) }
+    }
+
+    /** 浮窗与卡片之间的间距。 */
+    const HOVER_SHOT_GAP = 12
+    /** 浮窗与视口边缘的最小留白。 */
+    const HOVER_SHOT_MARGIN = 12
+    /** 停多久才出现 —— 短了会在鼠标扫过时一路闪，长了会显得没反应。 */
+    const HOVER_SHOT_DELAY_MS = 350
+
+    /**
+     * 算悬停浮窗的盒子。**纯函数**：只吃两个矩形，不做任何 DOM 读。
+     *
+     * 规则：默认摆在卡片**左侧**（面板在右边，浮窗往对话区那边让，不压住网格）；
+     * 左边放不下就翻到右侧；垂直以卡片中线居中并夹进视口；盒子边长**最后**夹到 800。
+     *
+     * @param {{left:number,top:number,width:number,height:number}|null} card - 卡片矩形
+     * @param {{width:number,height:number}} view - 视口尺寸
+     * @param {{max?:number,gap?:number,margin?:number}} [opts] - 可注入的常数（测试用）
+     * @returns {{left:number,top:number,width:number,height:number,side:'left'|'right'}} 盒子
+     */
+    function hoverShotBox(card, view, opts = {}) {
+      const max = Number.isFinite(opts.max) ? opts.max : HOVER_SHOT_MAX
+      const gap = Number.isFinite(opts.gap) ? opts.gap : HOVER_SHOT_GAP
+      const margin = Number.isFinite(opts.margin) ? opts.margin : HOVER_SHOT_MARGIN
+      const viewW = view && Number.isFinite(view.width) ? view.width : 1024
+      const viewH = view && Number.isFinite(view.height) ? view.height : 768
+      // 拿不到卡片矩形（测试替身没有 DOM / 事件不带 currentTarget）⇒ 视口里居中，仍然守 800 上限
+      if (!card || !Number.isFinite(card.left) || !Number.isFinite(card.top)) {
+        const size = Math.min(max, viewW - margin * 2, viewH - margin * 2)
+        return {
+          left: Math.max(margin, Math.round((viewW - size) / 2)),
+          top: Math.max(margin, Math.round((viewH - size) / 2)),
+          width: size,
+          height: size,
+          side: 'right',
+        }
+      }
+      const roomLeft = card.left - gap - margin
+      const roomRight = viewW - (card.left + card.width) - gap - margin
+      const side = roomLeft >= roomRight ? 'left' : 'right'
+      const room = Math.max(0, side === 'left' ? roomLeft : roomRight)
+      const width = Math.max(1, Math.min(max, room, viewW - margin * 2))
+      const height = Math.max(1, Math.min(max, viewH - margin * 2, width * 1.6))
+      const rawLeft = side === 'left' ? card.left - gap - width : card.left + card.width + gap
+      const left = Math.min(Math.max(margin, Math.round(rawLeft)), Math.max(margin, viewW - margin - width))
+      const centerY = card.top + card.height / 2 - height / 2
+      const top = Math.min(Math.max(margin, Math.round(centerY)), Math.max(margin, viewH - margin - height))
+      return { left, top, width, height, side }
+    }
+
+    /* ── v0.25：媒体收藏 ───────────────────────────────────────────────────
+       只活在 localStorage（`readPref / writePref` 那一族：这是**语义偏好**，不是界面几何）。
+       **不改宿主、不加接口** ⇒ 只需要硬刷新，不用重启 DSH。
+
+       顺序规则只有一条：**稳定分区** —— 收藏的按原有顺序排到前面，其余按原有顺序跟在后面。
+       刻意**不做第二套排序**（不按收藏时间排、不按文件名排）：用户要的是「收藏的放最前面」，
+       而收藏之间谁在前仍由当前的「相关 / 最新」决定 —— 这样它不会变成第三种排序口径。
+
+       ⚠️ 与既有的「固定 / 排除」（`control.*`，宿主存储 `knit_control`）**不是同一件事**：
+       那一套只服务三层 Context Pack，媒体不参与，媒体卡片上也没有那个入口。
+    */
+
+    /** 落盘的键。值形如 `{ "<root>": ["a.png", "b.mp4"] }`。 */
+    const FAV_KEY = 'dsh-knit:favorites'
+    /** 最多记几个工作区（换项目时旧的不会无限长）。 */
+    const FAV_MAX_ROOTS = 5
+    /** 每个工作区最多记几条（超了按写入顺序截断，不做 LRU）。 */
+    const FAV_MAX_RELS = 200
+
+    /**
+     * 把落盘的值解析成 `{ [root]: string[] }`。
+     *
+     * 畸形输入一律回空表，**不许抛** —— localStorage 里的东西可能是上一版、手改过的、
+     * 或者干脆是别的插件写坏的；这里坏了不能让整个面板白掉。
+     *
+     * @param {string|null} raw - localStorage 里的原始字符串
+     * @returns {Object<string, string[]>} 归一化后的表
+     */
+    function parseFavorites(raw) {
+      if (typeof raw !== 'string' || !raw) return {}
+      let data = null
+      try { data = JSON.parse(raw) } catch { return {} }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return {}
+      const out = {}
+      for (const root of Object.keys(data)) {
+        const list = data[root]
+        if (!Array.isArray(list)) continue
+        const rels = []
+        for (const rel of list) {
+          if (typeof rel === 'string' && rel && rels.indexOf(rel) < 0) rels.push(rel)
+          if (rels.length >= FAV_MAX_RELS) break
+        }
+        if (rels.length) out[root] = rels
+      }
+      return out
+    }
+
+    /**
+     * 某个工作区下的收藏。
+     * @param {Object<string, string[]>} table - `parseFavorites()` 的产物
+     * @param {string} root - 工作区根（未知时回空数组）
+     * @returns {string[]} 副本
+     */
+    function favoriteRelsFor(table, root) {
+      const key = typeof root === 'string' ? root : ''
+      if (!key || !table || !Array.isArray(table[key])) return []
+      return table[key].slice()
+    }
+
+    /**
+     * 加 / 取消一条收藏，返回**新数组**（不改入参）。
+     * 新加的排到最前 —— 同一次会话里立即可见，不用等重新排序。
+     *
+     * @param {string[]} rels - 当前收藏
+     * @param {string} rel - 目标
+     * @returns {string[]} 新数组
+     */
+    function toggleFavoriteList(rels, rel) {
+      const list = Array.isArray(rels) ? rels.slice() : []
+      if (typeof rel !== 'string' || !rel) return list
+      const at = list.indexOf(rel)
+      if (at >= 0) { list.splice(at, 1); return list }
+      list.unshift(rel)
+      return list.slice(0, FAV_MAX_RELS)
+    }
+
+    /**
+     * 收藏的排到最前（**稳定**：两组内部都保持入参顺序）。
+     * 没有收藏时**原样返回同一个数组**（同一引用，省一次无意义的重渲染）。
+     *
+     * @param {object[]} docs - 当前可见条目
+     * @param {Set<string>|string[]} favorites - 收藏的 rel
+     * @returns {object[]} 排好序的数组（或原数组）
+     */
+    function orderFavorites(docs, favorites) {
+      const list = Array.isArray(docs) ? docs : []
+      const has = (rel) => (favorites instanceof Set
+        ? favorites.has(rel)
+        : (Array.isArray(favorites) && favorites.indexOf(rel) >= 0))
+      if (!list.length) return list
+      const first = []
+      const rest = []
+      for (const doc of list) {
+        if (doc && has(doc.rel)) first.push(doc)
+        else rest.push(doc)
+      }
+      return first.length ? first.concat(rest) : list
+    }
+
     function mediaLayoutFor(width) {
       const w = Number(width)
       const usable = Number.isFinite(w) && w > 0 ? w : MEDIA_FALLBACK_WIDTH
@@ -1011,6 +1281,7 @@ window.__ModuleLoader__.load({
   /* 「命中段」那一格要一个**灰底**而不是白描边（2026-10-07 用户裁决，原话是
      「叫它寻一个背景就行了，寻灰背景就行了，不需要在背景填充外面再加一个白色的描边」）。 */
   --knit-chip-bg:rgba(38,49,72,.092);    /* 官方 10.20% × 0.90 */
+
   display:flex;flex-direction:column;height:100%;min-height:0;
   color:var(--dsw-alias-label-primary,#e8eaed);font-size:13px}
 body[data-ds-dark-theme] .knit-root{
@@ -1636,6 +1907,51 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
 .knit-notice{margin:6px 8px 0;padding:7px 10px;border-radius:7px;font-size:11px;line-height:1.5;
   background:rgba(255,120,120,.12);border:.5px solid rgba(255,120,120,.3);color:#ffb4b4}
 .knit-badge{font-size:10px;margin-right:3px}
+/* v0.25 媒体收藏：★ 是**状态标记**，所以吃品牌色（与聚焦圈 / 分区「查看全部」同一档）；
+   只在**名字行里**占一个字形的位置，不上缩略图、不加底色、不做 hover —— 网格不许长出第二套 chrome。 */
+.knit-fav{font-size:10px;margin-right:3px;color:var(--knit-accent)}
+/* v0.25：对话里生成的图 —— 标记用**文字**（承担信息：还没存进项目、存进去就消失）。
+   字色取次级灰：它不是层级，是来源说明，不该抢过 ★。 */
+.knit-conv{font-size:10px;margin-right:3px;color:var(--dsw-alias-label-caption,#80868b)}
+/* v0.25 媒体档「悬停看大图」—— 与入口浮窗同一套外框（圆角 / 阴影 / 边框 / 层级）。
+   ⚠️ pointer-events:none 是必须的：它只是看一眼，绝不许挡住卡片的点击。
+   尺寸由 JS 下发（上限 800，按可用空间收缩），这里只负责「图在盒子里等比铺满」。 */
+.knit-shot{position:fixed;z-index:60;display:flex;align-items:center;justify-content:center;
+  padding:6px;border-radius:12px;pointer-events:none;
+  background:var(--dsw-alias-bg-layer-2,#2c2c2e);
+  border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.12));
+  box-shadow:0 12px 32px rgba(0,0,0,.32)}
+.knit-shot img{display:block;max-width:100%;max-height:100%;border-radius:8px;object-fit:contain}
+/* v0.25 媒体档「双击全屏」：整窗遮罩 + 毛玻璃。层级在悬停浮窗（60）与菜单之上。
+   左侧留 96px 给缩略图带（它绝对定位在遮罩里）；图片按 contain 铺满剩下的区域。 */
+.knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
+  padding:32px 32px 32px 96px;outline:none;cursor:zoom-out;
+  /* ⚠️ 遮罩的 α 是**人眼定的**（与 box-shadow 同一性质，推不出来）；两套值**必须不同**，
+     否则「随深色模式变化」就是假话（有守卫）。
+     ⚠️ 这两个变量故意**挂在查看器自己身上** —— 它被 portal 到 document.body 之后
+     不在 .knit-root 里了，读不到那层的变量（第一版就是这么静默变成透明遮罩的）。 */
+  --knit-scrim:rgba(255,255,255,.62);
+  background:var(--knit-scrim);backdrop-filter:blur(22px) saturate(1.1);
+  -webkit-backdrop-filter:blur(22px) saturate(1.1)}
+body[data-ds-dark-theme] .knit-lightbox{--knit-scrim:rgba(18,18,20,.72)}
+.knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;
+  justify-content:center;cursor:default}
+.knit-lightbox-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;cursor:default;
+  box-shadow:0 24px 64px rgba(0,0,0,.36);background:var(--dsw-alias-bg-base,#fff)}
+.knit-lightbox-tools{position:absolute;top:18px;right:62px;display:flex;align-items:center;gap:6px}
+.knit-lightbox-close{position:absolute;top:18px;right:18px;width:34px;height:34px;padding:0;
+  display:flex;align-items:center;justify-content:center;border:0;border-radius:10px;
+  cursor:pointer;font-family:inherit;font-size:15px;line-height:1;
+  color:var(--dsw-alias-label-primary,#0f1115);background:transparent;opacity:.7}
+.knit-lightbox-close:hover{opacity:1;background:var(--knit-hover-bg,transparent)}
+.knit-lightbox-rail{position:absolute;left:10px;top:50%;transform:translateY(-50%);display:flex;
+  flex-direction:column;gap:6px;max-height:88vh;overflow-y:auto;padding:4px;cursor:default}
+.knit-lightbox-thumb{flex:none;width:64px;height:64px;padding:0;border:0;border-radius:8px;overflow:hidden;
+  cursor:pointer;background:transparent;opacity:.68;transition:opacity .16s ease}
+.knit-lightbox-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.knit-lightbox-thumb:hover{opacity:1}
+.knit-lightbox-thumb.active{opacity:1;box-shadow:0 0 0 2px var(--knit-accent,var(--dsw-alias-brand-primary-new-colorprimary-new-color))}
+@media (prefers-reduced-motion: reduce){.knit-lightbox-thumb{transition:none}}
 
 /* ── 列表下方的预览面板 ───────────────────────────────
    要让人一眼看出「这是另一层，不是列表的续行」，靠**结构**而不是底色：
@@ -1752,6 +2068,26 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    一上一下两条细线把这一小块夹成了独立一截，用户的原话是「有点割裂」。
    现在这一层不画任何横线，收紧的 padding 就是它的边界。
    注意 CSS 里不要写反引号 —— 这段样式是模板字符串，一个反引号就会把它截断。 */
+/* v0.25 查找条：与 .knit-links 同一层（夹在头与正文之间，**不参与正文滚动**）。
+   输入框直接复用工具栏那套（.knit-searchwrap + .knit-filter）—— 同一份视觉语言，不新造控件；
+   这里只把它的最大宽度放开（查找条要占满一行）。
+   ⚠️ 注意：本段注释里不许出现反引号 —— 整个 CSS 在一个模板串里。 */
+.knit-findbar{flex:none;display:flex;align-items:center;gap:6px;padding:4px 12px 6px}
+.knit-findbar .knit-searchwrap{flex:1 1 auto;max-width:none}
+.knit-findcount{flex:none;font-size:11px;color:var(--dsw-alias-label-caption,#80868b);
+  font-variant-numeric:tabular-nums}
+.knit-findnav{flex:none;width:22px;height:22px;border-radius:6px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;
+  background:transparent;border:none;color:var(--dsw-alias-label-secondary,#9aa0a6)}
+.knit-findnav:hover:not(:disabled){background:var(--knit-hover-bg,rgba(255,255,255,.03));
+  color:var(--dsw-alias-label-primary,#e8eaed)}
+.knit-findnav:disabled{opacity:.4;cursor:default}
+/* 命中的样式 —— **只有底色**。没有 padding、没有 border、颜色继承 —— 一有内边距就会改变行高与折行，
+   而代码预览的命中横带是按「滚动高度 ÷ 行数」算行高的，动了就会错位。
+   两级灰阶建立层级（普通命中 = hover 那档，当前命中 = 命中段那档），不引入第二种颜色。 */
+mark.knit-find{background:var(--knit-hover-bg,rgba(255,255,255,.03));color:inherit;
+  padding:0;border:0;border-radius:2px}
+mark.knit-find-current{background:var(--knit-chip-bg)}
 .knit-links{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary,#9aa0a6)}
 .knit-links-state{padding:5px 12px;color:var(--dsw-alias-label-caption,#80868b)}
 .knit-links-head{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;
@@ -2225,6 +2561,20 @@ video.knit-preview-media{width:100%;background:#000}
      */
     function mediaUrl(sessionId, rel) {
       return `${RAW_API}?sessionId=${encodeURIComponent(sessionId)}&rel=${encodeURIComponent(rel)}`
+    }
+
+    /**
+     * 对话里生成的图（v0.25）的字节地址。
+     *
+     * ⚠️ **只传 sha256 id，不传路径** —— 宿主那条路由只认 `sha256:<64 hex>`，而且只读
+     * **本会话出现过**的 id。这不是硬凑的 URL 形状，是那条边界的全部：给不出路径就没有穿越。
+     *
+     * @param {string} sessionId - 会话 id
+     * @param {string} id - `sha256:<64 hex>`
+     * @returns {string} 同源地址
+     */
+    function attachmentUrl(sessionId, id) {
+      return `${ATTACH_RAW_API}?sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`
     }
 
     /**
@@ -3138,7 +3488,7 @@ video.knit-preview-media{width:100%;background:#000}
      * @param {object} props - 与 DocRow 同构，外加 src
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab, optionId }) {
+    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab, onZoom, onPreview, optionId, favorite, conversation, onHoverStart, onHoverEnd }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       return h('div', {
         className: `knit-media-card${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
@@ -3147,13 +3497,29 @@ video.knit-preview-media{width:100%;background:#000}
         id: optionId,
         'aria-selected': active ? 'true' : 'false',
         'data-knit-rel': doc.rel,
-        title: t('row.tooltip', { path: doc.rel }),
+        // v0.25：对话里生成的图没有工作区路径 —— 提示语换成「还没保存到本地」
+        title: conversation ? t('attach.title') : t('row.tooltip', { path: doc.rel }),
         onClick: () => onSelect(doc),
-        onDoubleClick: () => onOpenTab(doc),
+        /* v0.25（2026-10-22 用户裁决）：媒体档**取消单击就地预览** —— 双击才是「看」。
+           按类型分流：
+           · 图片 → 全屏查看器（`onZoom`，里面自带收藏 / 本地打开）；
+           · 视频 → **仍走就地预览**（`onPreview`）：查看器只做图片，不这么走的话
+             播放器、收藏、本地打开就全没了入口。 */
+        onDoubleClick: () => (doc.kind === 'image'
+          ? (onZoom && onZoom(doc))
+          : (onPreview ? onPreview(doc) : onOpenTab(doc))),
+        // v0.25：悬停看大图（只对图片；视频交给点击预览）。事件里带矩形，几何在纯函数里算。
+        onMouseEnter: onHoverStart ? (event) => onHoverStart(doc, src, event) : undefined,
+        onMouseLeave: onHoverEnd || undefined,
       },
       h('div', { className: 'knit-media-thumbbox' }, h(MediaThumb, { doc, src })),
       h('div', { className: 'knit-media-meta' },
         h('div', { className: 'knit-media-name', title: doc.name },
+          // v0.25：对话里生成的图带一个「对话」标记 —— 它解释两件事：这张还没存进项目、
+          // 存进去之后它会自己消失（去重规则）。用文字不用图标：它承担信息。
+          conversation ? h('span', { className: 'knit-conv' }, t('attach.badge')) : null,
+          // v0.25 媒体收藏：★ 是**状态标记**（不是装饰）—— 它解释「这张为什么排在最前面」
+          favorite ? h('span', { className: 'knit-fav', title: t('fav.mark'), 'aria-label': t('fav.mark') }, '★') : null,
           fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
           doc.name),
         h('div', { className: 'knit-media-time' }, relTime(doc.mtimeMs, now))))
@@ -3502,6 +3868,214 @@ video.knit-preview-media{width:100%;background:#000}
       return true
     }
 
+    /* ── v0.25：预览里的「查找」（Cmd+F）───────────────────────────────────
+       用户要的是「像 Chrome 那样在文档里搜关键词并定位」。三条房规决定了它长什么样：
+
+       ① **不自己渲染 Markdown**（见 DocPane 那条注释：那会变成第二套渲染器）
+          ⇒ 与 `docAnchorHit` 同一套办法：渲染完成后走 TreeWalker，在**已经渲染出来的文本**上找。
+       ② **匹配是纯函数**，DOM 那一层只负责画。测试替身没有 document，所以能被真断言钉住的
+          只有纯函数那一半 —— 这是刻意的分工，与 `docAnchorNeedles`（纯）/
+          `docAnchorHit`（DOM）那条已有的分界线一致。
+       ③ **命中只上底色，绝不动几何**：`mark` 不许有 padding / border，也不许改行高
+          —— 代码预览的命中横带是按「滚动高度 ÷ 行数」算行高的，动了就会错位。
+
+       ⚠️ 已知边界（与既有锚点定位同一条）：命中**不跨文本节点**。渲染会把 `**粗**字`
+       拆成两个节点，所以正好被 Markdown 语法截断的关键词（一半在「粗」左边、一半在右边）找不到。
+       跨节点要额外把「归一化后的下标」分别映射回两个节点的原文下标，代价与收益不成比例。
+       `preview.truncated` 那句「仅预览前 512 KB」不算文档内容，跳过不搜。
+    */
+
+    /**
+     * 在一段文本里找出**所有**字面量命中。
+     *
+     * - **字面量，不是正则**：输入 `(`、`*`、`[` 时必须原样找 —— 既不许当元字符，也不许抛
+     *   （用户搜的是关键词，不是模式）。
+     * - **不重叠、按出现顺序**（与 Chrome 的计数口径一致）。
+     * - **大小写不敏感，但只在折叠后长度不变时才用折叠串**：少数 Unicode 字符折叠后会**变长**
+     *   （如 `İ`），那样下标就与原文错位、画出来的命中会偏一格。这种输入退回大小写敏感 ——
+     *   宁可少匹配几个，也不许标错位置。
+     *
+     * @param {string} haystack - 被搜的文本
+     * @param {string} query - 关键词
+     * @returns {{start:number,end:number}[]} 命中区间（原文下标，左闭右开）
+     */
+    function findRanges(haystack, query) {
+      const text = typeof haystack === 'string' ? haystack : ''
+      const needle = typeof query === 'string' ? query : ''
+      if (!text || !needle) return []
+      const foldedText = text.toLowerCase()
+      const foldedNeedle = needle.toLowerCase()
+      const foldable = foldedText.length === text.length && foldedNeedle.length === needle.length
+      const hay = foldable ? foldedText : text
+      const pin = foldable ? foldedNeedle : needle
+      const out = []
+      let from = 0
+      for (;;) {
+        const at = hay.indexOf(pin, from)
+        if (at < 0) break
+        out.push({ start: at, end: at + pin.length })
+        from = at + pin.length
+      }
+      return out
+    }
+
+    /**
+     * 归一化文本的**下标 → 原文下标**映射。
+     *
+     * 搜索要先把换行折叠成空格再找（渲染出来的文本就是这样，不折叠就对不上），
+     * 但**画的时候必须切原文** —— 所以需要这座桥：返回数组第 i 项 = 归一化文本第 i 个字符
+     * 在原文里的下标。归一化规则与 `docAnchorHit` 逐字同一条：一串空白 → 一个空格。
+     *
+     * @param {string} original - 原文
+     * @returns {number[]} 映射（长度 == 归一化后的长度）
+     */
+    function normalizedIndexMap(original) {
+      const text = typeof original === 'string' ? original : ''
+      const map = []
+      let i = 0
+      while (i < text.length) {
+        map.push(i)
+        const isSpace = /\s/.test(text[i])
+        i += 1
+        if (isSpace) while (i < text.length && /\s/.test(text[i])) i += 1
+      }
+      return map
+    }
+
+    /**
+     * 下一个命中下标（**环绕**，与 Chrome 一致：最后一个再按「下一个」回到第一个）。
+     *
+     * @param {number} current - 当前下标
+     * @param {number} total - 命中总数
+     * @param {number} delta - 方向（负数 = 上一个）
+     * @returns {number} 新下标（total 为 0 时恒 0）
+     */
+    function stepFindIndex(current, total, delta) {
+      if (!(total > 0)) return 0
+      const at = Number.isFinite(current) ? Math.min(Math.max(0, Math.round(current)), total - 1) : 0
+      const next = (at + (delta < 0 ? -1 : 1)) % total
+      return next < 0 ? next + total : next
+    }
+
+    /** 查找时跳过的子树：`preview.truncated` 那句提示不是文档内容。 */
+    function findSkippedNode(node) {
+      let el = node && node.parentNode
+      while (el && el.nodeType === 1) {
+        if (String(el.className || '').indexOf('knit-preview-note') >= 0) return true
+        el = el.parentNode
+      }
+      return false
+    }
+
+    /**
+     * 把命中画成 `mark.knit-find`，返回**按文档顺序**的命中元素。
+     *
+     * 一个文本节点里可能有多个命中 —— 先把该节点切成「文本 + mark + 文本…」再整体替换它，
+     * 所以顺序天然是对的；`insertBefore` 逐片插在旧节点前面、最后删掉旧节点。
+     * 没有 document（测试替身）时**静默返回空数组** —— 与 `scrollToDocAnchor` 同一层守卫。
+     *
+     * @param {HTMLElement|null} box - 正文容器
+     * @param {string} query - 关键词
+     * @returns {HTMLElement[]} 命中元素（文档顺序）
+     */
+    function paintFindMarks(box, query) {
+      if (!box || typeof document === 'undefined' || typeof document.createTreeWalker !== 'function') return []
+      if (typeof document.createElement !== 'function' || !query) return []
+      const walker = document.createTreeWalker(box, 4) // 4 = SHOW_TEXT
+      const targets = []
+      let node = walker.nextNode()
+      while (node) {
+        const value = String(node.nodeValue || '')
+        if (value && !findSkippedNode(node)) {
+          const flat = value.replace(/\s+/g, ' ')
+          const ranges = findRanges(flat, query)
+          if (ranges.length && node.parentNode) {
+            targets.push({ node, value, ranges, map: normalizedIndexMap(value) })
+          }
+        }
+        node = walker.nextNode()
+      }
+      const marks = []
+      for (const target of targets) {
+        const pieces = []
+        let at = 0
+        for (const range of target.ranges) {
+          const from = target.map[range.start]
+          const to = range.end < target.map.length ? target.map[range.end] : target.value.length
+          if (!(from >= at) || !(to > from)) continue
+          if (from > at) pieces.push(document.createTextNode(target.value.slice(at, from)))
+          const mark = document.createElement('mark')
+          mark.className = 'knit-find'
+          mark.textContent = target.value.slice(from, to)
+          pieces.push(mark)
+          marks.push(mark)
+          at = to
+        }
+        if (!pieces.length) continue
+        if (at < target.value.length) pieces.push(document.createTextNode(target.value.slice(at)))
+        const parent = target.node.parentNode
+        for (const piece of pieces) parent.insertBefore(piece, target.node)
+        parent.removeChild(target.node)
+      }
+      return marks
+    }
+
+    /**
+     * 还原：把每个 `mark.knit-find` 换回纯文本节点，再把相邻文本节点合并。
+     *
+     * **必须还原得干净** —— 否则下一次画是在「已经画过的树」上再画一层，
+     * 命中数会越算越多，而且退出查找后正文里永远留着标签。
+     *
+     * @param {HTMLElement|null} box - 正文容器
+     * @returns {void}
+     */
+    function clearFindMarks(box) {
+      if (!box || typeof box.querySelectorAll !== 'function' || typeof document === 'undefined') return
+      const marks = box.querySelectorAll('mark.knit-find')
+      const parents = []
+      for (let i = 0; i < marks.length; i += 1) {
+        const mark = marks[i]
+        const parent = mark.parentNode
+        if (!parent) continue
+        parent.replaceChild(document.createTextNode(String(mark.textContent || '')), mark)
+        if (parents.indexOf(parent) < 0) parents.push(parent)
+      }
+      for (const parent of parents) if (typeof parent.normalize === 'function') parent.normalize()
+    }
+
+    /** 标出「当前这一条命中」（其余保持普通底色）。 */
+    function markFindCurrent(marks, index) {
+      if (!Array.isArray(marks)) return
+      for (let i = 0; i < marks.length; i += 1) {
+        const el = marks[i]
+        if (!el || !el.classList) continue
+        if (i === index) el.classList.add('knit-find-current')
+        else el.classList.remove('knit-find-current')
+      }
+    }
+
+    /**
+     * 把当前命中滚进视野 —— 与 `scrollToDocAnchor` **同一套手动算术**。
+     *
+     * 刻意不用 `scrollIntoView`：那会连带滚外层容器与整个面板，长文里的位置会飘
+     * （见 `scrollToDocAnchor` 那条注释，同一个坑）。这里滚的仍是 `.knit-preview-body`。
+     * 位置取**居中**：逐个往下找时，命中停在视野中间最好读。
+     *
+     * @param {HTMLElement|null} mark - 当前命中的元素
+     * @returns {boolean} 是否真的滚了
+     */
+    function scrollMarkIntoView(mark) {
+      if (!mark || typeof mark.getBoundingClientRect !== 'function') return false
+      const box = typeof mark.closest === 'function' ? mark.closest('.knit-preview-body') : null
+      if (!box || !Number.isFinite(box.scrollTop) || typeof box.getBoundingClientRect !== 'function') return false
+      const rect = box.getBoundingClientRect()
+      const delta = mark.getBoundingClientRect().top - rect.top
+      const viewH = Number.isFinite(rect.height) ? rect.height : 0
+      const target = box.scrollTop + delta - Math.max(0, viewH / 2 - 10)
+      box.scrollTop = Math.max(0, Math.round(target))
+      return true
+    }
+
     /**
      * Markdown 预览：在 `MarkdownText` 外面包一层，只为把「跳到你点的那一段」接上。
      *
@@ -3659,7 +4233,14 @@ video.knit-preview-media{width:100%;background:#000}
           : null)
     }
 
-    function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onReveal, onOpenMap, onOpenWeb, onToggleFullscreen, onResizeStart }) {
+    /**
+     * 预览面板（头 + 引用条 + 正文）。
+     *
+     * @param {object} props - 渲染入参。
+     *   `find`（v0.25）= 查找条那一组：状态在 `KnitBody`（快捷键挂在面板根上，
+     *   所以状态不能只活在这一层）；`bodyRef` = 正文容器 ref，由 `KnitBody` 拿去做 DOM 命中绘制。
+     */
+    function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onReveal, onOpenMap, onOpenWeb, onToggleFullscreen, onResizeStart, find, bodyRef, favorite, onToggleFavorite }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
 
@@ -3723,6 +4304,51 @@ video.knit-preview-media{width:100%;background:#000}
               },
               h('span', { className: 'knit-link-name' }, item.title),
               h('span', { className: 'knit-link-path' }, item.rel))))))
+
+      /* v0.25 查找条：位置与 `linksBar` 同一层（夹在头与正文之间，**不参与正文滚动**）。
+         只在查找打开、且这篇有可搜正文（非媒体）时出现；它占的是预览内部的行高，
+         预览的**外框高度是写死的**（style.height = 拖出来的比例）⇒ 列表不会被它推着动。 */
+      const findBar = find && find.on && !isMedia
+        ? h('div', { className: 'knit-findbar' },
+            h('div', { className: 'knit-searchwrap' },
+              h('input', {
+                // 第二个 class 是给测试与样式用的锚点：替身返回的是**扁平**节点表，
+                // 没有父子关系可查，而工具栏那个过滤框也叫 .knit-filter —— 不区分就分不出谁是谁。
+                className: 'knit-filter knit-findinput',
+                ref: find.inputRef,
+                value: find.query,
+                placeholder: t('find.placeholder'),
+                'aria-label': t('find.aria'),
+                onChange: (event) => find.onQuery(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    find.onStep(event.shiftKey ? -1 : 1)
+                  } else if (event.key === 'Escape') {
+                    // 双保险：根上的捕获阶段通常已经处理掉了（那里要抢在列表的 Esc 之前）
+                    event.stopPropagation()
+                    find.onClose()
+                  }
+                },
+              })),
+            h('span', { className: 'knit-findcount', 'aria-live': 'polite' },
+              !find.query
+                ? ''
+                : (find.count > 0
+                    ? t('find.count', { current: Math.min(find.index, find.count - 1) + 1, total: find.count })
+                    : t('find.none'))),
+            h('button', {
+              type: 'button', className: 'knit-findnav', title: t('find.prev'),
+              disabled: find.count === 0, onClick: () => find.onStep(-1),
+            }, '↑'),
+            h('button', {
+              type: 'button', className: 'knit-findnav', title: t('find.next'),
+              disabled: find.count === 0, onClick: () => find.onStep(1),
+            }, '↓'),
+            h('button', {
+              type: 'button', className: 'knit-preview-close', title: t('find.close'), onClick: find.onClose,
+            }, '✕'))
+        : null
 
       const linksBar = (() => {
         if (!links || !onToggleLinks) return null
@@ -3875,6 +4501,27 @@ video.knit-preview-media{width:100%;background:#000}
             onClick: onToggleFullscreen,
             title: fullscreen ? t('preview.exitFullscreenTitle') : t('preview.fullscreenTitle'),
           }, fullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')),
+          // v0.25 媒体收藏：只给媒体档。
+          // 「收藏」在文档 / 代码上是另一个概念（那是 Context Pack 的「固定」，宿主存储），
+          // 这里不混用，也不给媒体做固定 —— 两套语义各自独立。
+          isMedia && onToggleFavorite
+            ? h('button', {
+                className: 'knit-btn',
+                onClick: () => onToggleFavorite(preview.rel),
+                title: favorite ? t('fav.removeTitle') : t('fav.addTitle'),
+              }, favorite ? t('fav.on') : t('fav.off'))
+            : null,
+          // v0.25 追加：**查找**按钮。
+          // 为什么除了快捷键还要有这个按钮：外层应用（飞书客户端的内置浏览器等）有自己的
+          // 原生 Cmd+F，它在按键**进入网页之前**就被处理掉了 —— 网页侧抢不回来。
+          // 所以能力必须有一个**不依赖快捷键**的入口。只给有正文的档：媒体档没有可搜的东西。
+          !isMedia
+            ? h('button', {
+                className: 'knit-btn',
+                onClick: () => { if (find) find.onOpen() },
+                title: t('find.openTitle'),
+              }, t('find.openBtn'))
+            : null,
           // v0.19 追加：**网页预览** —— 只给 HTML。
           // 它开的是官方文档预览标签页（`actions.openResource`，与双击列表行**同一条**路），
           // 那一侧有 DSH 自带的 HTML 渲染器，出来的是**网页**而不是源码。
@@ -3905,8 +4552,11 @@ video.knit-preview-media{width:100%;background:#000}
           h('button', { className: 'knit-preview-close', onClick: onClose, title: t('preview.close') }, '✕')),
         // v0.12 引用条：夹在头与正文之间，不参与正文滚动
         linksBar,
+        // v0.25 查找条：同上，也是「夹在头与正文之间」
+        findBar,
         h('div', {
           className: `knit-preview-body${isMedia ? ' is-media' : ''}`,
+          ref: bodyRef,
         },
           !isMedia && preview.truncated ? h('div', { className: 'knit-preview-note' }, t('preview.truncated')) : null,
           body))
@@ -4003,6 +4653,59 @@ video.knit-preview-media{width:100%;background:#000}
       const [semBusy, setSemBusy] = React.useState(false)
       const [semNotice, setSemNotice] = React.useState('')
 
+      /* ── v0.25：对话里「工具产出」的图 ─────────────────────────────────────
+         数据来自独立接口（只在本会话的 `tool/result` 事件里收集）；**列表零 I/O**。
+         它们**不在工作区里**，所以是这一档唯一「不是文件」的条目：
+         · 已经在工作区里存在同内容文件（sha256 相同）的 ⇒ 宿主侧就过滤掉了，不重复出现；
+         · 一旦你把图存进项目，下一次轮询它就自己消失 —— 这就是用户要的那条规则。 */
+      const [attachments, setAttachments] = React.useState([])
+      /** 附件 → 伪文档：让它走**同一条**网格渲染/预览/键盘路径，不新开一套。 */
+      const attachmentDocs = React.useMemo(() => (Array.isArray(attachments) ? attachments : [])
+        .slice()
+        .sort((a, b) => (Number.isFinite(b.at) ? b.at : 0) - (Number.isFinite(a.at) ? a.at : 0))
+        .map((item) => ({
+          rel: item.id,
+          name: item.name,
+          title: item.name,
+          path: '',
+          kind: item.kind === 'video' ? 'video' : 'image',
+          mtimeMs: Number.isFinite(item.at) ? item.at : Date.now(),
+          size: Number.isFinite(item.bytes) ? item.bytes : 0,
+          summary: '',
+          score: null,
+          attachmentId: item.id,
+          conversation: true,
+        })), [attachments])
+
+      /* ── v0.25：媒体收藏（同样**追加在末尾**：替身按下标 seed useState/useRef）──────
+         只存 localStorage；工作区换了就重读那一格。写入时只保留最近 FAV_MAX_ROOTS 个工作区。 */
+      const [favorites, setFavorites] = React.useState([])
+      React.useEffect(() => {
+        setFavorites(favoriteRelsFor(parseFavorites(readPref(FAV_KEY)), state.root))
+      }, [state.root])
+      const favoriteSet = React.useMemo(() => new Set(favorites), [favorites])
+      /** 加 / 取消收藏，并立刻落盘。 */
+      const toggleFavorite = React.useCallback((rel) => {
+        const next = toggleFavoriteList(favorites, rel)
+        setFavorites(next)
+        const key = state.root || ''
+        if (!key) return                     // 工作区未知 ⇒ 只活到这次会话结束，不写脏数据
+        const table = parseFavorites(readPref(FAV_KEY))
+        // 取消到空就把这一格**删掉**，不留 `{"<root>":[]}` 这种垃圾键
+        if (next.length) table[key] = next
+        else delete table[key]
+        // 只保留最近几个工作区；**当前这个永远保留**（别把用户刚标的丢掉）
+        const roots = Object.keys(table)
+        while (roots.length > FAV_MAX_ROOTS) {
+          const drop = roots.find((r) => r !== key)
+          if (!drop) break
+          delete table[drop]
+          roots.splice(roots.indexOf(drop), 1)
+        }
+        writePref(FAV_KEY, JSON.stringify(table))
+      }, [favorites, state.root])
+
+
       /* ── 曾经在这里的三个状态 + 一个 ref：右栏的形态 ──────────
          `packWidth`(310) / `packFloat`(null) / `packSnap`(false) / `packColRef`。
          **2026-09-29 随右栏一起删除**。当时它们**只存在内存里**（刷新回默认值），
@@ -4032,6 +4735,14 @@ video.knit-preview-media{width:100%;background:#000}
          才 bump）。原先每 5 s 都无条件落一个新对象：整屏重渲染一遍 + 一轮 FLIP 强制布局 +
          GC，用户体感就是「卡顿卡顿的」。签名存在状态自己身上，所以不需要新 hook
          （前面那些 hook 的位置被测试按位预置，别插队）。 */
+      /* v0.25（2026-10-22 用户裁决）：**媒体档不看相关性，一律按时间倒序**。
+         原话：「媒体这里不用跟随 Agent 读了它进行排序，目前就是以上传时间排序就可以，
+         最新的放在前面就够了……文档可以是调用，但是图片不需要有这种逻辑」。
+
+         ⇒ 请求**就是 time**（不只改显示）：这样宿主不做无用的相关度计算、截断也按时间切。
+         排序偏好本身**不做修改** —— 切回文档/代码还是你原来选的那个。 */
+      const effectiveSort = kind === KIND_MEDIA ? 'time' : sort
+
       const load = React.useCallback(async (alive) => {
         const live = () => typeof alive !== 'function' || alive()
         if (!live()) return
@@ -4046,7 +4757,7 @@ video.knit-preview-media{width:100%;background:#000}
           // 而词法模式下宿主**一次 provider 调用都不会发**（方案 §9.2 判据 1）。
           // ⚠️ v0.25（第二轮修订）：`/api/recent` 上**一个字节的变更关联都没有** ——
           // 它的响应形状与 v0.24 逐字相同。变更关联走**独立接口**，见下面那次 fetch。
-          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${sort}&kind=${kind}&retrieval=${sort === 'relevance' && retrieval === 'hybrid' ? 'hybrid' : 'lexical'}${usageOn ? '&usage=1' : ''}`
+          const url = `${LIST_API}?sessionId=${encodeURIComponent(sessionId)}&limit=40&sort=${effectiveSort}&kind=${kind}&retrieval=${effectiveSort === 'relevance' && retrieval === 'hybrid' ? 'hybrid' : 'lexical'}${usageOn ? '&usage=1' : ''}`
           const res = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' })
           const data = await res.json()
           if (!live()) return
@@ -4086,7 +4797,25 @@ video.knit-preview-media{width:100%;background:#000}
            · 只在「相关」序要它（时间序没有 Context Pack，变更关联无处可落）；
            · 复用宿主刚刚那次扫描（服务端 8 s 同窗）⇒ 两个请求 = 一次扫描 + 一次 git；
            · 失败一律降级成 `null`（这一区消失），**绝不带坏列表** —— 列表已经落好了。 */
-        const wantChanges = sort === 'relevance' && changesOn
+          // v0.25：媒体档额外取「对话里工具产出的图」。**只在这一档取** —— 别的档不显示它们。
+          // 失败/老宿主没有这条路由 ⇒ 保持安静（列表为空），不弹错、不挡列表。
+          if (kind === KIND_MEDIA) {
+            try {
+              const ares = await fetch(`${ATTACH_LIST_API}?sessionId=${encodeURIComponent(sessionId)}`, {
+                headers: { accept: 'application/json' }, cache: 'no-store',
+              })
+              const adata = await ares.json()
+              if (!live()) return
+              if (adata && adata.ok && Array.isArray(adata.items)) {
+                const items = adata.items
+                // 一字未变就返回**同一个数组**（与列表同一套去重理由：省一次整屏重渲染）
+                setAttachments((prev) => (prev.length === items.length
+                  && items.every((item, i) => item && prev[i] && item.id === prev[i].id) ? prev : items))
+              }
+            } catch { /* 安静：这一档少几张图，不影响文件列表 */ }
+          }
+
+        const wantChanges = effectiveSort === 'relevance' && changesOn
         if (!wantChanges) {
           setChangesData((prev) => (prev === null ? prev : null))
           return
@@ -4389,7 +5118,19 @@ video.knit-preview-media{width:100%;background:#000}
        * 否则「其他相关文档」区里的条目键盘到不了，而已经在 Related 层里的条目
        * 会被算两次。（媒体档走的是网格，`visibleDocs` 就是那批媒体。）
        */
-      const navDocs = contextView ? contextView.flat : visibleDocs
+      /* v0.25：媒体档的「可见条目」＝ 收藏在前 + 对话里生成的 + 其余。
+         `navDocs` 也用它 —— 否则键盘导航会把对话里那几张**跳过去**（看得见、走不到）。
+         收藏仍然排在最前：这一条没变，只是把「还没存进项目的图」插在收藏之后。 */
+      const mediaDocs = React.useMemo(() => {
+        /* 媒体档的**唯一**顺序：按时间倒序（最新在前）。文档/代码才看相关性。
+           工作区文件用 `mtimeMs`，对话里生成的图用事件时间（`at` → 伪文档的 `mtimeMs`）——
+           两者同一条时间轴，所以「刚生成的」自然在最前；存进项目后它变成文件、时间也还在附近。
+           收藏仍然前移（`orderFavorites` 是**稳定**分区 ⇒ 两组内部都还是时间倒序）。 */
+        const byTimeDesc = (a, b) => (Number.isFinite(b.mtimeMs) ? b.mtimeMs : 0) - (Number.isFinite(a.mtimeMs) ? a.mtimeMs : 0)
+        const merged = (Array.isArray(visibleDocs) ? visibleDocs : []).concat(attachmentDocs)
+        return orderFavorites(merged.slice().sort(byTimeDesc), favoriteSet)
+      }, [visibleDocs, favoriteSet, attachmentDocs])
+      const navDocs = kind === KIND_MEDIA && !contextView ? mediaDocs : (contextView ? contextView.flat : visibleDocs)
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
@@ -4442,7 +5183,9 @@ video.knit-preview-media{width:100%;background:#000}
           anchor: anchor || null, anchorSeq: 0,
         }
         if (isMedia(doc)) {
-          return { ...base, kind: doc.kind, src: mediaUrl(sessionId, doc.rel), status: 'ready' }
+          // v0.25：对话里生成的图走 sha256 那条地址（它没有工作区路径）
+          const src = doc.attachmentId ? attachmentUrl(sessionId, doc.attachmentId) : mediaUrl(sessionId, doc.rel)
+          return { ...base, kind: doc.kind, src, status: 'ready' }
         }
         return { ...base, kind: doc.kind || ARTIFACT_DOC, status: 'loading' }
       }, [sessionId])
@@ -4510,6 +5253,75 @@ video.knit-preview-media{width:100%;background:#000}
        *    （这里以前一律传 `docLayout.columns`，而文档列数与媒体列数根本不是一回事 ——
        *    媒体档的 ←→ 一直是按文档的 2 列在走。改动顺便把它对齐了。）
        */
+      /* ── v0.25：媒体档「双击全屏」（**追加在末尾**：替身按下标 seed useState/useRef）
+         存的是 `rel` 而不是下标 —— 列表每 5 秒会换一份，下标会漂；`rel` 不会。
+         列表里找不到它了（被删 / 被存进项目 / 切了档）就自己关掉。 */
+      const [lightboxRel, setLightboxRel] = React.useState('')
+      const lightboxRef = React.useRef(null)
+      const lightboxIndex = React.useMemo(
+        () => (lightboxRel ? mediaDocs.findIndex((doc) => doc.rel === lightboxRel) : -1),
+        [mediaDocs, lightboxRel],
+      )
+      const lightboxDoc = lightboxIndex >= 0 ? mediaDocs[lightboxIndex] : null
+      const lightboxRailView = React.useMemo(
+        () => lightboxRail(mediaDocs, lightboxIndex),
+        [mediaDocs, lightboxIndex],
+      )
+      React.useEffect(() => {
+        if (lightboxRel && lightboxIndex < 0) setLightboxRel('')
+      }, [lightboxRel, lightboxIndex])
+      const lightboxOpen = React.useCallback((doc) => {
+        if (!doc || doc.kind !== 'image') return
+        setLightboxRel(doc.rel)
+        // 悬停浮窗这时必须收掉：它在查看器下面，留着就是两层大字
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = 0
+        setHoverShot(null)
+      }, [])
+      const lightboxClose = React.useCallback(() => setLightboxRel(''), [])
+      /* 翻到第 9 张时，左列如果溢出，当前那张会被留在视野外 —— 每次换图都把它**滚进来**
+         （`block:'nearest'`：已经在视野里就一格都不动，不会抖）。没有 DOM 就跳过。 */
+      const lightboxRailRef = React.useRef(null)
+      React.useEffect(() => {
+        if (!lightboxRel) return
+        const rail = lightboxRailRef.current
+        if (!rail || typeof rail.querySelector !== 'function') return
+        const active = rail.querySelector('.knit-lightbox-thumb.active')
+        if (active && typeof active.scrollIntoView === 'function') {
+          try { active.scrollIntoView({ block: 'nearest' }) } catch { /* 老浏览器：算了，不影响换图 */ }
+        }
+      }, [lightboxRel])
+      /** 查看器里的「本地打开」：与预览头同一条宿主通道，只是路径从 rel 现算。 */
+      const lightboxAbs = lightboxDoc
+        ? (lightboxDoc.path || joinPath(state.hostRoot || state.root, lightboxDoc.rel))
+        : ''
+      const lightboxOpenLocal = React.useCallback(async () => {
+        setNotice((await openLocalPath(lightboxAbs)) || '')
+      }, [lightboxAbs])
+      /* 打开时把焦点交给遮罩：键盘用户一进来 Esc / ← → 就该能用（真机才有 DOM）。 */
+      React.useLayoutEffect(() => {
+        if (!lightboxRel) return
+        const node = lightboxRef.current
+        if (node && typeof node.focus === 'function') node.focus()
+      }, [lightboxRel])
+      /**
+       * 在带子里前后翻（环绕）。
+       *
+       * ⚠️ 必须用**函数式更新**从「当前 state」推下一步，不能读渲染时捕获的 `lightboxIndex`：
+       * 连着按两下 → 如果两下都落在同一次渲染的闭包里，第二下会用**陈旧的下标**再算一遍，
+       * 结果只前进一格（证伪时就是这么抓到的）。现在每一步都以「此刻的 rel」为起点。
+       */
+      const lightboxStep = React.useCallback((delta) => {
+        if (!mediaDocs.length) return
+        setLightboxRel((current) => {
+          const at = mediaDocs.findIndex((doc) => doc.rel === current)
+          const from = at >= 0 ? at : 0
+          const next = (from + (delta < 0 ? -1 : 1) + mediaDocs.length) % mediaDocs.length
+          const doc = mediaDocs[next]
+          return doc ? doc.rel : current
+        })
+      }, [mediaDocs])
+
       const onListKeyDown = React.useCallback((event) => {
         if (navDocs.length === 0) return
         const index = navDocs.findIndex((doc) => doc.rel === cursor)
@@ -4521,13 +5333,21 @@ video.knit-preview-media{width:100%;background:#000}
         if (target >= 0) {
           event.preventDefault()
           const doc = navDocs[target]
-          if (doc) { setCursor(doc.rel); openPreview(doc) }
+          if (doc) {
+            setCursor(doc.rel)
+            // 媒体档不做就地预览（2026-10-22 用户裁决）：方向键只移光标，看大图用 Enter / 双击
+            if (kind !== KIND_MEDIA) openPreview(doc)
+          }
           return
         }
         if (event.key === 'Enter') {
           event.preventDefault()
           const doc = navDocs.find((d) => d.rel === cursor) || navDocs[0]
-          if (doc) togglePreview(doc)
+          if (doc) {
+            // 与双击同一套分流（键盘不能比鼠标少一条路）
+            if (kind === KIND_MEDIA && doc.kind === 'image') lightboxOpen(doc)
+            else togglePreview(doc)
+          }
           return
         }
         if (event.key === 'Escape') {
@@ -4535,7 +5355,7 @@ video.knit-preview-media{width:100%;background:#000}
           if (fullscreen) setFullscreen(false)
           else closePreview()
         }
-      }, [navDocs, cursor, fullscreen, kind, mediaLayout.columns, openPreview, togglePreview, closePreview])
+      }, [navDocs, cursor, fullscreen, kind, mediaLayout.columns, openPreview, togglePreview, closePreview, lightboxOpen])
 
       /** 拖拽预览面板上缘改变高度。 */
       const onResizeStart = React.useCallback((event) => {
@@ -4744,7 +5564,10 @@ video.knit-preview-media{width:100%;background:#000}
       }, [])
 
       /** 媒体条目的同源字节地址（缩略图 / 就地预览）。 */
-      const srcFor = React.useCallback((doc) => mediaUrl(sessionId, doc.rel), [sessionId])
+      const srcFor = React.useCallback(
+        (doc) => (doc.attachmentId ? attachmentUrl(sessionId, doc.attachmentId) : mediaUrl(sessionId, doc.rel)),
+        [sessionId],
+      )
 
       /**
        * 切换检索模式并记住偏好。**只切偏好**：真正的 provider 调用发生在宿主侧，
@@ -5069,7 +5892,21 @@ video.knit-preview-media{width:100%;background:#000}
           passage: firstMatchOf(doc),
           onPassage: openPassage,
         }
-        if (isMedia(doc)) return h(MediaCard, { ...common, src: srcFor(doc) })
+        if (isMedia(doc)) {
+          return h(MediaCard, {
+            ...common,
+            /* 单击**只移光标**（`active` 不再亮、下方不再弹预览）——
+               这是用户 2026-10-22 明确要撤掉的那个交互。 */
+            onSelect: () => setCursor(doc.rel),
+            onPreview: togglePreview,
+            src: srcFor(doc),
+            favorite: favoriteSet.has(doc.rel),
+            conversation: Boolean(doc.conversation),
+            onHoverStart: hoverStart,
+            onHoverEnd: hoverEnd,
+            onZoom: lightboxOpen,
+          })
+        }
         // `whyText` 只认 Context Pack 条目上挂的 `reason` —— 平铺列表里没有这个字段，
         // 于是返回空串，那一行不渲染。
         // `num` / `primary` 只有分层视图会传（Design §11 / §13）；平铺列表照旧无序号。
@@ -5115,7 +5952,10 @@ video.knit-preview-media{width:100%;background:#000}
         : kind === KIND_CODE
           ? t('list.emptyCode')
           : t('list.empty')
-      const body = state.status === 'loading' && state.docs.length === 0
+      /* ⚠️ 为什么是**函数**而不是常量：这里要读「面板末尾才声明」的状态（媒体收藏）。
+         写成常量会在这一行就求值 ⇒ TDZ（`Cannot access 'favoriteSet' before initialization`）。
+         包成函数、在 return 里调用一次，既不改渲染结果，也不会再被后面的新状态绊倒。 */
+      const listBody = () => (state.status === 'loading' && state.docs.length === 0
         ? h('div', { className: 'knit-msg' }, t('list.scanning'))
         : state.status === 'error'
           ? h('div', { className: 'knit-msg' }, t('list.failed', { error: state.error }), h('br'), t('list.failedHint'))
@@ -5124,10 +5964,10 @@ video.knit-preview-media{width:100%;background:#000}
             : visibleDocs.length === 0
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
-                ? mediaGrid(visibleDocs)
+                ? mediaGrid(mediaDocs)
                 : contextView
                   ? contextBody(contextView)
-                  : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs))
+                  : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs)))
 
       // 排序说明那一行（.knit-topic）**2026-09-30 已整体删除**：排序方式由头部那个
       // 「相关 / 最新」切换按钮自己表达（按钮上就写着当前选的是哪个），再补一句
@@ -5643,9 +6483,184 @@ video.knit-preview-media{width:100%;background:#000}
         ? state.control.excluded.filter((item) => item.exists)
         : []
 
+      /* ── v0.25：预览里的查找（Cmd+F）──────────────────────────────────────
+         ⚠️ **这一整块必须留在组件末尾** —— 测试替身按**下标**预置 useState/useRef 的初值
+         （`harness.seed`），而只有 useState/useRef 占槽位。插在中间会把后面每一个槽位
+         整体挪位，`seeded[15]` 那条就直接落到别的状态上（上一轮 `changesOn` 已经踩过一次，
+         这次的 `query.trim is not a function` 是第二次）。新钩子一律**追加在最后**。
+
+      /* ── v0.25：预览里的查找（Cmd+F）──────────────────────────────────────
+         状态放在**这一层**而不是 PreviewPanel：快捷键挂在面板根上（见
+         `onRootKeyDownCapture`）—— 焦点通常在左边那个列表上（↑↓ 开着预览），
+         挂在 `.knit-preview` 上根本收不到那个事件。
+         `findSeq` 只在**显式导航**时 +1（打开 / 输入 / 上一下一个），它是「要不要滚」的唯一开关：
+         5 秒轮询会重画命中，**但绝不滚动** —— 否则用户读到一半每 5 秒被拽回去一次
+         （AGENTS.md §6.13 ② 那个「列表自己跳」的坑，同一个道理）。 */
+      const [findOn, setFindOn] = React.useState(false)
+      const [findQuery, setFindQuery] = React.useState('')
+      const [findIndex, setFindIndex] = React.useState(0)
+      const [findSeq, setFindSeq] = React.useState(0)
+      const [findCount, setFindCount] = React.useState(0)
+      const findMarksRef = React.useRef([])
+      const findInputRef = React.useRef(null)
+      const previewBodyRef = React.useRef(null)
+
+      /* 关掉预览就关掉查找（否则下次打开会带着上一次的关键词与一树残留标记）。 */
+      React.useEffect(() => {
+        if (preview) return
+        setFindOn(false)
+        setFindQuery('')
+      }, [preview])
+
+      /* 画命中 —— 开关 / 关键词 / 这一篇的内容，任一变了就重画。
+         ⚠️ 依赖里没有轮询刷出来的数组；`preview` 换了一篇或文件被改过就重画一次，
+         但**不滚** —— 滚动只由 `findSeq` 那条 effect 负责。 */
+      React.useLayoutEffect(() => {
+        const box = previewBodyRef.current
+        clearFindMarks(box)
+        findMarksRef.current = []
+        if (!box || !findOn || !findQuery) {
+          setFindCount(0)
+          return
+        }
+        const marks = paintFindMarks(box, findQuery)
+        findMarksRef.current = marks
+        setFindCount(marks.length)
+      }, [findOn, findQuery, preview && preview.rel, preview && preview.text])
+
+      /* 标出「当前这一条」并滚到它。
+         ⚠️ **只依赖 `findSeq`**（显式导航才 +1）、命中数组走 ref 读：把重画当成「用户动了光标」，
+         就会每 5 秒把用户读到一半的视图拽回去一次（§6.13 ② 那条坑，同一个道理）。 */
+      React.useLayoutEffect(() => {
+        const marks = findMarksRef.current
+        if (!findOn || !marks.length) return
+        const index = Math.min(Math.max(0, findIndex), marks.length - 1)
+        markFindCurrent(marks, index)
+        scrollMarkIntoView(marks[index])
+      }, [findSeq])
+
+      /* 打开后把焦点交给输入框（挂上去之后再 focus）。 */
+      React.useLayoutEffect(() => {
+        if (!findOn) return
+        const input = findInputRef.current
+        if (input && typeof input.focus === 'function') input.focus()
+      }, [findOn])
+
+      /**
+       * 打开查找条并把焦点给它。
+       *
+       * 两条入口都用它：**Cmd+F**（焦点在面板里时），以及预览头那个**「查找」按钮** ——
+       * 后者是兜底：外层应用的原生快捷键在按键进入网页之前就被它自己处理了，网页侧抢不回来。
+       * 已经开着时 `findOn` 不变、聚焦那条 effect 不会再跑，所以这里就地补一次 focus。
+       */
+      const openFind = React.useCallback(() => {
+        setFindOn(true)
+        const input = findInputRef.current
+        if (input && typeof input.focus === 'function') input.focus()
+      }, [])
+
+      /** 关掉查找条（不清正文内容，也不动预览）。 */
+      const closeFind = React.useCallback(() => {
+        setFindOn(false)
+        setFindQuery('')
+      }, [])
+
+      /** 上一个 / 下一个（环绕）。 */
+      const findStep = React.useCallback((delta) => {
+        const total = findMarksRef.current.length
+        if (!total) return
+        setFindIndex((current) => stepFindIndex(current, total, delta))
+        setFindSeq((n) => n + 1)
+      }, [])
+
+      /** 改关键词：回到第一条命中并滚过去（与 Chrome 一致）。 */
+      const onFindQuery = React.useCallback((value) => {
+        setFindQuery(value)
+        setFindIndex(0)
+        setFindSeq((n) => n + 1)
+      }, [])
+
+      /**
+       * 面板根上的**捕获阶段**键盘处理。
+       *
+       * 为什么是「这一层」：焦点通常在左边那个列表上（↑↓ 打开预览），把快捷键挂在
+       * `.knit-preview` 上收不到那个事件（事件从列表冒泡，不经过预览）。
+       * 为什么是「捕获」：列表自己有 Esc（关预览 / 退全屏），而查找开着时 Esc 的语义
+       * 应当是**先关查找条** —— 捕获先于子节点执行，这里 stopPropagation 就把它拦下了。
+       *
+       * 只拦两件事（Cmd/Ctrl+F、查找开着时的 Esc），其余一律放行：不抢输入框、不抢列表方向键。
+       */
+      const onRootKeyDownCapture = React.useCallback((event) => {
+        if (!event) return
+        // ⚠️ 查看器是**最上层**：它开着时 Esc / ← / → 先归它（不许漏到列表的键盘导航上）
+        if (lightboxRel) {
+          if (event.key === 'Escape') {
+            event.preventDefault(); event.stopPropagation(); lightboxClose(); return
+          }
+          /* 左列是**竖排**的，所以 ↑↓ 必须能用（用户 2026-10-22 追加要求）；
+             ←→ 一并留着 —— 有人就是习惯左右翻，两条路没有冲突。 */
+          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft'
+            || event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault(); event.stopPropagation()
+            const back = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+            lightboxStep(back ? -1 : 1)
+            return
+          }
+        }
+        const mod = !!(event.metaKey || event.ctrlKey)
+        if (mod && !event.altKey && String(event.key || '').toLowerCase() === 'f') {
+          // 媒体档没有可搜的正文 ⇒ 不拦，交回宿主 / 浏览器自己的行为
+          if (!preview || preview.kind === 'image' || preview.kind === 'video') return
+          event.preventDefault()
+          event.stopPropagation()
+          openFind()
+          return
+        }
+        if (event.key === 'Escape' && findOn) {
+          event.preventDefault()
+          event.stopPropagation()
+          setFindOn(false)
+          setFindQuery('')
+        }
+      }, [preview, findOn, openFind, lightboxRel, lightboxClose, lightboxStep])
+
+      /* ── v0.25：媒体档「悬停看大图」（同样**追加在末尾**：替身按下标 seed useState/useRef）
+         只对图片；停 HOVER_SHOT_DELAY_MS 才出现；离开 / 滚动 / 换档立刻收。 */
+      const [hoverShot, setHoverShot] = React.useState(null)
+      const hoverTimerRef = React.useRef(0)
+      const hoverStart = React.useCallback((doc, src, event) => {
+        if (!doc || doc.kind !== 'image' || !src) return
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+        // 矩形从事件里取（真机有 currentTarget）；取不到就交给纯函数走「视口居中」那条路
+        let rect = null
+        try {
+          const el = event && event.currentTarget
+          if (el && typeof el.getBoundingClientRect === 'function') rect = el.getBoundingClientRect()
+        } catch { rect = null }
+        const view = {
+          width: typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1024,
+          height: typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768,
+        }
+        const box = hoverShotBox(rect, view)
+        hoverTimerRef.current = setTimeout(() => {
+          hoverTimerRef.current = 0
+          setHoverShot({ rel: doc.rel, src, box })
+        }, HOVER_SHOT_DELAY_MS)
+      }, [])
+      const hoverEnd = React.useCallback(() => {
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = 0
+        setHoverShot((prev) => (prev ? null : prev))
+      }, [])
+      React.useEffect(() => () => {
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+      }, [])
+
       return h('div', {
         className: `knit-root${fullscreen ? ' fullscreen' : ''}`,
         ref: rootRef,
+        // v0.25 查找：捕获阶段（要抢在列表的 Esc 之前，见 onRootKeyDownCapture 的注释）
+        onKeyDownCapture: onRootKeyDownCapture,
       },
       h('div', { className: 'knit-head' },
         h('button', {
@@ -5676,16 +6691,22 @@ video.knit-preview-media{width:100%;background:#000}
            ② 搜索排最后、贴最右：它只过滤当前列表，不重置排序与类型（§三.3）。
            ③ 六个选项彼此独立 —— 选「代码」再选「最新」= 最新的代码。
            顺序即控件顺序，别再挪（细则在 CSS 那边的 .knit-bar / .knit-filter 注释里）。 */
+        /* v0.25（2026-10-22 用户裁决）：**媒体档不看相关性** ⇒ 这一组在那一档禁用，
+           并且**如实显示「最新」在生效**（显示的是「当前实际顺序」，不是存着的偏好）。
+           偏好本身不动：切回文档/代码还是你原来选的那个。
+           ⚠️ 是「禁用」不是「删掉」：控件不消失，布局不跳，鼠标悬停也有一句解释。 */
         h('div', { className: 'knit-seg' },
           h('button', {
-            className: `knit-seg-btn${sort === 'relevance' ? ' active' : ''}`,
+            className: `knit-seg-btn${effectiveSort === 'relevance' ? ' active' : ''}`,
             onClick: () => pickSort('relevance'),
-            title: t('sort.relevanceTitle'),
+            disabled: kind === KIND_MEDIA,
+            title: kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.relevanceTitle'),
           }, t('sort.relevance')),
           h('button', {
-            className: `knit-seg-btn${sort === 'time' ? ' active' : ''}`,
+            className: `knit-seg-btn${effectiveSort === 'time' ? ' active' : ''}`,
             onClick: () => pickSort('time'),
-            title: t('sort.timeTitle'),
+            disabled: kind === KIND_MEDIA,
+            title: kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.timeTitle'),
           }, t('sort.time'))),
         // ⚠️ 2026-10-12 用户裁决：排序组与类型组之间**那根竖线去掉了** —— 它的类名与 CSS 规则都已整体删除。
         // 两组靠 `.knit-bar` 的 gap 分开就够 —— 「边界」不再需要一根线来表达。
@@ -5767,6 +6788,8 @@ video.knit-preview-media{width:100%;background:#000}
           ref: listRef,
           tabIndex: 0,
           onKeyDown: onListKeyDown,
+          // v0.25：滚动就收起悬停大图 —— 它是 fixed 定位，不跟着卡片走，留着只会错位
+          onScroll: hoverEnd,
           role: 'listbox',
           'aria-label': t('list.aria'),
           // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
@@ -5775,7 +6798,7 @@ video.knit-preview-media{width:100%;background:#000}
           'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
             ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
             : undefined,
-        }, body)
+        }, listBody())
         /* ── 曾经在这里的一层：双栏装配 ────────────────────────
            `if (!contextView) return listNode` 之后是 `.knit-context-layout`
            （两列网格：左 `.knit-col-list` + 右 `.knit-context-column`）、
@@ -5794,6 +6817,22 @@ video.knit-preview-media{width:100%;background:#000}
         pathImages,
         fullscreen,
         ratio,
+        // v0.25 查找：状态在 KnitBody，正文容器 ref 也交出去给 DOM 绘制用
+        find: {
+          on: findOn,
+          query: findQuery,
+          index: findIndex,
+          count: findCount,
+          inputRef: findInputRef,
+          onOpen: openFind,
+          onQuery: onFindQuery,
+          onStep: findStep,
+          onClose: closeFind,
+        },
+        bodyRef: previewBodyRef,
+        // v0.25 媒体收藏
+        favorite: favoriteSet.has(preview.rel),
+        onToggleFavorite: toggleFavorite,
         // v0.12 引用条
         links,
         linksExpanded,
@@ -5819,7 +6858,93 @@ video.knit-preview-media{width:100%;background:#000}
         onClose: closePreview,
         onToggleFullscreen: () => setFullscreen((v) => !v),
         onResizeStart,
-      }) : null)
+      }) : null,
+      /* v0.25：媒体档「悬停看大图」。`position:fixed` + CSS 的 `pointer-events:none` ——
+         它只是「看一眼」：不参与布局、不挡点击、不抢焦点。盒子由 `hoverShotBox()` 算好。 */
+      hoverShot
+        ? h('div', {
+            className: 'knit-shot',
+            style: {
+              left: `${hoverShot.box.left}px`,
+              top: `${hoverShot.box.top}px`,
+              width: `${hoverShot.box.width}px`,
+              height: `${hoverShot.box.height}px`,
+            },
+          }, h('img', { src: hoverShot.src, alt: '', draggable: false }))
+        : null,
+      /* v0.25：媒体档「双击全屏」查看器。
+         · 点**图片以外**（遮罩）⇒ 关；点图片本身 ⇒ 不关（`stopPropagation`），
+           否则「点一下想看清细节」就把查看器点没了；
+         · 左侧一列缩略图（当前这张附近 10 张）——点它换图，也不许冒泡去关；
+         · `role="dialog"` + `aria-modal` + 可聚焦：Esc / ← → 由根上的捕获阶段接管。 */
+      lightboxDoc
+        ? mountLightbox(h('div', {
+            className: 'knit-lightbox',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': t('lightbox.aria', { name: lightboxDoc.name || lightboxDoc.rel }),
+            tabIndex: 0,
+            ref: lightboxRef,
+            onClick: lightboxClose,
+          },
+            h('div', {
+              className: 'knit-lightbox-rail',
+              ref: lightboxRailRef,
+              onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+            }, lightboxRailView.items.map((doc, i) => h('button', {
+              key: doc.rel,
+              type: 'button',
+              className: `knit-lightbox-thumb${doc.rel === lightboxDoc.rel ? ' active' : ''}`,
+              title: doc.name || doc.rel,
+              'data-thumb-index': lightboxRailView.start + i,
+              onClick: () => setLightboxRel(doc.rel),
+            }, h('img', { src: srcFor(doc), alt: '', draggable: false })))),
+            /* 查看器工具条：「收藏」「本地打开」原来只活在**被撤掉的**媒体预览头里 ——
+               不搬过来就等于静默丢掉两个功能（用户 2026-10-21 明确要过「收藏排第一」）。
+               收藏只对工作区文件有意义（对话里的图还没有路径），所以对话图不显示这一条。 */
+            h('div', { className: 'knit-lightbox-tools' },
+              lightboxDoc.conversation
+                ? null
+                : h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    onClick: () => toggleFavorite(lightboxDoc.rel),
+                    title: favoriteSet.has(lightboxDoc.rel) ? t('fav.removeTitle') : t('fav.addTitle'),
+                  }, favoriteSet.has(lightboxDoc.rel) ? t('fav.on') : t('fav.off')),
+              lightboxDoc.conversation
+                ? null
+                : h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    onClick: lightboxOpenLocal,
+                    title: t('preview.openLocal', { path: lightboxDoc.rel }),
+                  }, t('preview.openLocalBtn'))),
+            /* 右上角 ✕ —— 照 DSH 自带查看器那套（全屏之后必须有一个**看得见的**出口：
+               光靠「点图片以外」和 Esc，第一次用的人不知道往哪点）。 */
+            h('button', {
+              className: 'knit-lightbox-close',
+              type: 'button',
+              title: t('lightbox.close'),
+              'aria-label': t('lightbox.close'),
+              onClick: () => lightboxClose(),
+            }, '✕'),
+            /* 滚轮翻页：只在**图片这一块**生效。左列自己会滚（它 overflow-y:auto），
+               在它上面滚轮应该滚列表，而不是换图 —— 所以监听挂在 stage 上、不挂在遮罩上。 */
+            h('div', {
+              className: 'knit-lightbox-stage',
+              onWheel: (event) => {
+                const delta = event && (event.deltaY || event.deltaX)
+                if (!delta) return
+                lightboxStep(delta > 0 ? 1 : -1)
+              },
+            }, h('img', {
+              className: 'knit-lightbox-img',
+              src: srcFor(lightboxDoc),
+              alt: lightboxDoc.name || '',
+              draggable: false,
+              onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+            }))))
+        : null)
     }
 
     /* ── 会话入口按钮 ───────────────────────────────── */
