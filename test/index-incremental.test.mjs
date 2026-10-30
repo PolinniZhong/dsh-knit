@@ -182,6 +182,17 @@ test('抽验是**承重的**：同 mtime 同 size 的改写靠指纹抓得到；
   const stale = async (budget) => {
     const root = makeWorkspace([['docs/stale.md', '# 陈旧 A\n\nAAAA\n']])
     const abs = join(root, 'docs/stale.md')
+
+    /* 🔴 「同 mtime 同 size」是这条用例的**前提**，所以 mtime 必须**按构造相等**，不能「还原」。
+       踩过的坑（连续四个版本 CI 各红一次：v0.23.0 / v0.23.1 / v0.24.0 / v0.25.0）：
+       以前写 `utimesSync(abs, before.atimeMs / 1000, before.mtimeMs / 1000)` —— 浮点秒在 Linux 上
+       还原不出逐位相同的 `mtimeMs`（截断到整秒），于是「同 mtime」根本没造出来，索引走的是**正常的
+       mtime 变更路径**，指纹抽验压根没被考到。两种表现（都观测到了）：
+         · 预算 8 ⇒ 不经过抽验，`repaired` 仍是 0 ⇒ `:207` 红；
+         · 预算 0 ⇒ 照样重读，拿到新内容 ⇒ `:211` 红。
+       现在把两次的 mtime 都钉成**同一个显式整数秒**（构造上必然逐位相等），断言也从 `<=1` 收紧到 `===`。 */
+    const PINNED_S = 1767225600 // 2026-01-01T00:00:00Z —— 整数秒，跨平台逐位可复现
+    utimesSync(abs, PINNED_S, PINNED_S)
     const before = statSync(abs)
 
     const cold = boot({ tables: {} }, { budget })
@@ -189,10 +200,10 @@ test('抽验是**承重的**：同 mtime 同 size 的改写靠指纹抓得到；
     await cold.store.flush()
 
     writeFileSync(abs, '# 陈旧 B\n\nBBBB\n') // 与上一份**等长**
-    utimesSync(abs, before.atimeMs / 1000, before.mtimeMs / 1000) // mtime 还原
+    utimesSync(abs, PINNED_S, PINNED_S) // 同一个定值 —— 不是「还原」
     const after = statSync(abs)
     assert.equal(after.size, before.size, '场景准备失败：两次内容不等长')
-    assert.ok(Math.abs(after.mtimeMs - before.mtimeMs) <= 1, '场景准备失败：mtime 没还原上')
+    assert.equal(after.mtimeMs, before.mtimeMs, '场景准备失败：两次的 mtime 不相等（必须是同一个定值）')
 
     boot(cold.medium, { budget }) // 「重启」
     const out = await collectDocs(root)
