@@ -102,16 +102,17 @@ AI Dashboard（与「安静、开发者工具、高信息密度、可信」相�
 ⇒ **要提高宽面板利用率，改的是单列排版（§7.1），不是加一栏。**
 仍成立的两条纪律：① **界面几何状态不落盘**（`readPref / writePref` 只给排序 / 类型 / 预览高度这类语义
 偏好用；守卫 `!source.includes('dsh-knit:pack')` 仍在）；② `role="separator"` 会覆盖 `<button>` 的可聚焦
-语义，可拖拽分隔条必须显式 `tabIndex: 0`。⚠️ `.knit-pack` 这个类名已不存在，旧注释指向它的说法都要改掉。
+语义，可拖拽分隔条必须显式 `tabIndex: 0`。
 
 ---
 
 ### 6.5 宿主半边改了必须重启 DSH
 
-实测**不热加载**。判断当前跑的是不是新代码：
+实测**不热加载**。判据（**端口别写死 3080** —— 桌面 App 的进程名是 `DeepSeek`，先用
+`lsof -nP -iTCP -sTCP:LISTEN | grep -i deepseek` 确认；同机可能还留着旧的 `dsh web`，打错会得出**相反**结论）：
 
 ```sh
-curl -s "http://127.0.0.1:3080/knit/api/raw?rel=nope.png"
+curl -s "http://127.0.0.1:<端口>/knit/api/raw?rel=nope.png"
 # {"ok":false,"code":"knit/not-found"} = 新代码在跑
 # 空 body 的 404                          = 旧代码还在跑
 ```
@@ -364,7 +365,6 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   代价明说：窗口从半截注释 / 字符串中间开始时缺上下文，那一段可能**错色**。
   **必须限制窗口**：官方高亮器同步跑，实测 170–560 ms / 千行，整篇 4000 行首开 2.5–5.5 s。
   宿主没导出这个 hook（旧版 DSH）或返回行数对不上 ⇒ **静默回落纯文本**。
-  被否决：自造配色、`setTimeout(0)` 让出首帧、整篇 / 前缀着色、按锚点放宽。
 - 相对路径图片真渲染、可拖高度、全屏、原生 Markdown。
 - 滚动条**不自己画**：继承 DSH 主题的全局滚动条（8px + `--dsh-scrollbar-thumb`），正文区把变量提到 l2
   （与官方文档预览同档）。
