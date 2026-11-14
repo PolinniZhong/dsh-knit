@@ -318,6 +318,40 @@ window.__ModuleLoader__.load({
       // v0.25 预览里的查找（Cmd+F）。数字用 {current}/{total}，两种语言同形。
       'lightbox.aria': '查看大图：{name}',
       'lightbox.close': '关闭（Esc）',
+      /* v0.26 图内评论：pin / 就地编辑 / 底部评论栏。
+         发送出去的文本**不走这两本词典** —— 它是给 agent 的事实格式（§四），不随界面语言变。 */
+      'lightbox.comment.enter': '评论',
+      'lightbox.comment.exit': '退出评论',
+      'lightbox.comment.title': '在图上点一下落 pin，写一句给 agent',
+      'lightbox.comment.placeholder': '哪里不对？写一句…',
+      'lightbox.comment.pinAria': '第 {n} 条评论',
+      'lightbox.comment.new': '新评论',
+      'lightbox.comment.edit': '评论 {n}',
+      'lightbox.comment.cancel': '取消',
+      'lightbox.comment.save': '保存',
+      'lightbox.comment.delete': '删除',
+      'lightbox.comment.empty': '这张图还没有评论',
+      'lightbox.comment.emptyHint': '点一下图片上的位置，写下第一条评论',
+      'lightbox.comment.count': '{n} 条评论',
+      'lightbox.comment.send': '发送',
+      'lightbox.comment.sendTitle': '把坐标和文字投进输入框（不会自动发送）',
+      'lightbox.comment.sent': '已投进输入框（含原图附件），按 Enter 发送',
+      'lightbox.comment.sentNoImage': '已投递文本，但图片附件没带上（请手动把图拖进输入框）',
+      'lightbox.comment.copied': '输入框没接住，已复制到剪贴板',
+      'lightbox.comment.downloaded': '输入框没接住，已下载为 txt',
+      'lightbox.comment.sendFailed': '投递失败，请手动复制',
+      'lightbox.comment.tooLong': '一条最多 {max} 字',
+      'lightbox.comment.full': '一张图最多 {max} 条评论',
+      'lightbox.canvas.back': '返回',
+      'lightbox.canvas.backTitle': '关掉画布，回到媒体列表',
+      'lightbox.canvas.fullscreen': '全屏',
+      'lightbox.canvas.fullscreenTitle': '在整屏里看细节（评论会保留）',
+      'lightbox.canvas.dock': '画布',
+      'lightbox.canvas.dockTitle': '回到 Knit 面板里的画布（不盖住会话）',
+      'lightbox.canvas.commentHint': '评论',
+      'lightbox.canvas.hintTitle': '点击在 Knit 面板里打开画布并评论（不盖住会话）',
+      'lightbox.canvas.prev': '上一张',
+      'lightbox.canvas.next': '下一张',
       'attach.badge': '对话',
       'attach.title': '对话里生成的图，还没保存到本地',
       'fav.off': '收藏',
@@ -640,6 +674,38 @@ window.__ModuleLoader__.load({
       'preview.truncated': '(large file — showing the first 512 KB)',
       'lightbox.aria': 'Image viewer: {name}',
       'lightbox.close': 'Close (Esc)',
+      'lightbox.comment.enter': 'Comment',
+      'lightbox.comment.exit': 'Exit comment',
+      'lightbox.comment.title': 'Click the image to drop a pin, then write one line for the agent',
+      'lightbox.comment.placeholder': 'What is wrong here?',
+      'lightbox.comment.pinAria': 'Comment {n}',
+      'lightbox.comment.new': 'New comment',
+      'lightbox.comment.edit': 'Comment {n}',
+      'lightbox.comment.cancel': 'Cancel',
+      'lightbox.comment.save': 'Save',
+      'lightbox.comment.delete': 'Delete',
+      'lightbox.comment.empty': 'No comments on this image yet',
+      'lightbox.comment.emptyHint': 'Click a spot on the image to add the first comment',
+      'lightbox.comment.count': '{n} comments',
+      'lightbox.comment.send': 'Send',
+      'lightbox.comment.sendTitle': 'Insert the coordinates and text into the composer (it will not be sent automatically)',
+      'lightbox.comment.sent': 'Inserted into the composer with the original image — press Enter to send',
+      'lightbox.comment.sentNoImage': 'Text inserted, but the image attachment failed — drag the image into the composer',
+      'lightbox.comment.copied': 'Composer did not accept it — copied to clipboard',
+      'lightbox.comment.downloaded': 'Composer did not accept it — downloaded as a txt file',
+      'lightbox.comment.sendFailed': 'Delivery failed — copy it manually',
+      'lightbox.comment.tooLong': 'Up to {max} characters per note',
+      'lightbox.comment.full': 'Up to {max} comments per image',
+      'lightbox.canvas.back': 'Back',
+      'lightbox.canvas.backTitle': 'Close the canvas and return to the media list',
+      'lightbox.canvas.fullscreen': 'Full screen',
+      'lightbox.canvas.fullscreenTitle': 'View details full screen (comments are kept)',
+      'lightbox.canvas.dock': 'Canvas',
+      'lightbox.canvas.dockTitle': 'Back to the canvas inside the Knit panel (the conversation stays visible)',
+      'lightbox.canvas.commentHint': 'Comment',
+      'lightbox.canvas.hintTitle': 'Click to open the canvas in the Knit panel and comment (the conversation stays visible)',
+      'lightbox.canvas.prev': 'Previous image',
+      'lightbox.canvas.next': 'Next image',
       'attach.badge': 'Chat',
       'attach.title': 'Generated in this chat — not saved locally yet',
       'fav.off': 'Favorite',
@@ -1092,12 +1158,477 @@ window.__ModuleLoader__.load({
       return { start, items: list.slice(start, start + size) }
     }
 
+    /* ── v0.26：图内评论（pin 评论）────────────────────────────────────────
+       起点是 Codex 画布与 Infini 分享包的**坐标格式**：
+       每条评论 { n, xPct, yPct, text }，xPct / yPct 是相对**图片实际绘制矩形**
+       （object-fit: contain 之后那一块）的 0–100 百分比。
+       ⚠️ 命门在坐标：**百分比只能从 contentRect 算**，不能从 stage 框算 ——
+       图不是等比铺满 stage（letterbox 的空白也算在 stage 里），拿 stage 算会让
+       所有 pin 在窄视口 / 方图上整体偏移。window resize / 面板宽度变化 / 滚动后
+       都要重算（measureCommentBox + ResizeObserver + resize / scroll 监听）。
+       P0 **不落盘**：评论只活在这个组件的 state 里，退出查看器仍在、硬刷新丢失。
+    */
+
+    /** 一条评论最多几个字（超出提示，不截断用户输入）。 */
+    const COMMENT_MAX_CHARS = 200
+    /** 一张图最多几条评论（到顶就不许再落新 pin）。 */
+    const COMMENT_MAX = 50
+    /** 底部评论栏里一条文字摘要最多显示几个字。 */
+    const COMMENT_SUMMARY_CHARS = 28
+    /** 评论编辑气泡的基准尺寸（px）：用来算「会不会出屏 / 该往哪边翻」。 */
+    const COMMENT_POP_W = 280
+    const COMMENT_POP_H = 172
+
+    /**
+     * `object-fit` 之后**真正画出图**的那块矩形（视口坐标）。
+     *
+     * 为什么不能直接用 img 元素盒：`object-fit: contain` 时盒子里会留 letterbox 空白，
+     * 百分比按盒子算会在空白里也落 pin，并且整体偏移。拿 naturalWidth / naturalHeight
+     * 反推缩放比，才能得到「图上这一点」的真实位置。
+     *
+     * @param {{left:number,top:number,width:number,height:number}} imgRect - img 元素盒
+     * @param {{width:number,height:number}} natural - naturalWidth / naturalHeight
+     * @param {'contain'|'cover'|'fill'} [mode] - object-fit 模式
+     * @returns {{left:number,top:number,width:number,height:number}|null} 绘制矩形
+     */
+    function contentRect(imgRect, natural, mode = 'contain') {
+      if (!imgRect || !natural) return null
+      const boxW = Number(imgRect.width)
+      const boxH = Number(imgRect.height)
+      const natW = Number(natural.width)
+      const natH = Number(natural.height)
+      if (!(boxW > 0) || !(boxH > 0) || !(natW > 0) || !(natH > 0)) return null
+      const fit = mode === 'cover' ? 'cover' : mode === 'fill' ? 'fill' : 'contain'
+      let width = boxW
+      let height = boxH
+      if (fit !== 'fill') {
+        const scale = fit === 'cover'
+          ? Math.max(boxW / natW, boxH / natH)
+          : Math.min(boxW / natW, boxH / natH)
+        width = natW * scale
+        height = natH * scale
+      }
+      const left = Number.isFinite(Number(imgRect.left)) ? Number(imgRect.left) : 0
+      const top = Number.isFinite(Number(imgRect.top)) ? Number(imgRect.top) : 0
+      return { left: left + (boxW - width) / 2, top: top + (boxH - height) / 2, width, height }
+    }
+
+    /** 百分比保留到千分位，避免浮点噪声把「同一个点」写成两个值。 */
+    function roundPct(value) {
+      return Math.min(100, Math.max(0, Math.round(Number(value) * 1000) / 1000))
+    }
+
+    /**
+     * 视口坐标 → 内容框里的百分比。**纯函数**。
+     * @param {{x:number,y:number}} point - 视口坐标
+     * @param {{left:number,top:number,width:number,height:number}} rect - contentRect 的结果
+     * @returns {{xPct:number,yPct:number}|null} 0–100 的百分比
+     */
+    function pctFromPoint(point, rect) {
+      if (!point || !rect) return null
+      const x = Number(point.x)
+      const y = Number(point.y)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+      if (!(rect.width > 0) || !(rect.height > 0)) return null
+      return {
+        xPct: roundPct(((x - rect.left) / rect.width) * 100),
+        yPct: roundPct(((y - rect.top) / rect.height) * 100),
+      }
+    }
+
+    /**
+     * 百分比 → 视口坐标（`pctFromPoint` 的逆运算）。**纯函数**。
+     * @param {{xPct:number,yPct:number}} pct - 0–100 的百分比
+     * @param {{left:number,top:number,width:number,height:number}} rect - contentRect 的结果
+     * @returns {{x:number,y:number}|null} 视口坐标
+     */
+    function pointFromPct(pct, rect) {
+      if (!pct || !rect) return null
+      const xPct = Number(pct.xPct)
+      const yPct = Number(pct.yPct)
+      if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) return null
+      return {
+        x: rect.left + (Math.min(100, Math.max(0, xPct)) / 100) * rect.width,
+        y: rect.top + (Math.min(100, Math.max(0, yPct)) / 100) * rect.height,
+      }
+    }
+
+    /**
+     * 把任意来源的评论表洗成**可信的形状**：畸形回空、坐标夹到 0–100、
+     * 空文本不占位、条数封顶、编号从 1 连续重排。**纯函数**。
+     *
+     * ⚠️ 编号连续是刻意的：删掉中间一条之后，剩下的必须重新从 1 排 ——
+     * 否则发送文本里会出现「1. 3. 4.」，agent 读起来像漏了内容。
+     *
+     * @param {object[]|null} raw - 任意输入（localStorage / 手改 / 旧版本）
+     * @returns {{n:number,xPct:number,yPct:number,text:string}[]} 干净列表
+     */
+    function normalizeComments(raw) {
+      if (!Array.isArray(raw)) return []
+      const out = []
+      for (const item of raw) {
+        if (out.length >= COMMENT_MAX) break
+        if (!item || typeof item !== 'object') continue
+        const text = typeof item.text === 'string' ? item.text : ''
+        if (!text.trim()) continue
+        const xPct = Number(item.xPct)
+        const yPct = Number(item.yPct)
+        if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) continue
+        out.push({ n: out.length + 1, xPct: roundPct(xPct), yPct: roundPct(yPct), text })
+      }
+      return out
+    }
+
+    /**
+     * 下一条评论的编号（1 起、连续）。**纯函数**。
+     * @param {{n:number}[]|null} list - 当前评论
+     * @returns {number} 下一个编号
+     */
+    function nextNumber(list) {
+      const items = normalizeComments(list)
+      // normalizeComments 已经保证连续，最后一条的 n + 1 就是下一个
+      if (items.length) return items[items.length - 1].n + 1
+      // 还没成形（比如只有 {n} 没有坐标）时按「有几条」兜底，仍然从 1 起连续
+      const count = Array.isArray(list) ? list.filter((item) => item && typeof item === 'object').length : 0
+      return count + 1
+    }
+
+    /** 评论栏里的一行摘要（按字数截，末尾补省略号）。**纯函数**。 */
+    function commentSummary(text, max) {
+      const raw = String(text === undefined || text === null ? '' : text)
+      const limit = Number.isFinite(max) ? Math.max(1, Math.round(max)) : COMMENT_SUMMARY_CHARS
+      return raw.length > limit ? `${raw.slice(0, limit)}…` : raw
+    }
+
+    /**
+     * §四 的发送文本行。**纯函数**（但格式是「事实标准」，刻意不随界面语言变）。
+     *
+     * 单图：
+     *   图像 1：<文件名或 rel>（sha256 <前 12 位，若有>）
+     *   1.（x：62.5%，y：31.0%）文案
+     *
+     * @param {{n:number,xPct:number,yPct:number,text:string}[]} list - 评论
+     * @param {{name?:string,rel?:string,sha?:string}} [image] - 这张图的身份（有就写头行）
+     * @returns {string[]} 文本行
+     */
+    function commentLines(list, image) {
+      const lines = []
+      const label = image && (image.rel || image.name)
+      if (label) {
+        const sha = image.sha ? String(image.sha).slice(0, 12) : ''
+        lines.push(`图像 1：${label}${sha ? `（sha256 ${sha}）` : ''}`)
+      }
+      for (const item of normalizeComments(list)) {
+        lines.push(`${item.n}.（x：${item.xPct.toFixed(1)}%，y：${item.yPct.toFixed(1)}%）${item.text}`)
+      }
+      return lines
+    }
+
+    /**
+     * 评论挂在谁身上：工作区图用 rel；对话里生成的图没有路径，用附件 sha256 id。
+     * **纯函数**。
+     * @param {object|null} doc - 媒体条目
+     * @returns {string} 锚点 id（空串表示无可锚定）
+     */
+    function anchorIdFor(doc) {
+      if (!doc) return ''
+      if (doc.attachmentId) return String(doc.attachmentId)
+      const rel = String(doc.rel || '')
+      if (/^sha256:[0-9a-f]{64}$/i.test(rel)) return rel
+      return rel || (doc.path ? String(doc.path) : '')
+    }
+
+    /**
+     * 这张图的 sha256（有就取，没有就空串）。工作区图通常没有，对话图一定有。
+     * @param {object|null} doc - 媒体条目
+     * @returns {string} 64 位十六进制，或空串
+     */
+    function shaOfDoc(doc) {
+      if (!doc) return ''
+      const direct = doc.sha256 || doc.sha
+      if (typeof direct === 'string' && /^[0-9a-f]{64}$/i.test(direct)) return direct
+      const id = String(doc.attachmentId || doc.rel || '')
+      const match = /^sha256:([0-9a-f]{64})$/i.exec(id)
+      return match ? match[1] : ''
+    }
+
+    /** 取某张图的评论（没有就空表）。**纯函数**。 */
+    function commentsFor(store, anchor) {
+      if (!store || typeof store !== 'object' || !anchor) return []
+      return normalizeComments(store[anchor])
+    }
+
+    /**
+     * 写回某张图的评论：返回**新对象**（不原地改 state），空表则删键不留垃圾。
+     * **纯函数**。
+     */
+    function withComments(store, anchor, list) {
+      const base = store && typeof store === 'object' ? store : {}
+      const next = { ...base }
+      if (!anchor) return next
+      const clean = normalizeComments(list)
+      if (clean.length) next[anchor] = clean
+      else delete next[anchor]
+      return next
+    }
+
+    /**
+     * 图片内容框在**视口坐标**里的矩形（渲染 pin / 编辑气泡用）。
+     *
+     * 与 `commentClickPct` 共用 `contentRect`：落点与画点永远同一个矩形。
+     * @param {object} imgEl - `.knit-lightbox-img`
+     * @returns {{left:number,top:number,width:number,height:number}|null} 矩形
+     */
+    function contentViewportOf(imgEl) {
+      try {
+        if (!imgEl || typeof imgEl.getBoundingClientRect !== 'function') return null
+        const imgRect = imgEl.getBoundingClientRect()
+        const natural = { width: imgEl.naturalWidth, height: imgEl.naturalHeight }
+        return contentRect(imgRect, natural) || {
+          left: imgRect.left, top: imgRect.top, width: imgRect.width, height: imgRect.height,
+        }
+      } catch { return null }
+    }
+
+    /**
+     * 评论编辑气泡摆哪：**贴着 pin**，但出屏就从另一侧长出来（与 Infini 分享包同一套翻边逻辑）。
+     *
+     * 真机上「气泡停在图片边外」就是没有这一步：只按百分比放，靠右/靠下时半截出屏。
+     * 规则：默认在 pin 右下；右边放不下翻左，下面放不下翻上；最后再夹进视口。
+     * **纯函数**：只吃三个盒子，不读 DOM。
+     *
+     * @param {{x:number,y:number}} anchor - pin 的视口坐标
+     * @param {{width:number,height:number}} size - 气泡尺寸
+     * @param {{width:number,height:number}} view - 视口尺寸
+     * @param {{gap?:number,margin?:number}} [opts] - 间距与视口留白
+     * @returns {{left:number,top:number,placement:'right'|'left',side:'below'|'above'}} 盒子
+     */
+    function commentPopoverBox(anchor, size, view, opts = {}) {
+      const gap = Number.isFinite(opts.gap) ? opts.gap : 14
+      const margin = Number.isFinite(opts.margin) ? opts.margin : 12
+      const viewW = view && Number.isFinite(view.width) && view.width > 0 ? view.width : 1024
+      const viewH = view && Number.isFinite(view.height) && view.height > 0 ? view.height : 768
+      const width = Math.max(1, Math.min(size && Number.isFinite(size.width) ? size.width : COMMENT_POP_W, viewW - margin * 2))
+      const height = Math.max(1, Math.min(size && Number.isFinite(size.height) ? size.height : COMMENT_POP_H, viewH - margin * 2))
+      const ax = anchor && Number.isFinite(anchor.x) ? anchor.x : viewW / 2
+      const ay = anchor && Number.isFinite(anchor.y) ? anchor.y : viewH / 2
+
+      let placement = 'right'
+      let left = ax + gap
+      if (left + width > viewW - margin) { left = ax - width - gap; placement = 'left' }
+      left = Math.min(Math.max(margin, left), Math.max(margin, viewW - width - margin))
+
+      let side = 'below'
+      let top = ay + gap
+      if (top + height > viewH - margin) { top = ay - height - gap; side = 'above' }
+      top = Math.min(Math.max(margin, top), Math.max(margin, viewH - height - margin))
+      return { left, top, placement, side }
+    }
+
+    /**
+     * 一次点击落在**图片内容框**的百分比。
+     *
+     * ⚠️ 这里必须是 `contentRect` → `pctFromPoint` 这条链，**不能**用 stage 的宽度。
+     * 源码守卫（test/comments.test.mjs）会检查这个函数的形状；改坏了会红。
+     *
+     * @param {{clientX:number,clientY:number}} event - 点击事件
+     * @param {object} imgEl - `.knit-lightbox-img`
+     * @returns {{xPct:number,yPct:number}|null} 百分比
+     */
+    function commentClickPct(event, imgEl) {
+      try {
+        if (!event || !imgEl || typeof imgEl.getBoundingClientRect !== 'function') return null
+        const imgRect = imgEl.getBoundingClientRect()
+        const natural = { width: imgEl.naturalWidth, height: imgEl.naturalHeight }
+        const rect = contentRect(imgRect, natural)
+        if (!rect) return null
+        return pctFromPoint({ x: event.clientX, y: event.clientY }, rect)
+      } catch { return null }
+    }
+
+    /**
+     * 键盘事件是不是发生在**评论输入框**里。
+     *
+     * 必须在「查看器根上的捕获阶段处理器」里先判它：Escape / 方向键在输入框里
+     * 属于「取消编辑 / 移光标」，如果照旧交给查看器，会变成「关查看器 / 翻图」。
+     *
+     * @param {object} event - 键盘事件
+     * @returns {boolean} 是否在评论输入框内
+     */
+    function commentEditorTarget(event) {
+      const target = event && event.target
+      if (!target) return false
+      if (target.isContentEditable) return true
+      try {
+        if (typeof target.closest === 'function') return !!target.closest('[data-knit-comment-editor]')
+      } catch { /* 老宿主 / 测试替身：当作不在输入框 */ }
+      return false
+    }
+
+    /**
+     * 把评论关联的那张图读成 `File`（**同源、本机**：/knit/api/raw 或 /knit/api/attachment）。
+     *
+     * 为什么要附件：只发文字时，agent 只能看到文件名/rel；同名文件、被移动的文件、
+     * 以及对话里生成的图（没有路径，只有 sha256）都可能对不上。Codex Canvas 的评论
+     * 也是把原图随评论一起提交 —— 这里附**原图**（不带 pin），pin 的坐标已经在文本里。
+     *
+     * @param {string} src - 同源图片地址
+     * @param {string} name - 附件文件名
+     * @param {{fetch?:Function, File?:Function}} [env] - 可注入（测试用）
+     * @returns {Promise<object|null>} File 或 null
+     */
+    async function imageFileFrom(src, name, env = {}) {
+      try {
+        const fetchFn = env.fetch || (typeof fetch === 'function' ? fetch : null)
+        const FileCtor = env.File || (typeof File === 'function' ? File : null)
+        if (!fetchFn || !FileCtor || !src) return null
+        const response = await fetchFn(src, { credentials: 'same-origin' })
+        if (!response || response.ok === false) return null
+        const blob = await response.blob()
+        if (!blob || !Number(blob.size)) return null
+        const type = blob.type || 'image/png'
+        const fallback = type.includes('jpeg') ? 'image.jpg' : type.includes('webp') ? 'image.webp' : 'image.png'
+        return new FileCtor([blob], name || fallback, { type })
+      } catch { return null }
+    }
+
+    /**
+     * 造一个合成 paste 事件（真浏览器用原生构造器；测试替身用同契约的普通对象）。
+     * 事件里**同时**带 text/plain 与（可选）图片 File —— DSH 输入框的 paste 处理器
+     * 会先 intake 文件、再插入文本（`keymap.ts` 的 PASTE_COMMAND）。
+     * @param {string} text - 要粘贴的纯文本
+     * @param {object|null} win - window
+     * @param {object|null} [file] - 可选图片 File
+     * @returns {object} 事件
+     */
+    function buildPasteEvent(text, win, file) {
+      const payload = String(text)
+      const DT = win && win.DataTransfer
+      const CE = win && win.ClipboardEvent
+      if (typeof DT === 'function' && typeof CE === 'function') {
+        try {
+          const transfer = new DT()
+          transfer.setData('text/plain', payload)
+          if (file && transfer.items && typeof transfer.items.add === 'function') transfer.items.add(file)
+          return new CE('paste', { clipboardData: transfer, bubbles: true, cancelable: true })
+        } catch { /* 落下去用普通对象 */ }
+      }
+      return {
+        type: 'paste',
+        clipboardData: {
+          getData: (kind) => (kind === 'text/plain' || !kind ? payload : ''),
+          files: file ? [file] : [],
+          items: file ? [{ kind: 'file', type: file.type || '', getAsFile: () => file }] : [],
+        },
+        bubbles: true,
+        cancelable: true,
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true },
+      }
+    }
+
+    /** 造一个合成 drop 事件（契约同上）。 */
+    function buildDropEvent(text, win) {
+      const payload = String(text)
+      const DT = win && win.DataTransfer
+      const DE = win && win.DragEvent
+      if (typeof DT === 'function' && typeof DE === 'function') {
+        try {
+          const transfer = new DT()
+          transfer.setData('text/plain', payload)
+          return new DE('drop', { dataTransfer: transfer, bubbles: true, cancelable: true })
+        } catch { /* 落下去用普通对象 */ }
+      }
+      return {
+        type: 'drop',
+        dataTransfer: { getData: (kind) => (kind === 'text/plain' || !kind ? payload : '') },
+        bubbles: true,
+        cancelable: true,
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true },
+      }
+    }
+
+    /**
+     * 把一段文本投进**输入框**（不发送）。通道照 dsh-image-annotate 的已验证做法：
+     * 合成 paste 到 `[data-composer-input]`；失败按序回落 document drop → clipboard → 下载。
+     *
+     * ⚠️ 只借通道，不引入依赖、不 import 那个插件；零网络出口（clipboard / 下载都是本机）。
+     *
+     * @param {string} text - 要投递的文本
+     * @param {{document?:object, window?:object, fetch?:Function, File?:Function, attachment?:{src:string,name?:string}}} [env] - 可注入（测试用）
+     * @returns {Promise<{ok:boolean, via:'paste'|'drop'|'clipboard'|'download'|'none', image:boolean}>} 结果
+     */
+    async function deliverCommentText(text, env = {}) {
+      const payload = String(text === undefined || text === null ? '' : text)
+      if (!payload) return { ok: false, via: 'none', image: false }
+      const doc = env.document === undefined ? (typeof document === 'undefined' ? null : document) : env.document
+      const win = env.window === undefined ? (typeof window === 'undefined' ? null : window) : env.window
+      const file = env.attachment ? await imageFileFrom(env.attachment.src, env.attachment.name, env) : null
+
+      // ① 合成 paste 到输入框（文本 + 图片 File 同一个事件）
+      const input = doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-composer-input]') : null
+      if (input && typeof input.dispatchEvent === 'function') {
+        try { if (typeof input.focus === 'function') input.focus() } catch { /* 拿不到焦点也继续 */ }
+        const before = typeof input.textContent === 'string' ? input.textContent : ''
+        try {
+          const event = buildPasteEvent(payload, win, file)
+          const notPrevented = input.dispatchEvent(event)
+          const after = typeof input.textContent === 'string' ? input.textContent : ''
+          /* 宿主（Lexical）收到 paste 会 `preventDefault()` ⇒ dispatchEvent 返回 false。
+             ⚠️ **不要在这里补第二次 paste**：编辑器的文本更新不保证同步，`textContent` 可能
+             还没变，补一次就会把同一段文本/图片塞两遍（真机踩过：输入框里出现两遍）。
+             preventDefault 返回 true 而 textContent 仍没变（极老宿主）时交给下面的 drop 回落。 */
+          if (notPrevented === false || (event && event.defaultPrevented) || after !== before) {
+            return { ok: true, via: 'paste', image: !!file }
+          }
+        } catch { /* 换下一条通道 */ }
+      }
+
+      // ② document 上的 drop
+      if (doc && typeof doc.dispatchEvent === 'function') {
+        try {
+          const event = buildDropEvent(payload, win)
+          if (doc.dispatchEvent(event) === false || (event && event.defaultPrevented)) return { ok: true, via: 'drop', image: false }
+        } catch { /* 换下一条通道 */ }
+      }
+
+      // ③ 剪贴板
+      try {
+        const clipboard = win && win.navigator && win.navigator.clipboard
+        if (clipboard && typeof clipboard.writeText === 'function') {
+          await clipboard.writeText(payload)
+          return { ok: true, via: 'clipboard', image: false }
+        }
+      } catch { /* 换下一条通道 */ }
+
+      // ④ 下载一个 .txt
+      try {
+        const BlobCtor = win && win.Blob
+        const UrlApi = win && win.URL
+        if (BlobCtor && UrlApi && typeof UrlApi.createObjectURL === 'function' && doc && typeof doc.createElement === 'function') {
+          const url = UrlApi.createObjectURL(new BlobCtor([payload], { type: 'text/plain;charset=utf-8' }))
+          const anchor = doc.createElement('a')
+          anchor.href = url
+          anchor.download = 'knit-comments.txt'
+          if (typeof anchor.click === 'function') anchor.click()
+          if (typeof UrlApi.revokeObjectURL === 'function') UrlApi.revokeObjectURL(url)
+          return { ok: true, via: 'download', image: false }
+        }
+      } catch { /* 全部通道都不行 */ }
+
+      return { ok: false, via: 'none', image: false }
+    }
+
     /** 浮窗与卡片之间的间距。 */
     const HOVER_SHOT_GAP = 12
     /** 浮窗与视口边缘的最小留白。 */
     const HOVER_SHOT_MARGIN = 12
     /** 停多久才出现 —— 短了会在鼠标扫过时一路闪，长了会显得没反应。 */
     const HOVER_SHOT_DELAY_MS = 350
+    /** 从卡片挪到浮窗上要多久才收 —— 浮窗现在是**评论入口**（可点），
+        立即收会让鼠标还没走到按钮它就消失了。 */
+    const HOVER_SHOT_HIDE_MS = 220
 
     /**
      * 算悬停浮窗的盒子。**纯函数**：只吃两个矩形，不做任何 DOM 读。
@@ -1917,11 +2448,16 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
    ⚠️ pointer-events:none 是必须的：它只是看一眼，绝不许挡住卡片的点击。
    尺寸由 JS 下发（上限 800，按可用空间收缩），这里只负责「图在盒子里等比铺满」。 */
 .knit-shot{position:fixed;z-index:60;display:flex;align-items:center;justify-content:center;
-  padding:6px;border-radius:12px;pointer-events:none;
+  padding:6px;border-radius:12px;pointer-events:auto;cursor:pointer;
   background:var(--dsw-alias-bg-layer-2,#2c2c2e);
   border:.5px solid var(--dsw-alias-border-l4,rgba(255,255,255,.12));
   box-shadow:0 12px 32px rgba(0,0,0,.32)}
 .knit-shot img{display:block;max-width:100%;max-height:100%;border-radius:8px;object-fit:contain}
+.knit-shot-hint{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);
+  padding:4px 12px;border-radius:999px;font-size:12px;line-height:1.4;white-space:nowrap;
+  color:var(--dsw-alias-label-primary-inverted);
+  background:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
+.knit-shot:hover .knit-shot-hint{opacity:1}
 /* v0.25 媒体档「双击全屏」：整窗遮罩 + 毛玻璃。层级在悬停浮窗（60）与菜单之上。
    左侧留 96px 给缩略图带（它绝对定位在遮罩里）；图片按 contain 铺满剩下的区域。 */
 .knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
@@ -1931,20 +2467,23 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
      ⚠️ 这两个变量故意**挂在查看器自己身上** —— 它被 portal 到 document.body 之后
      不在 .knit-root 里了，读不到那层的变量（第一版就是这么静默变成透明遮罩的）。 */
   --knit-scrim:rgba(255,255,255,.62);
+  /* 评论栏底：面板画布能吃到 .knit-root 的 --knit-active-bg；整屏 portal 里读不到，
+     就回落到官方交互令牌。浅色下两者都是可见的灰，不会和纯白画布糊在一起。 */
+  --knit-comment-surface:var(--knit-active-bg,var(--dsw-alias-interactive-bg-active));
   background:var(--knit-scrim);backdrop-filter:blur(22px) saturate(1.1);
   -webkit-backdrop-filter:blur(22px) saturate(1.1)}
 body[data-ds-dark-theme] .knit-lightbox{--knit-scrim:rgba(18,18,20,.72)}
 .knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;
-  justify-content:center;cursor:default}
+  justify-content:center;cursor:default;position:relative}
 .knit-lightbox-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;cursor:default;
   box-shadow:0 24px 64px rgba(0,0,0,.36);background:var(--dsw-alias-bg-base,#fff)}
-.knit-lightbox-tools{position:absolute;top:18px;right:62px;display:flex;align-items:center;gap:6px}
-.knit-lightbox-close{position:absolute;top:18px;right:18px;width:34px;height:34px;padding:0;
+.knit-lightbox-tools{position:absolute;top:18px;right:62px;z-index:2;display:flex;align-items:center;gap:6px}
+.knit-lightbox-close{position:absolute;top:18px;right:18px;z-index:2;width:34px;height:34px;padding:0;
   display:flex;align-items:center;justify-content:center;border:0;border-radius:10px;
   cursor:pointer;font-family:inherit;font-size:15px;line-height:1;
   color:var(--dsw-alias-label-primary,#0f1115);background:transparent;opacity:.7}
 .knit-lightbox-close:hover{opacity:1;background:var(--knit-hover-bg,transparent)}
-.knit-lightbox-rail{position:absolute;left:10px;top:50%;transform:translateY(-50%);display:flex;
+.knit-lightbox-rail{position:absolute;left:10px;top:50%;z-index:2;transform:translateY(-50%);display:flex;
   flex-direction:column;gap:6px;max-height:88vh;overflow-y:auto;padding:4px;cursor:default}
 .knit-lightbox-thumb{flex:none;width:64px;height:64px;padding:0;border:0;border-radius:8px;overflow:hidden;
   cursor:pointer;background:transparent;opacity:.68;transition:opacity .16s ease}
@@ -1952,6 +2491,89 @@ body[data-ds-dark-theme] .knit-lightbox{--knit-scrim:rgba(18,18,20,.72)}
 .knit-lightbox-thumb:hover{opacity:1}
 .knit-lightbox-thumb.active{opacity:1;box-shadow:0 0 0 2px var(--knit-accent,var(--dsw-alias-brand-primary-new-colorprimary-new-color))}
 @media (prefers-reduced-motion: reduce){.knit-lightbox-thumb{transition:none}}
+
+/* ── v0.26 图内评论 ───────────────────────────────────────────
+   pin = 圆点 + 序号（用户 2026-11 选的最轻形态，不做引线标注块）。
+   ⚠️ 颜色一律吃 DSH 语义 token（查看器被 portal 到 body，读不到 .knit-root 那层变量）；
+   **这里一个硬编码色值都不许出现**，源码守卫 test/comments.test.mjs 会逐条扫本段。
+   ⚠️ pin 层 pointer-events:none，只有 pin 与编辑框恢复 auto ——
+   否则整块覆盖层会吃掉「点图片以外关闭」与 stage 的落点点击。 */
+.knit-lightbox-pins{position:absolute;inset:0;pointer-events:none;z-index:1}
+.knit-lightbox-pin{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;padding:0;
+  display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;
+  cursor:pointer;pointer-events:auto;font-family:inherit;font-size:11px;font-weight:600;line-height:1;
+  color:var(--dsw-alias-label-primary-inverted);
+  background:var(--dsw-alias-brand-primary-new-colorprimary-new-color);
+  box-shadow:0 0 0 2px var(--dsw-alias-bg-base)}
+.knit-lightbox-pin:hover{opacity:.86}
+.knit-lightbox-pin.draft{opacity:.55;pointer-events:none}
+.knit-lightbox-pin:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:2px}
+.knit-lightbox-editor{position:absolute;pointer-events:auto;box-sizing:border-box;
+  display:flex;flex-direction:column;gap:7px;width:280px;max-width:calc(100vw - 24px);padding:9px;
+  border-radius:10px;background:var(--dsw-alias-bg-layer-2);
+  border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
+.knit-lightbox-editor-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.knit-lightbox-editor-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.knit-lightbox-editor-pos{font-size:11px;color:var(--dsw-alias-label-caption);white-space:nowrap}
+.knit-lightbox-editor-input{width:100%;box-sizing:border-box;padding:6px 8px;border-radius:8px;
+  border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-base);
+  color:var(--dsw-alias-label-primary);font-family:inherit;font-size:12px;line-height:1.5;outline:none}
+.knit-lightbox-editor-input:focus{border-color:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
+.knit-lightbox-editor-foot{display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.knit-lightbox-editor-count{margin-right:auto;font-size:11px;color:var(--dsw-alias-label-caption)}
+.knit-lightbox-editor-hint{font-size:11px;color:var(--dsw-alias-label-caption);line-height:1.4}
+.knit-lightbox-comments{position:fixed;left:50%;bottom:18px;z-index:2;transform:translateX(-50%);box-sizing:border-box;
+  width:min(560px,calc(100vw - 160px));display:flex;align-items:flex-end;gap:12px;padding:10px 12px;
+  min-height:54px;border-radius:12px;background:var(--knit-comment-surface);
+  border:.5px solid var(--dsw-alias-border-l4);
+  box-shadow:0 10px 28px var(--dsw-alias-interactive-bg-hover);
+  color:var(--dsw-alias-label-primary);cursor:default}
+.knit-lightbox-comments-empty{display:flex;flex-direction:column;gap:2px;padding:2px 0}
+.knit-lightbox-comments-emptyTitle{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.knit-lightbox-comments-emptyHint{font-size:11px;color:var(--dsw-alias-label-caption)}
+.knit-lightbox-comments-send{height:30px;padding:0 16px;font-weight:600;
+  color:var(--dsw-alias-label-primary-inverted);
+  background:var(--dsw-alias-brand-primary-new-colorprimary-new-color);
+  border-color:transparent}
+.knit-lightbox-comments-send:disabled{color:var(--dsw-alias-label-caption);
+  background:var(--dsw-alias-interactive-bg-active);border-color:var(--dsw-alias-border-l4)}
+.knit-lightbox-nav{width:30px;height:30px;padding:0;font-size:16px;line-height:1}
+.knit-lightbox-dockcount{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-caption);white-space:nowrap}
+.knit-lightbox-comments-list{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px;
+  max-height:30vh;overflow-y:auto}
+.knit-lightbox-comment-row{display:flex;align-items:center;gap:8px;min-width:0}
+.knit-lightbox-comment-n{flex:none;font-size:11px;font-weight:600;
+  color:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
+.knit-lightbox-comment-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;
+  background:transparent;border:0;padding:0;text-align:left;font-family:inherit}
+.knit-lightbox-comment-text:hover{color:var(--dsw-alias-label-primary)}
+.knit-lightbox-comment-del{flex:none;width:20px;height:20px;padding:0;border:0;border-radius:6px;
+  background:transparent;color:var(--dsw-alias-label-caption);cursor:pointer;font-family:inherit;
+  font-size:11px;line-height:1}
+.knit-lightbox-comment-del:hover{background:var(--dsw-alias-interactive-bg-hover);
+  color:var(--dsw-alias-label-primary)}
+.knit-lightbox-comments-right{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.knit-lightbox-comments-status{font-size:11px;color:var(--dsw-alias-label-caption);text-align:right}
+.knit-lightbox-comments-empty{font-size:12px;color:var(--dsw-alias-label-caption)}
+/* v0.26 返工：面板内画布（lightboxDock）—— 与整屏查看器共用同一份 DOM，
+   只把「定位 / 底色 / 左右留白 / 评论栏位置」换掉，评论逻辑一行不分叉。
+   ⚠️ 会话永远不被盖住：它只是面板里的一个视图，且面板本身就在会话旁边。 */
+.knit-canvas{flex:1 1 auto;min-height:0;position:relative;display:flex;
+  margin:6px 8px 8px;border-radius:12px;overflow:hidden;
+  background:var(--dsw-alias-bg-base);border:.5px solid var(--dsw-alias-border-l3)}
+.knit-lightbox.docked{position:relative;inset:auto;z-index:auto;width:100%;height:100%;
+  padding:8px;display:flex;align-items:stretch;justify-content:center;cursor:default;
+  background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;border-radius:0}
+.knit-lightbox.docked .knit-lightbox-tools{top:10px;right:10px;z-index:3}
+.knit-lightbox.docked .knit-lightbox-comments{position:absolute;left:10px;right:10px;bottom:10px;
+  width:auto;transform:none;max-height:44%}
+.knit-lightbox-dockhead{position:absolute;left:12px;top:10px;right:280px;z-index:2;
+  display:flex;align-items:baseline;gap:8px;min-width:0;pointer-events:none}
+.knit-lightbox-dockname{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.knit-lightbox-dockctx{flex:none;font-size:11px;color:var(--dsw-alias-label-caption);
+  max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
 
 /* ── 列表下方的预览面板 ───────────────────────────────
    要让人一眼看出「这是另一层，不是列表的续行」，靠**结构**而不是底色：
@@ -2257,7 +2879,16 @@ video.knit-preview-media{width:100%;background:#000}
      */
     function ensureStyle() {
       if (typeof document === 'undefined') return
-      if (document.getElementById(STYLE_ID)) return
+      const existing = document.getElementById(STYLE_ID)
+      if (existing) {
+        /* ⚠️ **必须比对内容，不能「有就跳过」**：客户端插件热换（HMR）只替换 JS 模块、
+           不重载页面，`<style>` 元素会留在 DOM 里 —— 旧版那行 `if (existing) return`
+           于是让新加的规则一条都不生效：新 DOM 按旧 CSS 排版，评论编辑框/评论栏被当成
+           普通 flex 子项挤到图片右边（真机就是这么看到「停在边上」的）。
+           现在内容不一致就整段换掉，下一次渲染立刻追上当前代码。 */
+        if (existing.textContent !== CSS) existing.textContent = CSS
+        return
+      }
       const el = document.createElement('style')
       el.id = STYLE_ID
       el.textContent = CSS
@@ -5257,6 +5888,10 @@ video.knit-preview-media{width:100%;background:#000}
          存的是 `rel` 而不是下标 —— 列表每 5 秒会换一份，下标会漂；`rel` 不会。
          列表里找不到它了（被删 / 被存进项目 / 切了档）就自己关掉。 */
       const [lightboxRel, setLightboxRel] = React.useState('')
+      /* v0.26 返工：`docked` = 在 **Knit 面板里**显示画布（不盖会话、身份清楚）；
+         `false` = 原来的整屏查看器（只在「全屏」按钮里用）。
+         ⚠️ 默认双击仍是整屏（v0.25 的既有语义不动）；**评论入口走 hover 大图 → 面板画布**。 */
+      const [lightboxDock, setLightboxDock] = React.useState(false)
       const lightboxRef = React.useRef(null)
       const lightboxIndex = React.useMemo(
         () => (lightboxRel ? mediaDocs.findIndex((doc) => doc.rel === lightboxRel) : -1),
@@ -5270,12 +5905,17 @@ video.knit-preview-media{width:100%;background:#000}
       React.useEffect(() => {
         if (lightboxRel && lightboxIndex < 0) setLightboxRel('')
       }, [lightboxRel, lightboxIndex])
-      const lightboxOpen = React.useCallback((doc) => {
+      const lightboxOpen = React.useCallback((doc, opts = {}) => {
         if (!doc || doc.kind !== 'image') return
         setLightboxRel(doc.rel)
+        setLightboxDock(opts.dock === true)
+        // 面板画布从 hover 的「评论」进来时直接落在评论模式；整屏查看默认干净
+        setCommentOn(opts.comment === true)
         // 悬停浮窗这时必须收掉：它在查看器下面，留着就是两层大字
         if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
         hoverTimerRef.current = 0
+        if (hoverHideRef.current) clearTimeout(hoverHideRef.current)
+        hoverHideRef.current = 0
         setHoverShot(null)
       }, [])
       const lightboxClose = React.useCallback(() => setLightboxRel(''), [])
@@ -6594,6 +7234,9 @@ video.knit-preview-media{width:100%;background:#000}
         if (!event) return
         // ⚠️ 查看器是**最上层**：它开着时 Esc / ← / → 先归它（不许漏到列表的键盘导航上）
         if (lightboxRel) {
+          // 评论输入框里的 Escape / 方向键属于「取消编辑 / 移光标」，不许被查看器抢走
+          // （这里在捕获阶段，输入框自己的 onKeyDown 还没跑）。判定只看 DOM 归属。
+          if (commentEditorTarget(event)) return
           if (event.key === 'Escape') {
             event.preventDefault(); event.stopPropagation(); lightboxClose(); return
           }
@@ -6628,6 +7271,7 @@ video.knit-preview-media{width:100%;background:#000}
          只对图片；停 HOVER_SHOT_DELAY_MS 才出现；离开 / 滚动 / 换档立刻收。 */
       const [hoverShot, setHoverShot] = React.useState(null)
       const hoverTimerRef = React.useRef(0)
+      const hoverHideRef = React.useRef(0)
       const hoverStart = React.useCallback((doc, src, event) => {
         if (!doc || doc.kind !== 'image' || !src) return
         if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
@@ -6644,17 +7288,564 @@ video.knit-preview-media{width:100%;background:#000}
         const box = hoverShotBox(rect, view)
         hoverTimerRef.current = setTimeout(() => {
           hoverTimerRef.current = 0
-          setHoverShot({ rel: doc.rel, src, box })
+          setHoverShot({ rel: doc.rel, src, box, doc })
         }, HOVER_SHOT_DELAY_MS)
       }, [])
+      /** 离开卡片：**延迟**收起，给「鼠标挪进浮窗点评论」留出通路。 */
       const hoverEnd = React.useCallback(() => {
         if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
         hoverTimerRef.current = 0
+        if (hoverHideRef.current) clearTimeout(hoverHideRef.current)
+        hoverHideRef.current = setTimeout(() => {
+          hoverHideRef.current = 0
+          setHoverShot((prev) => (prev ? null : prev))
+        }, HOVER_SHOT_HIDE_MS)
+      }, [])
+      /** 鼠标已经进到浮窗上：取消收起。 */
+      const hoverKeep = React.useCallback(() => {
+        if (hoverHideRef.current) clearTimeout(hoverHideRef.current)
+        hoverHideRef.current = 0
+      }, [])
+      /** 立刻收（滚动 / 打开画布 / 卸载）。 */
+      const hoverClose = React.useCallback(() => {
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+        if (hoverHideRef.current) clearTimeout(hoverHideRef.current)
+        hoverTimerRef.current = 0
+        hoverHideRef.current = 0
         setHoverShot((prev) => (prev ? null : prev))
       }, [])
       React.useEffect(() => () => {
         if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+        if (hoverHideRef.current) clearTimeout(hoverHideRef.current)
       }, [])
+
+      /* ── v0.26：图内评论（**追加在末尾**：替身按下标 seed useState / useRef）
+         commentsByAnchor 按身份锚定（工作区图 = rel；对话图 = 附件 sha256 id）。
+         P0 只活在内存里：退出查看器仍在、硬刷新丢 —— **不写 localStorage**（有守卫）。
+         落点由 commentClickPct 从图片**绘制矩形**算；渲染层用同一份
+         contentViewportOf(img)，再换算成**相对画布表面**的坐标（整屏查看器 / 面板画布共用一套），
+         **落点与画点同一个矩形**。窗口缩放 / 面板宽度变化 / 滚动都会重算（下一个 effect）。 */
+      const [commentOn, setCommentOn] = React.useState(false)
+      const [commentsByAnchor, setCommentsByAnchor] = React.useState({})
+      const [commentDraft, setCommentDraft] = React.useState(null)
+      const [commentBox, setCommentBox] = React.useState(null)
+      const [commentSurface, setCommentSurface] = React.useState(null)
+      const [commentStatus, setCommentStatus] = React.useState('')
+      const commentStageRef = React.useRef(null)
+      const commentImgRef = React.useRef(null)
+      const commentAnchor = lightboxDoc ? anchorIdFor(lightboxDoc) : ''
+      const commentList = commentsFor(commentsByAnchor, commentAnchor)
+
+      /** 量一次：内容框相对**画布表面**（`.knit-lightbox` 根）的盒子 + 表面尺寸。 */
+      const measureCommentBox = React.useCallback(() => {
+        const img = commentImgRef.current
+        const surface = lightboxRef.current
+        if (!img || !surface || typeof surface.getBoundingClientRect !== 'function') return
+        const rect = contentViewportOf(img)
+        if (!rect) return
+        const srect = surface.getBoundingClientRect()
+        setCommentBox({
+          left: rect.left - srect.left,
+          top: rect.top - srect.top,
+          width: rect.width,
+          height: rect.height,
+        })
+        setCommentSurface({ width: srect.width, height: srect.height })
+      }, [])
+
+      // 换图 / 关闭：丢掉半截草稿与提示；关掉查看器时连评论模式一起退出。
+      React.useEffect(() => {
+        setCommentDraft(null)
+        setCommentStatus('')
+        if (!lightboxRel) {
+          setCommentOn(false)
+          setLightboxDock(false)
+          setCommentBox(null)
+          setCommentSurface(null)
+        }
+      }, [lightboxRel])
+
+      // 窗口缩放 / 面板宽度变化 / 滚动：**重新量**（一次算完就不管 = pin 必跑位）。
+      React.useEffect(() => {
+        if (!lightboxRel) return undefined
+        measureCommentBox()
+        let observer = null
+        try {
+          if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(measureCommentBox)
+            if (lightboxRef.current) observer.observe(lightboxRef.current)
+            if (commentImgRef.current) observer.observe(commentImgRef.current)
+          }
+        } catch { observer = null }
+        const win = typeof window === 'undefined' ? null : window
+        if (win && typeof win.addEventListener === 'function') {
+          win.addEventListener('resize', measureCommentBox)
+          win.addEventListener('scroll', measureCommentBox, true)
+        }
+        return () => {
+          if (observer && typeof observer.disconnect === 'function') observer.disconnect()
+          if (win && typeof win.removeEventListener === 'function') {
+            win.removeEventListener('resize', measureCommentBox)
+            win.removeEventListener('scroll', measureCommentBox, true)
+          }
+        }
+      }, [lightboxRel, lightboxDock, measureCommentBox])
+
+      const toggleCommentMode = React.useCallback((event) => {
+        if (event && event.stopPropagation) event.stopPropagation()
+        setCommentDraft(null)
+        setCommentStatus('')
+        setCommentOn((current) => !current)
+      }, [])
+
+      /** 评论模式里点图片：落点 → 百分比 → 就地开一个空草稿。 */
+      const onCommentStageClick = React.useCallback((event) => {
+        if (!commentOn || !lightboxDoc) return
+        if (event && event.stopPropagation) event.stopPropagation()
+        if (commentList.length >= COMMENT_MAX) {
+          setCommentStatus('lightbox.comment.full')
+          return
+        }
+        const stage = commentStageRef.current || (event && event.currentTarget)
+        const img = commentImgRef.current
+          || (stage && typeof stage.querySelector === 'function' ? stage.querySelector('.knit-lightbox-img') : null)
+        const pct = commentClickPct(event, img)
+        if (!pct) return
+        setCommentStatus('')
+        setCommentDraft({
+          anchor: commentAnchor,
+          n: nextNumber(commentList),
+          xPct: pct.xPct,
+          yPct: pct.yPct,
+          text: '',
+          isNew: true,
+        })
+      }, [commentOn, lightboxDoc, commentAnchor, commentList])
+
+      /** 点已有 pin / 评论栏里那一行 → 就地重编辑。 */
+      const openCommentEditor = React.useCallback((event, comment) => {
+        if (event && event.stopPropagation) event.stopPropagation()
+        if (!comment) return
+        setCommentStatus('')
+        setCommentDraft({
+          anchor: commentAnchor,
+          n: comment.n,
+          xPct: comment.xPct,
+          yPct: comment.yPct,
+          text: comment.text,
+          isNew: false,
+        })
+      }, [commentAnchor])
+
+      /** Enter / 保存：空文本不落；超 200 字**不截断**，提示后留在编辑态。 */
+      const saveComment = React.useCallback(() => {
+        const draft = commentDraft
+        if (!draft) return
+        const text = String(draft.text || '')
+        if (!text.trim()) { setCommentDraft(null); setCommentStatus(''); return }
+        if (text.length > COMMENT_MAX_CHARS) { setCommentStatus('lightbox.comment.tooLong'); return }
+        const current = commentsFor(commentsByAnchor, draft.anchor)
+        const next = draft.isNew
+          ? normalizeComments(current.concat([{ n: draft.n, xPct: draft.xPct, yPct: draft.yPct, text }]))
+          : normalizeComments(current.map((item) => (item.n === draft.n ? { ...item, text } : item)))
+        setCommentsByAnchor(withComments(commentsByAnchor, draft.anchor, next))
+        setCommentDraft(null)
+        setCommentStatus('')
+      }, [commentDraft, commentsByAnchor])
+
+      const deleteComment = React.useCallback((n) => {
+        const anchor = commentDraft ? commentDraft.anchor : commentAnchor
+        const current = commentsFor(commentsByAnchor, anchor)
+        setCommentsByAnchor(withComments(commentsByAnchor, anchor, current.filter((item) => item.n !== n)))
+        setCommentDraft((draft) => (draft && draft.n === n ? null : draft))
+      }, [commentDraft, commentAnchor, commentsByAnchor])
+
+      /** 发送 = 只**投递**（§四 文本），绝不自动发送。 */
+      const sendComments = React.useCallback(async () => {
+        if (!lightboxDoc) return
+        const list = commentsFor(commentsByAnchor, anchorIdFor(lightboxDoc))
+        if (!list.length) return
+        /* 文本身份：工作区图用 **rel**（比文件名唯一，agent 能直接定位）；对话图没有路径，
+           用文件名 + 附件 sha。图片本身作为附件随 paste 一起进输入框（不再是「只发文字」）。 */
+        const label = lightboxDoc.conversation
+          ? (lightboxDoc.name || 'image')
+          : lightboxDoc.rel
+        const text = commentLines(list, { rel: label, sha: shaOfDoc(lightboxDoc) }).join('\n')
+        const result = await deliverCommentText(text, {
+          attachment: {
+            src: srcFor(lightboxDoc),
+            name: lightboxDoc.name || String(lightboxDoc.rel).split('/').pop() || 'knit-image.png',
+          },
+        })
+        setCommentStatus(!result.ok
+          ? 'lightbox.comment.sendFailed'
+          : result.via === 'clipboard'
+            ? 'lightbox.comment.copied'
+            : result.via === 'download'
+              ? 'lightbox.comment.downloaded'
+              : result.image
+                ? 'lightbox.comment.sent'
+                : 'lightbox.comment.sentNoImage')
+      }, [lightboxDoc, commentsByAnchor])
+
+      const cancelCommentDraft = React.useCallback(() => {
+        setCommentDraft(null)
+        setCommentStatus('')
+      }, [])
+
+      const commentStatusText = commentStatus
+        ? t(commentStatus, { max: commentStatus === 'lightbox.comment.full' ? COMMENT_MAX : COMMENT_MAX_CHARS })
+        : ''
+
+      /* 编辑气泡落点：优先贴着 pin（**相对画布表面**的坐标）；量不到尺寸就回退表面中心
+         —— 气泡本身仍然由 commentPopoverBox 夹进表面，不会跑到外面（整屏与面板画布共用）。 */
+      const commentView = {
+        width: commentSurface && Number.isFinite(commentSurface.width) ? commentSurface.width : (
+          typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1024),
+        height: commentSurface && Number.isFinite(commentSurface.height) ? commentSurface.height : (
+          typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768),
+      }
+      const commentAnchorPoint = commentDraft && commentBox
+        ? {
+            x: commentBox.left + (commentBox.width * commentDraft.xPct) / 100,
+            y: commentBox.top + (commentBox.height * commentDraft.yPct) / 100,
+          }
+        : null
+      const commentEditorBox = commentDraft
+        ? commentPopoverBox(commentAnchorPoint, { width: COMMENT_POP_W, height: COMMENT_POP_H }, commentView)
+        : null
+
+      /* v0.26 返工：画布内容只渲染一次，但有两种挂载点 ——
+         · `lightboxDock` = Knit 面板里的画布（会话不盖住、身份清楚）
+         · 否则 = 原来的整屏查看器（portal 到 body）
+         两者共用同一份 DOM / 同一套评论状态，切换不丢。 */
+      const lightboxContent = lightboxDoc
+        ? h('div', {
+            className: `knit-lightbox${lightboxDock ? ' docked' : ''}`,
+            role: 'dialog',
+            'aria-modal': lightboxDock ? 'false' : 'true',
+            'aria-label': t('lightbox.aria', { name: lightboxDoc.name || lightboxDoc.rel }),
+            tabIndex: 0,
+            ref: lightboxRef,
+            onClick: lightboxClose,
+            /* 面板画布：滚轮在**画布任意位置**都能换图（评论栏除外，那里要滚评论列表）。
+               整屏仍只在图片区接管滚轮（左列要滚缩略图）。 */
+            onWheel: lightboxDock
+              ? (event) => {
+                  const target = event && event.target
+                  if (target && typeof target.closest === 'function' && target.closest('.knit-lightbox-comments')) return
+                  const delta = event && (event.deltaY || event.deltaX)
+                  if (!delta) return
+                  lightboxStep(delta > 0 ? 1 : -1)
+                }
+              : undefined,
+          },
+            lightboxDock
+              ? h('div', { className: 'knit-lightbox-dockhead' },
+                  h('span', { className: 'knit-lightbox-dockname', title: lightboxDoc.rel },
+                    lightboxDoc.name || lightboxDoc.rel),
+                  h('span', { className: 'knit-lightbox-dockctx', title: lightboxDoc.rel },
+                    lightboxDoc.conversation
+                      ? t('attach.title')
+                      : (String(lightboxDoc.rel).includes('/')
+                        ? String(lightboxDoc.rel).slice(0, String(lightboxDoc.rel).lastIndexOf('/') + 1)
+                        : '')),
+                  mediaDocs.length > 1
+                    ? h('span', { className: 'knit-lightbox-dockcount' }, `${lightboxIndex + 1}/${mediaDocs.length}`)
+                    : null)
+              : h('div', {
+              className: 'knit-lightbox-rail',
+              ref: lightboxRailRef,
+              onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+            }, lightboxRailView.items.map((doc, i) => h('button', {
+              key: doc.rel,
+              type: 'button',
+              className: `knit-lightbox-thumb${doc.rel === lightboxDoc.rel ? ' active' : ''}`,
+              title: doc.name || doc.rel,
+              'data-thumb-index': lightboxRailView.start + i,
+              onClick: () => setLightboxRel(doc.rel),
+            }, h('img', { src: srcFor(doc), alt: '', draggable: false })))),
+            /* 查看器工具条：「收藏」「本地打开」原来只活在**被撤掉的**媒体预览头里 ——
+               不搬过来就等于静默丢掉两个功能（用户 2026-10-21 明确要过「收藏排第一」）。
+               收藏只对工作区文件有意义（对话里的图还没有路径），所以对话图不显示这一条。 */
+            h('div', { className: 'knit-lightbox-tools' },
+              /* 面板画布只留评论相关动作（评论 / 全屏 / 返回）—— 面板窄，塞五个按钮会跟标题打架；
+                 收藏 / 本地打开在整屏里仍然有，图标与入口一个没丢。 */
+              lightboxDock || lightboxDoc.conversation
+                ? null
+                : h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    onClick: () => toggleFavorite(lightboxDoc.rel),
+                    title: favoriteSet.has(lightboxDoc.rel) ? t('fav.removeTitle') : t('fav.addTitle'),
+                  }, favoriteSet.has(lightboxDoc.rel) ? t('fav.on') : t('fav.off')),
+              lightboxDock || lightboxDoc.conversation
+                ? null
+                : h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    onClick: lightboxOpenLocal,
+                    title: t('preview.openLocal', { path: lightboxDoc.rel }),
+                  }, t('preview.openLocalBtn')),
+              /* v0.26 评论模式：二态入口。点它只切模式，不许冒泡去关查看器。 */
+              h('button', {
+                className: `knit-btn${commentOn ? ' active' : ''}`,
+                type: 'button',
+                title: t('lightbox.comment.title'),
+                'aria-pressed': commentOn ? 'true' : 'false',
+                'data-knit-comment-toggle': '1',
+                onClick: toggleCommentMode,
+              }, commentOn ? t('lightbox.comment.exit') : t('lightbox.comment.enter')),
+              /* 画布 / 整屏互相切换：评论在面板画布里做，看细节再进整屏 */
+              lightboxDock
+                ? h('button', {
+                    className: 'knit-btn knit-lightbox-nav',
+                    type: 'button',
+                    title: t('lightbox.canvas.prev'),
+                    'aria-label': t('lightbox.canvas.prev'),
+                    'data-knit-canvas-prev': '1',
+                    onClick: (event) => {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                      lightboxStep(-1)
+                    },
+                  }, '‹')
+                : null,
+              lightboxDock
+                ? h('button', {
+                    className: 'knit-btn knit-lightbox-nav',
+                    type: 'button',
+                    title: t('lightbox.canvas.next'),
+                    'aria-label': t('lightbox.canvas.next'),
+                    'data-knit-canvas-next': '1',
+                    onClick: (event) => {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                      lightboxStep(1)
+                    },
+                  }, '›')
+                : null,
+              lightboxDock
+                ? h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    title: t('lightbox.canvas.fullscreenTitle'),
+                    'data-knit-canvas-fullscreen': '1',
+                    onClick: (event) => {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                      setLightboxDock(false)
+                    },
+                  }, t('lightbox.canvas.fullscreen'))
+                : h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    title: t('lightbox.canvas.dockTitle'),
+                    'data-knit-canvas-dock': '1',
+                    onClick: (event) => {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                      setLightboxDock(true)
+                    },
+                  }, t('lightbox.canvas.dock')),
+              lightboxDock
+                ? h('button', {
+                    className: 'knit-btn',
+                    type: 'button',
+                    title: t('lightbox.canvas.backTitle'),
+                    'data-knit-canvas-back': '1',
+                    onClick: (event) => {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                      lightboxClose()
+                    },
+                  }, t('lightbox.canvas.back'))
+                : null),
+            /* 右上角 ✕ —— 照 DSH 自带查看器那套（全屏之后必须有一个**看得见的**出口：
+               光靠「点图片以外」和 Esc，第一次用的人不知道往哪点）。 */
+            lightboxDock
+              ? null
+              : h('button', {
+                  className: 'knit-lightbox-close',
+                  type: 'button',
+                  title: t('lightbox.close'),
+                  'aria-label': t('lightbox.close'),
+                  onClick: () => lightboxClose(),
+                }, '✕'),
+            /* 滚轮翻页：只在**图片这一块**生效。左列自己会滚（它 overflow-y:auto），
+               在它上面滚轮应该滚列表，而不是换图 —— 所以监听挂在 stage 上、不挂在遮罩上。 */
+            h('div', {
+              className: 'knit-lightbox-stage',
+              ref: commentStageRef,
+              /* 评论模式：点图落 pin（handler 里 stopPropagation，不关查看器）。
+                 非评论模式：不拦，冒泡到遮罩 = 点图片以外才关的既有语义不变。 */
+              onClick: commentOn ? onCommentStageClick : undefined,
+              style: commentOn ? { cursor: 'crosshair' } : undefined,
+              onWheel: lightboxDock ? undefined : (event) => {
+                const delta = event && (event.deltaY || event.deltaX)
+                if (!delta) return
+                lightboxStep(delta > 0 ? 1 : -1)
+              },
+            },
+              h('img', {
+                className: 'knit-lightbox-img',
+                ref: commentImgRef,
+                src: srcFor(lightboxDoc),
+                alt: lightboxDoc.name || '',
+                draggable: false,
+                style: commentOn ? { cursor: 'crosshair' } : undefined,
+                onLoad: measureCommentBox,
+                onClick: (event) => {
+                  // 评论模式下把点击让给 stage（要换算成图片上的百分比）
+                  if (!commentOn && event && event.stopPropagation) event.stopPropagation()
+                },
+              }),
+              commentOn
+                ? h('div', {
+                    className: 'knit-lightbox-pins',
+                    /* 覆盖层 = **画布表面**（整屏 root / 面板画布 root 都是同一个根）；
+                       pin 的像素位置由 commentBox（与落点**同一个**绘制矩形，换算到表面坐标）算。
+                       拿不到尺寸（测试替身 / 图还没 load）时先不画位置，量到即重排。 */
+                    onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+                  },
+                    commentList.map((item) => h('button', {
+                      key: item.n,
+                      type: 'button',
+                      className: 'knit-lightbox-pin',
+                      style: commentBox
+                        ? {
+                            left: `${commentBox.left + (commentBox.width * item.xPct) / 100}px`,
+                            top: `${commentBox.top + (commentBox.height * item.yPct) / 100}px`,
+                          }
+                        : null,
+                      title: item.text,
+                      'aria-label': t('lightbox.comment.pinAria', { n: item.n }),
+                      'data-knit-comment-pin': String(item.n),
+                      onClick: (event) => openCommentEditor(event, item),
+                    }, String(item.n))),
+                    /* 草稿 pin：点下去的那一点要**看得见**（不然输入框像浮在图上）。
+                       与 Infini 的 .pin.draft 同一语义：半透明、不可点、编号就是即将保存的 n。 */
+                    commentDraft && commentDraft.isNew
+                      ? h('span', {
+                          className: 'knit-lightbox-pin draft',
+                          /* 有绘制矩形就落真实像素位置；量不到（测试替身 / 图还没 load）时
+                             用百分比近似，等测量回来即对齐 —— 草稿点本身必须看得见。 */
+                          style: commentBox
+                            ? {
+                                left: `${commentBox.left + (commentBox.width * commentDraft.xPct) / 100}px`,
+                                top: `${commentBox.top + (commentBox.height * commentDraft.yPct) / 100}px`,
+                              }
+                            : { left: `${commentDraft.xPct}%`, top: `${commentDraft.yPct}%` },
+                          'aria-hidden': 'true',
+                        }, String(commentDraft.n))
+                      : null,
+                    commentDraft
+                      ? h('div', {
+                          className: 'knit-lightbox-editor',
+                          'data-knit-comment-editor': '',
+                          /* **贴着 pin**的气泡：出屏按 commentPopoverBox 翻边 + 夹进视口
+                             （与 Infini 分享包同一套规则），不再「按百分比放到图片边上」。 */
+                          style: { left: `${commentEditorBox.left}px`, top: `${commentEditorBox.top}px` },
+                          'data-placement': commentEditorBox.placement,
+                          onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+                        },
+                          h('div', { className: 'knit-lightbox-editor-head' },
+                            h('span', { className: 'knit-lightbox-editor-title' }, commentDraft.isNew
+                              ? t('lightbox.comment.new')
+                              : t('lightbox.comment.edit', { n: commentDraft.n })),
+                            h('span', { className: 'knit-lightbox-editor-pos' },
+                              `x ${commentDraft.xPct.toFixed(1)}% · y ${commentDraft.yPct.toFixed(1)}%`),
+                          ),
+                          h('input', {
+                            className: 'knit-lightbox-editor-input',
+                            type: 'text',
+                            value: commentDraft.text,
+                            autoFocus: true,
+                            placeholder: t('lightbox.comment.placeholder'),
+                            'aria-label': t('lightbox.comment.placeholder'),
+                            onChange: (event) => {
+                              const value = event && event.target ? event.target.value : ''
+                              setCommentDraft({ ...commentDraft, text: String(value) })
+                            },
+                            onKeyDown: (event) => {
+                              if (!event) return
+                              if (event.key === 'Enter') {
+                                event.preventDefault(); event.stopPropagation(); saveComment(); return
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault(); event.stopPropagation(); cancelCommentDraft()
+                              }
+                            },
+                          }),
+                          commentStatus === 'lightbox.comment.tooLong'
+                            ? h('span', { className: 'knit-lightbox-editor-hint' }, commentStatusText)
+                            : null,
+                          h('div', { className: 'knit-lightbox-editor-foot' },
+                            commentDraft.isNew
+                              ? null
+                              : h('button', {
+                                  className: 'knit-btn',
+                                  type: 'button',
+                                  onClick: () => deleteComment(commentDraft.n),
+                                }, t('lightbox.comment.delete')),
+                            h('span', { className: 'knit-lightbox-editor-count' },
+                              `${String(commentDraft.text || '').length}/${COMMENT_MAX_CHARS}`),
+                            h('button', {
+                              className: 'knit-btn',
+                              type: 'button',
+                              onClick: cancelCommentDraft,
+                            }, t('lightbox.comment.cancel')),
+                            h('button', {
+                              className: 'knit-btn',
+                              type: 'button',
+                              onClick: saveComment,
+                            }, t('lightbox.comment.save'))))
+                      : null
+                  )
+                : null),
+            commentOn
+              ? h('div', {
+                  className: 'knit-lightbox-comments',
+                  role: 'region',
+                  'aria-label': t('lightbox.comment.count', { n: commentList.length }),
+                  onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+                },
+                  h('div', { className: 'knit-lightbox-comments-list' },
+                    commentList.length
+                      ? commentList.map((item) => h('div', {
+                          key: item.n,
+                          className: 'knit-lightbox-comment-row',
+                        },
+                          h('span', { className: 'knit-lightbox-comment-n' }, String(item.n)),
+                          h('button', {
+                            className: 'knit-lightbox-comment-text',
+                            type: 'button',
+                            title: item.text,
+                            onClick: (event) => openCommentEditor(event, item),
+                          }, commentSummary(item.text)),
+                          h('button', {
+                            className: 'knit-lightbox-comment-del',
+                            type: 'button',
+                            title: t('lightbox.comment.delete'),
+                            'aria-label': t('lightbox.comment.delete'),
+                            onClick: () => deleteComment(item.n),
+                          }, '✕'),
+                        ))
+                      : h('div', { className: 'knit-lightbox-comments-empty' },
+                          h('span', { className: 'knit-lightbox-comments-emptyTitle' }, t('lightbox.comment.empty')),
+                          h('span', { className: 'knit-lightbox-comments-emptyHint' }, t('lightbox.comment.emptyHint'))),
+                  ),
+                  h('div', { className: 'knit-lightbox-comments-right' },
+                    commentStatusText
+                      ? h('span', { className: 'knit-lightbox-comments-status' }, commentStatusText)
+                      : null,
+                    h('button', {
+                      className: 'knit-btn knit-lightbox-comments-send',
+                      type: 'button',
+                      disabled: !commentList.length,
+                      title: t('lightbox.comment.sendTitle'),
+                      'data-knit-comment-send': '1',
+                      onClick: sendComments,
+                    }, t('lightbox.comment.send')),
+                  ),
+                )
+              : null)
+        : null
 
       return h('div', {
         className: `knit-root${fullscreen ? ' fullscreen' : ''}`,
@@ -6782,14 +7973,16 @@ video.knit-preview-media{width:100%;background:#000}
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——
       // 时间序、媒体档、「全部」都不受影响。
-      (() => {
+      (lightboxDoc && lightboxDock
+        ? h('div', { className: 'knit-canvas' }, lightboxContent)
+        : (() => {
         const listNode = h('div', {
           className: 'knit-list',
           ref: listRef,
           tabIndex: 0,
           onKeyDown: onListKeyDown,
           // v0.25：滚动就收起悬停大图 —— 它是 fixed 定位，不跟着卡片走，留着只会错位
-          onScroll: hoverEnd,
+          onScroll: hoverClose,
           role: 'listbox',
           'aria-label': t('list.aria'),
           // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
@@ -6811,8 +8004,8 @@ video.knit-preview-media{width:100%;background:#000}
            `role=listbox` 的直接子级只能是 option，多一层 group 会让辅助技术
            把选项算成另一个集合（这条纪律与右栏无关，别跟着一起删）。 */
         return listNode
-      })(),
-      preview ? h(PreviewPanel, {
+      })()),
+      preview && !(lightboxDoc && lightboxDock) ? h(PreviewPanel, {
         preview,
         pathImages,
         fullscreen,
@@ -6870,81 +8063,28 @@ video.knit-preview-media{width:100%;background:#000}
               width: `${hoverShot.box.width}px`,
               height: `${hoverShot.box.height}px`,
             },
-          }, h('img', { src: hoverShot.src, alt: '', draggable: false }))
+            role: 'button',
+            tabIndex: 0,
+            title: t('lightbox.canvas.hintTitle'),
+            'data-knit-hover-shot': '1',
+            onMouseEnter: hoverKeep,
+            onMouseLeave: hoverEnd,
+            onClick: (event) => {
+              if (event && event.stopPropagation) event.stopPropagation()
+              const doc = hoverShot.doc
+              hoverClose()
+              if (doc) lightboxOpen(doc, { dock: true, comment: true })
+            },
+          },
+            h('img', { src: hoverShot.src, alt: '', draggable: false }),
+            h('span', { className: 'knit-shot-hint' }, t('lightbox.canvas.commentHint')))
         : null,
       /* v0.25：媒体档「双击全屏」查看器。
          · 点**图片以外**（遮罩）⇒ 关；点图片本身 ⇒ 不关（`stopPropagation`），
            否则「点一下想看清细节」就把查看器点没了；
          · 左侧一列缩略图（当前这张附近 10 张）——点它换图，也不许冒泡去关；
          · `role="dialog"` + `aria-modal` + 可聚焦：Esc / ← → 由根上的捕获阶段接管。 */
-      lightboxDoc
-        ? mountLightbox(h('div', {
-            className: 'knit-lightbox',
-            role: 'dialog',
-            'aria-modal': 'true',
-            'aria-label': t('lightbox.aria', { name: lightboxDoc.name || lightboxDoc.rel }),
-            tabIndex: 0,
-            ref: lightboxRef,
-            onClick: lightboxClose,
-          },
-            h('div', {
-              className: 'knit-lightbox-rail',
-              ref: lightboxRailRef,
-              onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
-            }, lightboxRailView.items.map((doc, i) => h('button', {
-              key: doc.rel,
-              type: 'button',
-              className: `knit-lightbox-thumb${doc.rel === lightboxDoc.rel ? ' active' : ''}`,
-              title: doc.name || doc.rel,
-              'data-thumb-index': lightboxRailView.start + i,
-              onClick: () => setLightboxRel(doc.rel),
-            }, h('img', { src: srcFor(doc), alt: '', draggable: false })))),
-            /* 查看器工具条：「收藏」「本地打开」原来只活在**被撤掉的**媒体预览头里 ——
-               不搬过来就等于静默丢掉两个功能（用户 2026-10-21 明确要过「收藏排第一」）。
-               收藏只对工作区文件有意义（对话里的图还没有路径），所以对话图不显示这一条。 */
-            h('div', { className: 'knit-lightbox-tools' },
-              lightboxDoc.conversation
-                ? null
-                : h('button', {
-                    className: 'knit-btn',
-                    type: 'button',
-                    onClick: () => toggleFavorite(lightboxDoc.rel),
-                    title: favoriteSet.has(lightboxDoc.rel) ? t('fav.removeTitle') : t('fav.addTitle'),
-                  }, favoriteSet.has(lightboxDoc.rel) ? t('fav.on') : t('fav.off')),
-              lightboxDoc.conversation
-                ? null
-                : h('button', {
-                    className: 'knit-btn',
-                    type: 'button',
-                    onClick: lightboxOpenLocal,
-                    title: t('preview.openLocal', { path: lightboxDoc.rel }),
-                  }, t('preview.openLocalBtn'))),
-            /* 右上角 ✕ —— 照 DSH 自带查看器那套（全屏之后必须有一个**看得见的**出口：
-               光靠「点图片以外」和 Esc，第一次用的人不知道往哪点）。 */
-            h('button', {
-              className: 'knit-lightbox-close',
-              type: 'button',
-              title: t('lightbox.close'),
-              'aria-label': t('lightbox.close'),
-              onClick: () => lightboxClose(),
-            }, '✕'),
-            /* 滚轮翻页：只在**图片这一块**生效。左列自己会滚（它 overflow-y:auto），
-               在它上面滚轮应该滚列表，而不是换图 —— 所以监听挂在 stage 上、不挂在遮罩上。 */
-            h('div', {
-              className: 'knit-lightbox-stage',
-              onWheel: (event) => {
-                const delta = event && (event.deltaY || event.deltaX)
-                if (!delta) return
-                lightboxStep(delta > 0 ? 1 : -1)
-              },
-            }, h('img', {
-              className: 'knit-lightbox-img',
-              src: srcFor(lightboxDoc),
-              alt: lightboxDoc.name || '',
-              draggable: false,
-              onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
-            }))))
-        : null)
+      lightboxDoc && !lightboxDock ? mountLightbox(lightboxContent) : null)
     }
 
     /* ── 会话入口按钮 ───────────────────────────────── */

@@ -6300,10 +6300,13 @@ test('悬停大图：停一下才出现（不许鼠标扫过就闪），离开�
   assert.match(String(img.props.src), /\/api\/raw\?.*a\.png/, `src 应指向这张图：${img.props.src}`)
   assert.equal(img.props.alt, '', '纯装饰，alt 留空（文件名在卡片上已经有了）')
 
-  // 移开：立刻收回
+  // 移开：先给 220ms 的「挪进浮窗」窗口，再收回（浮窗现在是评论入口）
   byClass(nodes, 'knit-media-card')[0].props.onMouseLeave()
   nodes = render()
-  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '移开就收')
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 1, '移开的一瞬间还留着（给鼠标挪进浮窗的时间）')
+  harness.tick()
+  nodes = render()
+  assert.equal(byExactClass(nodes, 'knit-shot').length, 0, '延迟到了就收')
 })
 
 test('悬停大图：没停够就移开 ⇒ 一次都不出现（不许闪一下）', async () => {
@@ -6392,7 +6395,7 @@ test('悬停大图：对话里生成的图走**附件地址**（不是 /api/raw�
   assert.ok(String(img.props.src).includes(encodeURIComponent(items[0].id)), '只带 sha256')
 })
 
-test('悬停大图：CSS 必须 pointer-events:none（只许看一眼，不许挡点击），且与入口浮窗同一层级', async () => {
+test('悬停大图：CSS 现在可点（评论入口），层级与入口浮窗同档', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
@@ -6401,7 +6404,8 @@ test('悬停大图：CSS 必须 pointer-events:none（只许看一眼，不许�
   const box = css.match(/\.knit-shot\{([^}]*)\}/)
   assert.ok(box, '应有 .knit-shot 的样式')
   assert.match(box[1], /position:fixed/, 'fixed：不参与面板布局')
-  assert.match(box[1], /pointer-events:none/, '不许挡住卡片的点击与双击')
+  assert.match(box[1], /pointer-events:auto/, '悬停大图现在是评论入口：必须能接住点击')
+  assert.match(css, /\.knit-shot-hint\{[^}]*\}/, '要有「评论」提示（否则用户不知道这张大图能点）')
   assert.match(box[1], /z-index:60/, '与入口浮窗（.knit-peek）同一层级，别自己拍一个')
   const img = css.match(/\.knit-shot img\{([^}]*)\}/)
   assert.ok(img, '应有图的样式')
@@ -6698,8 +6702,10 @@ test('全屏查看器：渲染**必须**走 mountLightbox（这条是「整屏�
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const source = readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
-  assert.ok(source.includes("mountLightbox(h('div', {"),
-    '查看器必须经 mountLightbox 挂载 —— 直接在 .knit-root 里渲染会退回「只盖住面板」')
+  assert.ok(source.includes('mountLightbox(lightboxContent)'),
+    '整屏查看器必须经 mountLightbox 挂载 —— 直接在 .knit-root 里渲染会退回「只盖住面板」')
+  assert.ok(source.includes("h('div', { className: 'knit-canvas' }, lightboxContent)"),
+    '面板画布与整屏查看器必须共用同一份 lightboxContent（评论状态不丢、DOM 不分叉）')
   assert.match(source, /createPortal\(node, dom\.body\)/, 'portal 的挂载点是 document.body')
   // 遮罩变量必须挂在查看器自己身上：portal 之后它不在 .knit-root 里，读不到那层的变量
   assert.ok(source.includes('--knit-scrim:rgba(255,255,255,.62);'),

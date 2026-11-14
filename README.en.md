@@ -198,6 +198,7 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
 | **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
+| **In-image comments**: click "Comment" on the hover preview → a **canvas inside the Knit panel** (never covers the conversation); click the image to drop a pin, write a line, send from the bottom bar. Sending attaches the **original image + `图像 1: …` coordinate text**; comments live in session memory only (lost on refresh, not persisted) | ✅ |
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
 | **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout; the popover is just header + list — no extra divider or hint line) | ✅ |
@@ -827,7 +828,7 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 883 tests, zero dependencies, no npm install needed
+npm test          # 914 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -855,7 +856,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 883 tests
+└── test/                 # 914 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

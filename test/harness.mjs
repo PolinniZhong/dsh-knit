@@ -109,6 +109,12 @@ export function loadClientModule(options = {}) {
         + 'hoverShotBox, HOVER_SHOT_MAX, HOVER_SHOT_GAP, HOVER_SHOT_MARGIN, HOVER_SHOT_DELAY_MS, '
         // v0.25 媒体档「双击全屏」：左侧带子的窗口算法是纯函数
         + 'lightboxRail, LIGHTBOX_RAIL, LIGHTBOX_RAIL_LEAD, '
+        // v0.26 图内评论：坐标 / 归一化 / §四 文本 / 身份锚定 + 投递通道
+        + 'contentRect, pctFromPoint, pointFromPct, normalizeComments, nextNumber, commentSummary, '
+        + 'commentLines, anchorIdFor, shaOfDoc, commentsFor, withComments, '
+        + 'contentViewportOf, commentPopoverBox, '
+        + 'commentClickPct, commentEditorTarget, deliverCommentText, buildPasteEvent, '
+        + 'COMMENT_MAX_CHARS, COMMENT_MAX, COMMENT_SUMMARY_CHARS, COMMENT_POP_W, COMMENT_POP_H, '
         + 'mountLightbox, '
 
         + 'DOC_NEEDLE_CHARS, DOC_NEEDLE_MIN, DOC_NEEDLE_MAX, '

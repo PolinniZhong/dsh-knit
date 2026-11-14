@@ -464,7 +464,7 @@ knit/                            ← 插件本体（**路径不能动**，见文
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        883 项，分工见 §9.3
+└── test/                        914 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：
