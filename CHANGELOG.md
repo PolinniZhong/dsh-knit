@@ -33,6 +33,18 @@
   **1440×900 @1x 与 1024×900 @2x** 下 visual 百分比逐位相同；监听 paste 只有一次、items 里带 File。
   截图在 `03_发布/验收截图-v0.26/`。⚠️ **用户桌面 App 里的真人逐条验收还没做**。
 
+### 发布记录
+
+- ✅ **已发布（2026-11-14）**：轻量 tag `v0.26.0` = 提交 `3c90fcd`（与 registry 的 `gitHead` **逐字相同**）；
+  OIDC 通道 run `43610425309`，**ref 是 `v0.26.0`** ⇒「tag 与 package.json 版本对齐」那条守卫**真跑了**；
+  **attempt 1 一次通过**（v0.25.0 修掉的 mtime flake 没有再来）。
+- registry：`latest` = `0.26.0`，共 **24** 个版本；`dist.shasum` = `a8aa0487ac974de0188df2a4512ab64567cce4c4`，
+  `fileCount` **72**，`unpackedSize` **2 640 926 B**（与本地 `npm pack` 的解包大小**逐项相同**）；
+  带**签名 provenance**（`search.sigstore.dev` logIndex `3881051560`）。
+- ⚠️ **发布后约 8 分钟内 `npm view` 一直报 `latest = 0.25.0`** —— 连 `--prefer-online` + 全新缓存目录也一样；
+  直查 `registry.npmjs.org`（带 `cache-control: no-cache`）当场就是 `0.26.0`。
+  **结论：`npm view` 不是发布回读的可信判据**（它的 packument 缓存会滞后）。
+
 ## [0.25.0] - 2026-10-31
 
 > **本版主题**：「看图」这件事从「点一下占半屏」变成**停一下看大图 / 双击看全屏**，
