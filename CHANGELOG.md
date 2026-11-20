@@ -27,6 +27,16 @@
 - **连续发送评论时另起独立段落**：输入框已有正文就前面空一行再投（`\n\n`），
   不再把两段评论拼在同一个段落里；光标先移到末尾，避免插在用户文字中间。
 
+### 发布记录
+
+- ✅ **已发布（2026-11-20）**：轻量 tag `v0.27.0` = 提交 `375f61f`（与 registry 的 `gitHead` **逐字相同**）；
+  OIDC run `44645039072`，**ref 是 `v0.27.0`** ⇒「tag 与 package.json 版本对齐」那条守卫**真跑了**；**attempt 1 一次通过**。
+- registry：`latest` = `0.27.0`，共 **25** 个版本；`dist.shasum` = `d3199a8579f8535f9eaa776d011a88f4d6d14c96`，
+  `fileCount` **72**，`unpackedSize` **2 699 973 B**（与本机 `npm pack` 基线**逐项相同**）；
+  带签名 provenance（`search.sigstore.dev` logIndex `4011065522`）。
+- ⚠️ **这一版连「直查 registry」都滞后约 2 分钟**（workflow 早已打出 `+ dsh-knit@0.27.0`）——
+  台账 B38 的结论要补一句：**权威顺序 = workflow 的 `+ pkg@version` > 直查 registry（耐心重试）> `npm view`（不可用）**。
+
 ## [0.26.0] - 2026-11-14
 
 ### 新增
