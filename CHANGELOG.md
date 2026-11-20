@@ -3,6 +3,30 @@
 本项目的重要变更都记在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.27.0] - 2026-11-20
+
+### 架构
+
+- **客户端源码分片**：`src/client/client.js` 改为**生成物**，人写的源码拆到 `tools/client-src/` 7 片
+  （preamble / i18n / runtime / styles / components / body / entry），由零依赖 `node tools/build-client.mjs`
+  按文件名顺序拼接；加载契约不变（DSH 仍只读一个 `client.js`，无 bundler / JSX）。
+  新增 `npm run build:client`、`build:client:check`，`prepublishOnly` 校验生成物；代码预算按分片计。
+
+### 新增
+
+- **「变更」第四档**：在「文档 / 代码 / 媒体」之外新增「变更」，列出**未提交**的 Markdown / 代码文件，
+  带 `修改 / 新增 / 删除 / 重命名` 状态与 `+N −N` 行数；**工作区根不是仓库时自动用一层子目录里的仓库**
+  （如 `08_Knit/knit`，行 rel 前缀 `knit/`）；点开在同一个预览面板里看**逐行 diff**
+  （上下文 / 新增 / 删除 + 新旧行号）。数据来自只读 `git status + numstat + diff`
+  （`--no-ext-diff --no-textconv`，无写动词），独立 `/knit/api/status` 与 `/knit/api/diff`。
+
+### 修复
+
+- **多张图的评论按输入框附件顺序编号**：第一张附件 = `图像 1`，第二张 = `图像 2`（之前每段都写「图像 1」，
+  agent 分不清是哪张图）。编号来源是输入框 `[data-composer-card]` 里已有的附件数 + 1。
+- **连续发送评论时另起独立段落**：输入框已有正文就前面空一行再投（`\n\n`），
+  不再把两段评论拼在同一个段落里；光标先移到末尾，避免插在用户文字中间。
+
 ## [0.26.0] - 2026-11-14
 
 ### 新增

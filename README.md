@@ -179,7 +179,8 @@ dsh plugin --profile web add dsh-knit
 | 图片与视频：方形缩略图网格，**格子基准固定 104px、列数由宽度连续数出来**（320px → 2 列 / 632px → 5 列 / 1200px → 10 列），格子大小基本不变；**纵向有多少行就铺多少行**，超出交给列表滚动；视频自动取首帧、叠播放三角与时长角标（零依赖、不转码） | ✅ |
 | **悬停看大图**：鼠标停在图片卡片上 350ms 弹出一张大图（上限 420×420，按可用空间收缩；优先摆左侧，放不下翻右侧；滚动即收）。只做图片 | ✅ |
 | **双击图片 → 整屏查看器**：portal 到整页、模态级层级、**毛玻璃遮罩随深色模式变**；左侧一列「当前这张附近 10 张」缩略图（**点缩略图切图**，当前那张自动滚进可视区）；`↑↓` / `←→` / **图片区滚轮**都能翻页、`Esc` / `✕` / 点图片以外关闭；工具条带**收藏 / 本地打开** | ✅ |
-| **图内评论**：悬停大图点「评论」→ **Knit 面板内画布**（不盖住会话）；点图落 pin、就地写一句、底部评论栏发送。发送 = **原图附件 + `图像 1：…` / 坐标文本**，评论只活在当前会话内存里（刷新丢；不落盘） | ✅ |
+| **变更档**：文档 / 代码 / 媒体 / 变更四档；变更列**未提交**的 Markdown 与代码，显示修改 / 新增 / 删除 / 重命名与 `+N −N`，点开在同一个预览面板看逐行 diff；只读 `git status + numstat + diff`（`--no-ext-diff --no-textconv`） | ✅ |
+| **图内评论**：悬停大图点「评论」→ **Knit 面板内画布**（不盖住会话）；点图落 pin、就地写一句、底部评论栏发送。发送 = **原图附件 + `图像 N：…` / 坐标文本**（编号跟输入框附件顺序走，连续发送自动另起一段），评论只活在当前会话内存里（刷新丢；不落盘） | ✅ |
 | 双击**视频** → 面板内**就地预览**：可播放可拖动（HTTP Range 流式，不全量下载）。查看器只做图片，视频不进去 | ✅ |
 | 预览面板可拖高度（20%–80%，位置记住）、可全屏，`Esc` 退出；**全屏时头部 / 排序条 / 类型档 / 使用情况 / 列表全部让位**，预览铺满整个面板 | ✅ |
 | **「本地打开」**：用系统默认应用打开当前预览的这篇文档；**预览头那条路径点开的是它「所在的文件夹」并顺带选中这个文件**（reveal，macOS 是 Finder 里 `open -R`；与顶部那行工作区路径同一套机制，差别只在「打开目录」vs「定位到文件」，完整相对路径在悬停提示里） | ✅ |
@@ -701,7 +702,7 @@ v0.17 的信息都在，但**摞在一行字和几个折叠块里**，读不出�
   同样不写任何文件、不落盘任何计数，重启即失
 - **不发起任何对外网络请求**：客户端的 `fetch` 都指向插件自己的同源路由
 - **没有安装期脚本**（无 `install` / `postinstall`）
-- **零依赖** —— 装完不需要构建授权，也没有构建步骤
+- **零依赖** —— 装完不需要构建授权；开发时的客户端分片拼接只用 Node 内置模块，不装包
 - 按路径读文件的接口只放行**图片 / 视频扩展名白名单**（图片 ≤ 12MB、视频 ≤ 256MB），
   视频走 HTTP Range 按需取字节，响应带 `nosniff` 与 `default-src 'none'; sandbox`
 
@@ -764,16 +765,19 @@ v0.17 的信息都在，但**摞在一行字和几个折叠块里**，读不出�
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 914 项，零依赖，不需要先 npm install
+npm run build:client             # 客户端源码分片 → src/client/client.js（无 bundler）
+npm run build:client:check       # 提交前校验生成物与分片同步
+npm test          # 927 项，零依赖，不需要先 npm install
 node tools/clean-room-test.mjs   # 发版前闸门：npm pack → 解包 → 在解包目录里再跑一遍测试
 ```
 
 **改动生效方式**：宿主半边（`src/host/`）改了**必须重启 DSH**（实测不热加载）；
 客户端半边（`src/client/`）改了硬刷新浏览器即可。
 
-**没有构建步骤**：客户端半边是手写的 `window.__ModuleLoader__.load({...})`，
-用 `React.createElement` 而不是 JSX，所以不需要 tsdown / tsc。
-静态资源也是内联的 —— 改图标要同时改 `assets/` 源文件和 `src/client/client.js` 里的
+**没有 bundler**：客户端源码在 `tools/client-src/`，由 `node tools/build-client.mjs` 按顺序拼成
+`src/client/client.js`（DSH 仍只读这一个文件）；用 `React.createElement` 而不是 JSX，不需要
+tsdown / tsc。改分片后跑 `npm run build:client`，提交前 `npm run build:client:check`。
+静态资源也是内联的 —— 改图标要同时改 `assets/` 源文件和生成文件里的
 `KNIT_ICON_PATH`，`test/icon.test.mjs` 会核对两者逐字一致。
 
 ```
@@ -795,7 +799,7 @@ knit/
 │   ├── host/feedback.js  # 使用反馈：读时归因 / Context Epoch / Delta（纯逻辑，只读事件流）
 │   ├── host/tool.js      # agent 文档工具 knit_docs（手写 ToolDefinition）
 │   └── client/client.js  # 双宿主注册 + 面板 UI
-└── test/                 # 914 项测试
+└── test/                 # 927 项测试
     ├── eval/             # 检索质量评测：语料 + 用例 + 冻结的 v0.5.2 基线 + Deep Context 四指标
     └── context/          # 上下文分层评测：24 篇语料 + 12 条任务型用例
 ```

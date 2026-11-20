@@ -21,17 +21,15 @@
 
 ---
 
-### 6.1 客户端半边没有构建步骤
+### 6.1 客户端源码分片 / 生成单文件
 
-`knit/src/client/client.js` 是**手写脚本**，由 `window.__ModuleLoader__.load({...})` 直接装载：
+`knit/src/client/client.js` 是**生成物**（DSH 的单入口），由 `tools/client-src/*.js` 经 `node tools/build-client.mjs` 拼接；**不要手改生成物**：
 
-- **不要引入 JSX** —— 用 `React.createElement`
-- **不要引入 tsdown / tsc / 打包器** —— 没有 build 脚本，DSH 直接读磁盘上的文件
-- 加载期能 `require` 的是**基线 seed**，实测 **9 个**（2026-09-23 核）：`react`、`react/jsx-runtime`、
+- **不引入 bundler / JSX**：用 `React.createElement`；分片共享同一 factory 作用域；改分片后跑 `npm run build:client`，提交前 `npm run build:client:check`
+- 加载期能 `require` 的是**基线 seed**，实测 **9 个**：`react`、`react/jsx-runtime`、
   `react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、
   `@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、
   `@deepseek-ai/dsh-client-ui-dockkit`。⚠️ **要更多就走 `dsh.client.external?: string[]`**
-  （`dsh-package-manifest/lib/types/types.d.ts:70`，可含 `<pkg>/client` 这类子路径）
 - **静态资源也要内联**：图标 `path` 直接写在代码里（`KNIT_ICON_PATH`），加载期读不到文件。
   源文件在 `knit/assets/` —— **改图标必须两处一起改**，`test/icon.test.mjs` 会核对两者逐字一致
 - ⚠️ **整个 CSS 在一个模板串里（`const CSS = \`…\`），注释里不能出现反引号** —— 一个反引号就会
@@ -295,9 +293,9 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
 
 ---
 
-### 7.2 三档类型 / 媒体网格 / 键盘
+### 7.2 四档类型 / 媒体网格 / 键盘
 
-- **「文档 / 代码 / 媒体」三档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签** —— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
+- **「文档 / 代码 / 媒体 / 变更」四档切换**（偏好记 localStorage，默认文档；v0.19 加「代码」档）。类型选中态是**下划线式页签** —— **与列表行选中态（灰底、无描边）故意不一样**，别去「统一」。
   文档档选中**不要加品牌色/绿色描边**（用户裁决 2026-09-29；原话见 L3）。
 - **媒体网格**：方形缩略图，**格子基准固定 104px、与条目数无关**；列数由 CSS
   `repeat(auto-fill,minmax(104px,1fr))` 连续数出来（实测 320→2 / 632→5 / 900→7 / 1200→10 列）。
@@ -310,7 +308,7 @@ Knit 被 `link:` 挂进 profile，真实路径在 profile 的 `node_modules` **�
   视频取首帧当海报 + 播放三角 + 时长角标。
 - **键盘**：`↑↓` 移动即预览 / `Enter` 切换 / `Esc` 收起；媒体档 `←→` 按屏幕位置跨行、`Home`/`End` 到首尾。
   ⚠️ **文档档永远单列，`←→` 没有空间含义** —— 一律传 `1`、不拦。导航算术在纯函数 `nextIndexFor` 里（真实列数要 `ResizeObserver` 量）。
-- **类型档只有三个**：`文档 / 代码 / 媒体`（v0.23.1 起）——**「全部」档连同它的混合浏览视图已从 UI 删除**（老偏好 `all` 回落「文档」）；**内部跨类型检索 / `knit_docs` / 统一 Context Pack 保留**（宿主 `kind=all` 一行没改，e2e 仍在）。
+- **类型档四个**：`文档 / 代码 / 媒体 / 变更`（v0.26.x 起）——**「全部」档连同它的混合浏览视图已从 UI 删除**（老偏好 `all` 回落「文档」）；**内部跨类型检索 / `knit_docs` / 统一 Context Pack 保留**（宿主 `kind=all` 一行没改，e2e 仍在）。
 
 ---
 
@@ -458,13 +456,13 @@ knit/                            ← 插件本体（**路径不能动**，见文
 ├── assets/                      图标源文件（path 已内联进 client.js）
 ├── src/host/                    index.js + relevance.js + links.js + passage.js（v0.20 片段层）+ relations.js + control.js
 │                                + index-store.js（v0.22 索引）+ semantic.js（v0.23 混合检索）+ context.js + tool.js + feedback.js + classification.js（v0.19 分类层） + git.js + changes.js（v0.24 变更关联） + attachments.js
-├── src/client/client.js         浏览器半边（无构建）
+├── src/client/client.js         生成物（tools/client-src 分片拼装）
 ├── tools/                       **不进 npm 包**的开发工具：real-machine-check / scale-benchmark /
 │                                preview-ranking（§8）/ market-recheck / context-feedback-eval（§6.11）/
 │                                deep-benchmark / **agents-budget（指令文件预算闸门）** /
 │                                **clean-room-test（打包后解包自测闸门）** 等
 ├── SECURITY.md                  ← **安全对照表**（每条 ✅ 指向一个真实检查）
-└── test/                        914 项，分工见 §9.3
+└── test/                        927 项，分工见 §9.3
 ```
 
 > ⚠️ **`knit/` 的路径不能改。** 它被 `link:` 到 DSH profile 的**绝对路径**：

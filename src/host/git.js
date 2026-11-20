@@ -62,9 +62,27 @@ export const MAX_REPORTED_FILES = 30
  */
 export const GIT_GLOBAL_ARGS = ['--no-optional-locks', '--no-pager', '-c', 'core.fsmonitor=false']
 
-/** **唯一**允许的两个 git 子命令。改这个数组 = 改安全边界。 */
+/** **唯一**允许的三个 git 子命令。改这个数组 = 改安全边界。 */
 export const GIT_STATUS_ARGS = ['status', '--porcelain=v1', '-z', '--untracked-files=all']
 export const GIT_PREFIX_ARGS = ['rev-parse', '--show-prefix']
+/**
+ * v0.26.x「变更」档：**只读 diff 的行数统计，不读 diff 正文**。
+ *
+ * `--numstat` 只输出 `added\tdeleted\tpath`，正文一个字节都不吐；`--no-renames`
+ * 让「重命名」退化成一删一增（计数简单、可确定），状态仍由 `git status` 给出。
+ * ⚠️ 仍然不带任何写动词；仍然是固定 argv + 不走 shell。
+ */
+export const GIT_NUMSTAT_ARGS = ['diff', '--numstat', '-z', '--no-renames', 'HEAD']
+/**
+ * v0.26.x「变更」档的逐行 diff：**只读**、固定 argv、不调用外部 diff / textconv。
+ * `--` 之后才是客户端给的文件路径，且由上层先 resolve 回工作区根。
+ */
+export const GIT_DIFF_ARGS = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=3', 'HEAD', '--']
+/** diff 正文上限（字节 / 行）；超过就截断并如实标记。 */
+export const MAX_DIFF_BYTES = 512 * 1024
+export const MAX_DIFF_LINES = 1200
+/** 行数统计的 stdout 上限（比 status 小一个量级；它只有数字和路径）。 */
+export const MAX_NUMSTAT_BYTES = 256 * 1024
 
 /**
  * 允许从父进程**继承**的环境变量（白名单）。
@@ -222,6 +240,97 @@ export function kindsOf(x, y) {
 }
 
 /**
+ * 一次 `git diff --numstat -z --no-renames HEAD` 的输出 → 每文件行数。**纯函数**。
+ *
+ * 格式（`-z`，`--no-renames`）：`ADDED\tDELETED\tPATH\0`；二进制文件的两个数是 `-`。
+ * 路径以仓库根为基准，和 status 一样要减掉工作区前缀；工作区外的丢弃。
+ *
+ * @param {string} raw - stdout 原文
+ * @param {{prefix?: string}} [options] - 工作区相对仓库根的前缀
+ * @returns {Map<string,{added:number|null,deleted:number|null,binary:boolean}>} rel → 计数
+ */
+export function parseNumstatZ(raw, options = {}) {
+  const prefix = typeof options.prefix === 'string' ? options.prefix : ''
+  const text = typeof raw === 'string' ? raw : ''
+  const out = new Map()
+  for (const entry of text.split('\0')) {
+    if (!entry) continue
+    const first = entry.indexOf('\t')
+    if (first < 0) continue
+    const second = entry.indexOf('\t', first + 1)
+    if (second < 0) continue
+    const path = trimPrefix(entry.slice(second + 1), prefix)
+    if (!path) continue
+    const addedRaw = entry.slice(0, first)
+    const deletedRaw = entry.slice(first + 1, second)
+    const binary = addedRaw === '-' || deletedRaw === '-'
+    out.set(path, {
+      added: binary ? null : Number(addedRaw),
+      deleted: binary ? null : Number(deletedRaw),
+      binary,
+    })
+  }
+  return out
+}
+
+/**
+ * 把 `git diff --unified=3` 的原文解析成可渲染的行。**纯函数**。
+ *
+ * 只保留 hunk 内真正的内容行（上下文 / 新增 / 删除），并把新旧行号算好；
+ * `diff --git` / `index` / `---` / `+++` 这些元信息不返回（前端只画内容）。
+ * 二进制文件由调用方看 stdout 里的 `Binary files` 判定。
+ *
+ * @param {string} raw - diff 原文
+ * @param {{maxLines?: number}} [options] - 最多保留多少内容行
+ * @returns {{lines: Array<{type:'context'|'add'|'del', oldNo:number|null, newNo:number|null, text:string}>,
+ *   added:number, removed:number, truncated:boolean, hunks:number}} 解析结果
+ */
+export function parseUnifiedDiff(raw, options = {}) {
+  const text = typeof raw === 'string' ? raw : ''
+  const maxLines = Number.isInteger(options.maxLines) && options.maxLines > 0 ? options.maxLines : MAX_DIFF_LINES
+  const lines = []
+  let oldNo = 0
+  let newNo = 0
+  let added = 0
+  let removed = 0
+  let hunks = 0
+  let truncated = false
+  for (const rawLine of text.split('\n')) {
+    if (rawLine.startsWith('@@')) {
+      const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(rawLine)
+      if (!match) continue
+      oldNo = Number(match[1]) - 1
+      newNo = Number(match[2]) - 1
+      hunks += 1
+      lines.push({ type: 'hunk', oldNo: null, newNo: null, text: rawLine })
+      continue
+    }
+    if (rawLine.startsWith('diff --git') || rawLine.startsWith('index ')
+      || rawLine.startsWith('--- ') || rawLine.startsWith('+++ ')
+      || rawLine.startsWith('new file mode') || rawLine.startsWith('deleted file mode')
+      || rawLine.startsWith('old mode') || rawLine.startsWith('new mode')
+      || rawLine.startsWith('similarity index') || rawLine.startsWith('rename from')
+      || rawLine.startsWith('rename to') || rawLine.startsWith('Binary files')) continue
+    if (rawLine.startsWith('\\ No newline')) continue
+    if (!rawLine && oldNo === 0 && newNo === 0) continue
+    let type = 'context'
+    let content = rawLine
+    if (rawLine.startsWith('+')) { type = 'add'; content = rawLine.slice(1); added += 1; newNo += 1 }
+    else if (rawLine.startsWith('-')) { type = 'del'; content = rawLine.slice(1); removed += 1; oldNo += 1 }
+    else if (rawLine.startsWith(' ')) { content = rawLine.slice(1); oldNo += 1; newNo += 1 }
+    else continue
+    if (lines.length >= maxLines) { truncated = true; break }
+    lines.push({
+      type,
+      oldNo: type === 'add' ? null : oldNo,
+      newNo: type === 'del' ? null : newNo,
+      text: content,
+    })
+  }
+  return { lines, added, removed, truncated, hunks }
+}
+
+/**
  * 默认的 `exec`：`spawn('git', args)` + 两个上限。**不走 shell**。
  *
  * @param {string[]} args - argv（第一个元素是子命令）
@@ -311,6 +420,10 @@ export function createGitReader(options = {}) {
   const resultCache = new Map()
   /** root → 进行中的 Promise（并发的两轮轮询共用同一次 git 调用）。 */
   const inflight = new Map()
+  /** root → {at, result} —— 只给「变更」档的 status+numstat 用，不影响 `read()` 的语义。 */
+  const detailCache = new Map()
+  /** root → 进行中的 detail 读取。 */
+  const detailInflight = new Map()
 
   const prefixOf = async (root) => {
     const hit = prefixCache.get(root)
@@ -356,10 +469,78 @@ export function createGitReader(options = {}) {
     return task
   }
 
+  /**
+   * v0.26.x「变更」档：状态 + 行数统计（只读、只跑 status + numstat，不读 diff 正文）。
+   *
+   * 与 `read()` 分开的原因：`/api/changes`（关联检索）只需要 status，不该因为
+   * 「变更」档的上线每 8 秒多 spawn 一条 git。`readDetailed()` 只在那个档位被调用。
+   *
+   * @param {string} root - 工作区根
+   * @returns {Promise<object>} 与 `read()` 同形；文件条目额外有 `added/deleted/binary/untracked`。
+   *   读不到行数统计时 `statsAvailable=false`，状态列表**仍然可用**（不把整个功能拖垮）。
+   */
+  const readDetailed = async (root) => {
+    const key = String(root || '')
+    const cached = detailCache.get(key)
+    if (cached && now() - cached.at < ttlMs) return cached.result
+    if (detailInflight.has(key)) return detailInflight.get(key)
+    const task = (async () => {
+      const changeSet = await read(key)
+      if (changeSet.available !== true) return { ...changeSet, statsAvailable: false }
+      const prefixHit = prefixCache.get(key)
+      const prefix = prefixHit ? prefixHit.prefix : ''
+      if (prefix === null) return { ...changeSet, statsAvailable: false }
+      const res = await exec(GIT_NUMSTAT_ARGS, { cwd: key, timeoutMs: GIT_TIMEOUT_MS, maxBytes: MAX_NUMSTAT_BYTES })
+      const reason = reasonOf(res)
+      if (reason) return { ...changeSet, statsAvailable: false }
+      const stats = parseNumstatZ(res.stdout, { prefix })
+      const files = changeSet.files.map((file) => {
+        const stat = stats.get(file.rel)
+        const untracked = Array.isArray(file.kinds) && file.kinds.includes('untracked')
+        return {
+          ...file,
+          untracked,
+          ...(stat ? { added: stat.added, deleted: stat.deleted, binary: stat.binary }
+            : (untracked ? { added: null, deleted: null, binary: false } : { added: null, deleted: null, binary: false })),
+        }
+      })
+      return { ...changeSet, files, statsAvailable: true }
+    })().then((result) => {
+      detailCache.set(key, { at: now(), result })
+      detailInflight.delete(key)
+      return result
+    }).catch(() => {
+      detailInflight.delete(key)
+      return { available: false, reason: 'failed-fatal', files: [], filesTotal: 0, truncated: false, statsAvailable: false }
+    })
+    detailInflight.set(key, task)
+    return task
+  }
+
+  /**
+   * 一次只读的逐行 diff（只给「变更」档点开看；不缓存，点一次读一次）。
+   * @param {string} root - 工作区根
+   * @param {string} rel - 工作区相对路径（上层已 resolve 校验）
+   * @returns {Promise<{available:boolean, reason:string|null, stdout:string, killed:string|null}>}
+   */
+  const readDiff = async (root, rel) => {
+    const res = await exec([...GIT_DIFF_ARGS, String(rel || '')], {
+      cwd: String(root || ''), timeoutMs: GIT_TIMEOUT_MS, maxBytes: MAX_DIFF_BYTES,
+    })
+    const reason = reasonOf(res)
+    if (reason) return { available: false, reason, stdout: '', killed: res ? res.killed : null }
+    return { available: true, reason: null, stdout: res.stdout, killed: res.killed }
+  }
+
   return {
     read,
-    /** 仅供测试 / 显式刷新：清掉两种缓存。 */
-    reset() { prefixCache.clear(); resultCache.clear(); inflight.clear() },
+    readDetailed,
+    readDiff,
+    /** 仅供测试 / 显式刷新：清掉四种缓存。 */
+    reset() {
+      prefixCache.clear(); resultCache.clear(); inflight.clear()
+      detailCache.clear(); detailInflight.clear()
+    },
   }
 }
 

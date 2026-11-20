@@ -315,6 +315,10 @@ test('纯：commentLines 严格照 §四 的文本格式（1 位小数、不截�
   // 工作区图同时有 name 和 rel 时**优先 rel**（比文件名唯一，agent 能直接定位）
   assert.equal(commentLines(list.slice(0, 1), { name: 'G3.png', rel: 'sub/G3.png' })[0], '图像 1：sub/G3.png')
 
+  // 编号跟着输入框附件顺序走：第二张附件就是「图像 2」
+  assert.equal(commentLines(list.slice(0, 1), { rel: 'b.png', index: 2 })[0], '图像 2：b.png')
+  assert.equal(commentLines(list.slice(0, 1), { rel: 'c.png', index: 0 })[0], '图像 1：c.png', '非法序号回落 1')
+
   // 没有 sha（工作区图）⇒ 不带那对括号，但身份（rel）必须在
   assert.deepEqual(commentLines(list.slice(0, 1), { rel: 'sub/G3.png' }), [
     '图像 1：sub/G3.png',
@@ -353,6 +357,27 @@ test('纯：commentsFor / withComments 按身份存、删空不留垃圾键、�
   const cleared = withComments(one, 'a.png', [])
   assert.equal(Object.prototype.hasOwnProperty.call(cleared, 'a.png'), false, '删到空要删键')
   assert.deepEqual(commentsFor(null, 'a.png'), [])
+})
+
+test('纯：composerState 数出输入框里已有几张附件、有没有正文', () => {
+  const { composerState } = testApi
+  const card = {
+    querySelectorAll: () => [
+      { src: 'blob:http://x/1' },
+      { src: 'https://x/y', parentElement: { className: 'abc_thumbnail' } },
+      { src: 'https://x/icon', parentElement: { className: 'icon' } },
+    ],
+  }
+  const input = {
+    textContent: '已有正文',
+    closest: (selector) => (selector === '[data-composer-card]' ? card : null),
+  }
+  const doc = { querySelector: (selector) => (selector === '[data-composer-input]' ? input : null) }
+  assert.deepEqual(composerState(doc), { count: 2, hasText: true })
+  assert.deepEqual(composerState({ querySelector: () => null }), { count: 0, hasText: false })
+  assert.deepEqual(composerState(null), { count: 0, hasText: false })
+  input.textContent = '   '
+  assert.deepEqual(composerState(doc), { count: 2, hasText: false }, '纯空白不算正文')
 })
 
 /* ── ① 纯函数：投递通道 ───────────────────────────────── */
@@ -426,6 +451,25 @@ test('投递：评论要**把原图一起**作为附件 paste 进输入框（不
   assert.equal(events[0].clipboardData.items[0].getAsFile(), made[0], 'File 放进剪贴板 items')
   assert.equal(events[0].clipboardData.getData('text/plain'), text)
   assert.equal(input.textContent, text)
+})
+
+test('投递：输入框已有正文时，新评论以**独立段落**投递（前面空两行）', async () => {
+  const { deliverCommentText } = testApi
+  const events = []
+  const input = {
+    textContent: '上一段',
+    focus() {},
+    dispatchEvent(event) {
+      events.push(event)
+      this.textContent = `${this.textContent}${event.clipboardData.getData('text/plain')}`
+      return false
+    },
+  }
+  const doc = { querySelector: () => input, dispatchEvent: () => true }
+  const result = await deliverCommentText('图像 2：b.png', { document: doc, window: {} })
+  assert.deepEqual(result, { ok: true, via: 'paste', image: false })
+  assert.equal(events[0].clipboardData.getData('text/plain'), '\n\n图像 2：b.png', '前面空两行 = 新段落')
+  assert.equal(input.textContent, '上一段\n\n图像 2：b.png')
 })
 
 test('投递：图片读不到时仍投文本，并如实报告 image:false（不假装附件成功）', async () => {
@@ -932,10 +976,21 @@ test('守卫：面板画布与整屏查看器共用同一份 DOM（docked 只换
 test('守卫：发送必须带原图附件（只发文字会被 agent 当成「不知道是哪张图」）', () => {
   assert.match(SOURCE, /attachment: \{\s*src: srcFor\(lightboxDoc\)/,
     'sendComments 必须把图片地址交给投递层')
-  assert.match(SOURCE, /buildPasteEvent\(payload, win, file\)/,
+  assert.match(SOURCE, /buildPasteEvent\(body, win, file\)/,
     'paste 事件必须同时带文本与 File')
   assert.match(SOURCE, /async function imageFileFrom\(/, '图片要读成 File')
   assert.match(SOURCE, /credentials: 'same-origin'/, '只读同源图片，不碰外网')
+})
+
+test('守卫：多张图的编号跟附件顺序一致，且每次投递是独立段落', () => {
+  assert.match(SOURCE, /composerState\(typeof document === 'undefined' \? null : document\)/,
+    '发送前必须读输入框的附件数')
+  assert.match(SOURCE, /index: composer\.count \+ 1/,
+    '新图编号 = 已有附件数 + 1（附件一 = 图像一）')
+  assert.match(SOURCE, /图像 \$\{index\}：/,
+    '头行的编号是变量，不是写死 1')
+  assert.match(SOURCE, /existing \? `\\n\\n\$\{payload\}` : payload/,
+    '已有正文时前面空两行，形成独立段落')
 })
 
 test('守卫：评论 P0 不落盘 —— 不新增 localStorage 键，也不碰 dsh-knit:pack', () => {

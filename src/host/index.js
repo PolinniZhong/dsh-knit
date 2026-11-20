@@ -50,7 +50,7 @@ import {
 // v0.25：Git 变更关联检索。**只读、有界、默认关闭** —— `git.js` 只跑一条
 // `git status --porcelain=v1 -z`（argv 是数组，绝不走 shell；写动词一个都没有），
 // `changes.js` 把变更文件当种子去**已有的**关系事实表里取边，不发明关系。
-import { createGitReader, MAX_REPORTED_FILES } from './git.js'
+import { createGitReader, MAX_REPORTED_FILES, parseUnifiedDiff, MAX_DIFF_LINES } from './git.js'
 import { splitSeeds, ghostCandidates, projectChangeRelated, MAX_CHANGE_RELATED } from './changes.js'
 // v0.14：上下文装配。同样由这里注入依赖（`list` / `read`），保持纯函数可单测。
 // ⚠️ 这里**只 import `buildContext`**：Context Pack 的文本渲染只在 `tool.js` 的
@@ -2072,6 +2072,227 @@ export async function buildContextFor(root, options = {}) {
 }
 
 /**
+ * v0.26.x · **单文件逐行 diff**（「变更」档点开一行时读一次）。
+ *
+ * 只读：`git diff --no-color --no-ext-diff --no-textconv --unified=3 HEAD -- <rel>`，
+ * 固定 argv、不走 shell、不带写动词；未跟踪文件没有 HEAD 基线，由宿主读文件生成全新增行。
+ * 路径先 `resolve` 回工作区根；不合法 / 越界一律 404。
+ *
+ * @param {string} root - 工作区根
+ * @param {string} rel - 工作区相对路径
+ * @param {{gitReader?: object}} [input]
+ * @returns {Promise<object>} `{ok, rel, kind, added, removed, binary, truncated, lines}`
+ */
+export async function diffPayload(root, rel, input = {}) {
+  const clean = String(rel || '')
+  if (!clean) return { ok: false, code: 'knit/missing-rel' }
+  const rootAbs = resolve(root)
+  const abs = resolve(root, clean)
+  if (abs !== rootAbs && !abs.startsWith(`${rootAbs}${sep}`)) {
+    return { ok: false, code: 'knit/not-found' }
+  }
+  const reader = input.gitReader && typeof input.gitReader.readDiff === 'function'
+    ? input.gitReader : gitReader
+  const repos = await repositoryRoots(root)
+  let repo = null
+  let subRel = clean
+  for (const candidate of repos) {
+    if (!candidate.rel) { repo = candidate; subRel = clean; break }
+    if (clean.startsWith(`${candidate.rel}/`)) {
+      repo = candidate
+      subRel = clean.slice(candidate.rel.length + 1)
+      break
+    }
+  }
+  // 没有仓库（或测试替身）时仍按根目录尝试一次：未跟踪文件可以纯读文件生成 diff。
+  if (!repo) repo = { root: rootAbs, rel: '' }
+  const kind = classifyFile(clean).kind
+  const status = typeof reader.readDetailed === 'function'
+    ? await reader.readDetailed(repo.root).catch(() => null) : null
+  const file = status && Array.isArray(status.files)
+    ? status.files.find((item) => item && item.rel === subRel) : null
+  const untracked = Boolean(file && Array.isArray(file.kinds) && file.kinds.includes('untracked'))
+  if (untracked) {
+    let buf = null
+    try { buf = await readFile(abs) } catch { /* 读不到按失败 */ }
+    if (!buf) return { ok: false, code: 'knit/diff-failed' }
+    if (buf.includes(0)) return { ok: true, rel: clean, kind, added: 0, removed: 0, binary: true, truncated: false, lines: [] }
+    const parts = buf.toString('utf8').split('\n')
+    if (parts.length && parts[parts.length - 1] === '') parts.pop()
+    const truncated = parts.length > MAX_DIFF_LINES
+    const shown = truncated ? parts.slice(0, MAX_DIFF_LINES) : parts
+    return {
+      ok: true, rel: clean, kind, added: shown.length, removed: 0, binary: false, truncated,
+      lines: shown.map((text, i) => ({ type: 'add', oldNo: null, newNo: i + 1, text })),
+    }
+  }
+  if (typeof reader.readDiff !== 'function') return { ok: false, code: 'knit/diff-failed' }
+  const diff = await reader.readDiff(repo.root, subRel)
+  if (!diff.available) return { ok: false, code: 'knit/diff-failed' }
+  const binary = /^Binary files /m.test(diff.stdout)
+  if (binary) {
+    return { ok: true, rel: clean, kind, added: 0, removed: 0, binary: true, truncated: false, lines: [] }
+  }
+  const parsed = parseUnifiedDiff(diff.stdout, { maxLines: MAX_DIFF_LINES })
+  return {
+    ok: true, rel: clean, kind,
+    added: parsed.added, removed: parsed.removed,
+    binary: false, truncated: parsed.truncated,
+    lines: parsed.lines,
+  }
+}
+
+/**
+ * 找这个工作区里可用的 Git 仓库：根目录本身是仓库就用它；否则只看**一层子目录**
+ * （最多 8 个）里带 `.git` 的那些。Knit 的 workspace 经常是项目根（如 `08_Knit/`），
+ * 而仓库在其子目录（`08_Knit/knit/`）—— 这时变更档要能列出子仓库的改动，
+ * 而不是一句「不是 Git 工作区」。
+ *
+ * @param {string} root - 工作区根
+ * @returns {Promise<Array<{root:string, rel:string}>>} `rel=''` 表示根仓库；否则是子目录名
+ */
+async function repositoryRoots(root) {
+  const abs = resolve(root)
+  const hasGit = async (dir) => {
+    try {
+      const info = await stat(join(dir, '.git'))
+      return info.isDirectory() || info.isFile()
+    } catch { return false }
+  }
+  if (await hasGit(abs)) return [{ root: abs, rel: '' }]
+  let entries = []
+  try { entries = await readdir(abs, { withFileTypes: true }) } catch { return [] }
+  const out = []
+  for (const entry of entries.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue
+    const child = join(abs, entry.name)
+    if (await hasGit(child)) out.push({ root: child, rel: entry.name })
+    if (out.length >= 8) break
+  }
+  return out
+}
+
+/**
+ * v0.26.x · **未提交变更的文件清单**（「变更」档）。
+ *
+ * 根目录是仓库就照旧；不是的话会在**一层子目录**里找仓库（见 `repositoryRoots`），
+ * 把子仓库的 rel 前缀成工作区相对路径（如 `knit/src/client/client.js`）。
+ * 只读：`git status` + `git diff --numstat`，不读 diff 正文。
+ *
+ * @param {string} root - 工作区根
+ * @param {{gitReader?: object}} [input]
+ * @returns {Promise<object>} `{ ok, mode:'status', git: { available, reason, filesTotal, truncated, statsAvailable, files } }`
+ */
+export async function statusPayload(root, input = {}) {
+  const reader = input.gitReader && typeof input.gitReader.readDetailed === 'function'
+    ? input.gitReader
+    : gitReader
+  const rootAbs = resolve(root)
+  const repos = await repositoryRoots(root)
+  // 没有仓库也走一次 reader：让「不是 Git 工作区」这个事实从 git.js 原样出来，而不是这里编。
+  if (repos.length === 0) repos.push({ root: rootAbs, rel: '' })
+
+  const MAX_STATUS_FILES = 100
+  const rows = []
+  let available = false
+  let reason = null
+  let filesTotal = 0
+  let truncated = false
+  let statsAvailable = true
+  for (const repo of repos) {
+    const changeSet = typeof reader.readDetailed === 'function'
+      ? await reader.readDetailed(repo.root)
+      : await reader.read(repo.root)
+    if (!changeSet || changeSet.available !== true) {
+      if (!reason && changeSet && changeSet.reason) reason = changeSet.reason
+      continue
+    }
+    available = true
+    filesTotal += Number(changeSet.filesTotal) || 0
+    truncated = truncated || changeSet.truncated === true
+    statsAvailable = statsAvailable && changeSet.statsAvailable === true
+    const rawFiles = Array.isArray(changeSet.files) ? changeSet.files : []
+    for (const file of rawFiles) {
+      if (!file || file.isDir === true) continue
+      const subRel = String(file.rel || '')
+      if (!subRel) continue
+      const rel = repo.rel ? `${repo.rel}/${subRel}` : subRel
+      const abs = resolve(root, rel)
+      // 越界 / 目录外：git 自己的输出理论上不会给，但这条边界和 /api/raw 一样不能省。
+      if (abs !== rootAbs && !abs.startsWith(`${rootAbs}${sep}`)) continue
+      const kinds = Array.isArray(file.kinds) ? file.kinds.slice() : []
+      const untracked = kinds.includes('untracked')
+      const deleted = kinds.includes('deleted')
+      const classified = classifyFile(rel)
+      const kind = classified.kind
+      const previewable = !deleted && classified.previewable === true
+      let mtimeMs = 0
+      let bytes = 0
+      if (!deleted) {
+        const info = await stat(abs).catch(() => null)
+        if (info && info.isFile()) { mtimeMs = info.mtimeMs || 0; bytes = info.size || 0 }
+      }
+      let added = Number.isFinite(file.added) ? file.added : null
+      let removed = Number.isFinite(file.deleted) ? file.deleted : null
+      let binary = file.binary === true
+      // 未跟踪文件没有 HEAD 基线（numstat 不列），用「读一遍数行数」补上；二进制/超大不数。
+      if (untracked && !deleted) {
+        try {
+          const buf = await readFile(abs)
+          if (buf.length <= 512 * 1024 && !buf.includes(0)) {
+            const text = buf.toString('utf8')
+            added = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+            removed = 0
+            binary = false
+          } else {
+            binary = true
+          }
+        } catch { /* 读不到就只给状态，不给行数 */ }
+      }
+      rows.push({
+        rel,
+        repo: repo.rel,
+        ...(file.origRel ? { origRel: repo.rel ? `${repo.rel}/${file.origRel}` : file.origRel } : {}),
+        kinds,
+        kind,
+        previewable,
+        untracked,
+        deleted,
+        added,
+        removed,
+        binary,
+        mtimeMs,
+        bytes,
+      })
+    }
+  }
+  if (!available) {
+    return {
+      ok: true,
+      mode: 'status',
+      git: { available: false, reason: reason || 'not-a-repo', filesTotal: 0, truncated: false, statsAvailable: false, files: [] },
+    }
+  }
+  rows.sort((a, b) => {
+    if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs
+    return a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0
+  })
+  const limited = rows.slice(0, MAX_STATUS_FILES)
+  return {
+    ok: true,
+    mode: 'status',
+    git: {
+      available: true,
+      reason: null,
+      filesTotal,
+      truncated: truncated || rows.length > MAX_STATUS_FILES,
+      statsAvailable,
+      files: limited,
+    },
+  }
+}
+
+/**
  * v0.25 · **Git 变更关联**：独立接口 `/knit/api/changes` 的载荷构造函数。
  *
  * 它**不碰** Context Pack：不改三层、不改固定区、不改编号、不改排序 —— 那份包由
@@ -3138,6 +3359,19 @@ export function apply(ctx) {
           return
         }
 
+        if (url.pathname === `${ROUTE_PREFIX}/api/diff`) {
+          const rel = url.searchParams.get('rel') || ''
+          const payload = await diffPayload(root, rel)
+          sendJson(res, payload.ok ? 200 : 404, payload)
+          return
+        }
+
+        if (url.pathname === `${ROUTE_PREFIX}/api/status`) {
+          /* v0.26.x「变更」档：未提交文件清单 + 行数统计。只读；不碰 Context Pack。 */
+          sendJson(res, 200, await statusPayload(root))
+          return
+        }
+
         if (url.pathname === `${ROUTE_PREFIX}/api/changes`) {
           /* v0.25 · **Git 变更关联**：独立接口。
              ⚠️ 与 `/api/recent` 分开不是洁癖，是契约纪律：
@@ -3307,7 +3541,7 @@ export function apply(ctx) {
 
     webCtx.effect(() => {
       const unregister = webCtx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
-      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/changes, ${ROUTE_PREFIX}/api/attachments, ${ROUTE_PREFIX}/api/attachment, ${ROUTE_PREFIX}/api/control (POST)`)
+      console.log(`[${name}] route ready: ${ROUTE_PREFIX}/api/recent, ${ROUTE_PREFIX}/api/doc, ${ROUTE_PREFIX}/api/raw, ${ROUTE_PREFIX}/api/links, ${ROUTE_PREFIX}/api/context, ${ROUTE_PREFIX}/api/status, ${ROUTE_PREFIX}/api/diff, ${ROUTE_PREFIX}/api/changes, ${ROUTE_PREFIX}/api/attachments, ${ROUTE_PREFIX}/api/attachment, ${ROUTE_PREFIX}/api/control (POST)`)
       return () => unregister()
     }, 'dsh-knit: host route')
   })

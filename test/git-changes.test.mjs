@@ -25,14 +25,14 @@ import { join } from 'node:path'
 
 import {
   parseStatusZ, kindsOf, createGitReader, spawnGit, gitEnv,
-  GIT_STATUS_ARGS, GIT_PREFIX_ARGS, GIT_ENV_ALLOW, MUTATING_VERBS,
-  MAX_CHANGED_FILES, MAX_REPORTED_FILES,
+  GIT_STATUS_ARGS, GIT_PREFIX_ARGS, GIT_NUMSTAT_ARGS, GIT_DIFF_ARGS, GIT_ENV_ALLOW, MUTATING_VERBS,
+  MAX_CHANGED_FILES, MAX_REPORTED_FILES, parseNumstatZ, parseUnifiedDiff,
 } from '../src/host/git.js'
 import {
   splitSeeds, ghostCandidates, projectChangeRelated, MAX_CHANGE_RELATED,
 } from '../src/host/changes.js'
 import { buildRelationFacts, resetRelationCache, testsOf } from '../src/host/relations.js'
-import { changesPayload, corpusForChanges, scanMemo, resetScanMemo, resetGitReaderCache } from '../src/host/index.js'
+import { changesPayload, statusPayload, diffPayload, corpusForChanges, scanMemo, resetScanMemo, resetGitReaderCache } from '../src/host/index.js'
 import { createIndex } from '../src/host/links.js'
 import { startKnitServer } from './http-harness.mjs'
 import { scan, buildContextFor, publicScanPayload } from '../src/host/index.js'
@@ -1235,4 +1235,198 @@ test('安全（证伪）：**不净化**环境时，上面那三个注入确实�
     rmSync(ws, { recursive: true, force: true })
     rmSync(decoy, { recursive: true, force: true })
   }
+})
+
+
+/* ── v0.26.x「变更」档：numstat 与 status 载荷 ───────────────── */
+
+test('git numstat: `--numstat -z --no-renames HEAD` 解析（含二进制、前缀、工作区外）', () => {
+  const raw = '2\t1\ta.md\0-\t-\tb.png\x000\t1\tsrc/c.ts\0'
+  const map = parseNumstatZ(raw, { prefix: '' })
+  assert.deepEqual(map.get('a.md'), { added: 2, deleted: 1, binary: false })
+  assert.deepEqual(map.get('b.png'), { added: null, deleted: null, binary: true })
+  assert.deepEqual(map.get('src/c.ts'), { added: 0, deleted: 1, binary: false })
+  const trimmed = parseNumstatZ(raw, { prefix: 'src/' })
+  assert.equal(trimmed.has('a.md'), false, '前缀外丢弃')
+  assert.equal(trimmed.has('c.ts'), true, '前缀减掉后是工作区相对路径')
+  assert.equal(trimmed.get('c.ts').deleted, 1)
+})
+
+test('git: readDetailed 只多跑一条 numstat，read() 仍只有 status', async () => {
+  const calls = []
+  const impl = async (args) => {
+    calls.push(args[0])
+    if (args[0] === 'rev-parse') return { code: 0, stdout: '', stderr: '' }
+    if (args[0] === 'status') return { code: 0, stdout: ' M a.md\0?? b.ts\0', stderr: '' }
+    if (args[0] === 'diff') return { code: 0, stdout: '2\t1\ta.md\0', stderr: '' }
+    return { code: 1, stdout: '', stderr: 'unexpected' }
+  }
+  const reader = createGitReader({ exec: impl, now: () => 0 })
+  const statusOnly = await reader.read('/w')
+  assert.deepEqual(calls, ['rev-parse', 'status'], 'read() 不跑 numstat')
+  assert.equal(statusOnly.files.length, 2)
+  const detailed = await reader.readDetailed('/w')
+  assert.deepEqual(calls.slice(0, 1), ['rev-parse'])
+  assert.ok(calls.includes('diff'))
+  const byRel = new Map(detailed.files.map((f) => [f.rel, f]))
+  assert.equal(byRel.get('a.md').added, 2)
+  assert.equal(byRel.get('a.md').deleted, 1)
+  assert.equal(byRel.get('b.ts').untracked, true)
+  assert.equal(byRel.get('b.ts').added, null, '未跟踪文件没有 HEAD 基线')
+  assert.equal(detailed.statsAvailable, true)
+})
+
+test('git 安全：numstat 也是只读 argv，三个子命令都没有写动词', () => {
+  assert.equal(GIT_NUMSTAT_ARGS[0], 'diff')
+  assert.ok(GIT_NUMSTAT_ARGS.includes('--numstat'))
+  assert.ok(GIT_NUMSTAT_ARGS.includes('HEAD'))
+  for (const verb of MUTATING_VERBS) {
+    assert.ok(!GIT_STATUS_ARGS.includes(verb))
+    assert.ok(!GIT_PREFIX_ARGS.includes(verb))
+    assert.ok(!GIT_NUMSTAT_ARGS.includes(verb), `numstat 的 argv 里出现了写动词 ${verb}`)
+  }
+})
+
+test('statusPayload: 变更文件 → 列表行（状态 / 行数 / kind / 越界路径）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'knit-status-'))
+  try {
+    writeFileSync(join(root, 'a.md'), 'one\ntwo\n')
+    mkdirSync(join(root, 'src')) // 目录不参与
+    writeFileSync(join(root, 'src', 'b.ts'), 'x\ny\nz\n')
+    const reader = {
+      readDetailed: async () => ({
+        available: true, reason: null, filesTotal: 2, truncated: false, statsAvailable: true,
+        files: [
+          { rel: 'a.md', kinds: ['modified'], added: 2, deleted: 1, binary: false },
+          { rel: 'src/b.ts', kinds: ['untracked'], added: null, deleted: null, binary: false, untracked: true },
+        ],
+      }),
+    }
+    const payload = await statusPayload(root, { gitReader: reader })
+    assert.equal(payload.ok, true)
+    assert.equal(payload.mode, 'status')
+    assert.equal(payload.git.available, true)
+    assert.equal(payload.git.statsAvailable, true)
+    const byRel = new Map(payload.git.files.map((f) => [f.rel, f]))
+    assert.equal(byRel.get('a.md').kind, 'md')
+    assert.equal(byRel.get('a.md').previewable, true)
+    assert.equal(byRel.get('a.md').added, 2)
+    assert.equal(byRel.get('a.md').removed, 1)
+    assert.equal(byRel.get('src/b.ts').kind, 'code')
+    assert.equal(byRel.get('src/b.ts').untracked, true)
+    assert.equal(byRel.get('src/b.ts').added, 3, '未跟踪文件按行数补 +N')
+    assert.equal(byRel.get('src/b.ts').removed, 0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('statusPayload: numstat 失败时只降级 statsAvailable，文件清单仍然可用', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'knit-status-'))
+  try {
+    writeFileSync(join(root, 'a.md'), 'one\n')
+    const reader = {
+      readDetailed: async () => ({
+        available: true, reason: null, filesTotal: 1, truncated: false, statsAvailable: false,
+        files: [{ rel: 'a.md', kinds: ['modified'] }],
+      }),
+    }
+    const payload = await statusPayload(root, { gitReader: reader })
+    assert.equal(payload.git.available, true)
+    assert.equal(payload.git.statsAvailable, false)
+    assert.equal(payload.git.files.length, 1)
+    assert.equal(payload.git.files[0].added, null)
+    assert.equal(payload.git.files[0].removed, null)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('diff: 解析 unified diff（上下文 / 新增 / 删除 / hunk 行号）', () => {
+  const raw = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    'index 111..222 100644',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,4 @@',
+    ' one',
+    '-two',
+    '+TWO',
+    '+three',
+    ' four',
+  ].join('\n')
+  const out = parseUnifiedDiff(raw)
+  assert.equal(out.hunks, 1)
+  assert.equal(out.added, 2)
+  assert.equal(out.removed, 1)
+  assert.deepEqual(out.lines.map((line) => line.type), ['hunk', 'context', 'del', 'add', 'add', 'context'])
+  assert.deepEqual(out.lines.slice(1).map((line) => [line.oldNo, line.newNo]), [[1, 1], [2, null], [null, 2], [null, 3], [3, 4]])
+  assert.equal(out.lines[2].text, 'two')
+  assert.equal(out.lines[3].text, 'TWO')
+})
+
+test('diff: 未跟踪文件由宿主读成全新增行；逐行 diff 失败只返回错误码', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'knit-diff-'))
+  try {
+    writeFileSync(join(root, 'new.md'), 'a\nb\n')
+    const reader = {
+      readDetailed: async () => ({
+        available: true, files: [{ rel: 'new.md', kinds: ['untracked'] }], filesTotal: 1,
+      }),
+      readDiff: async () => ({ available: false, reason: 'failed-fatal', stdout: '' }),
+    }
+    const payload = await diffPayload(root, 'new.md', { gitReader: reader })
+    assert.equal(payload.ok, true)
+    assert.equal(payload.added, 2)
+    assert.equal(payload.removed, 0)
+    assert.deepEqual(payload.lines.map((line) => line.type), ['add', 'add'])
+    assert.deepEqual(payload.lines.map((line) => line.newNo), [1, 2])
+    const bad = await diffPayload(root, '../outside.md', { gitReader: reader })
+    assert.equal(bad.ok, false)
+    assert.equal(bad.code, 'knit/not-found')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('diff 安全：diff argv 固定只读，带 --no-ext-diff / --no-textconv', () => {
+  assert.equal(GIT_DIFF_ARGS[0], 'diff')
+  assert.ok(GIT_DIFF_ARGS.includes('--no-ext-diff'))
+  assert.ok(GIT_DIFF_ARGS.includes('--no-textconv'))
+  assert.equal(GIT_DIFF_ARGS[GIT_DIFF_ARGS.length - 1], '--')
+  for (const verb of MUTATING_VERBS) assert.ok(!GIT_DIFF_ARGS.includes(verb))
+})
+
+
+test('变更：workspace 根不是仓库时，自动用一层子目录里的 Git 仓库（如 08_Knit/knit）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'knit-nested-'))
+  try {
+    mkdirSync(join(root, 'knit', '.git'), { recursive: true })
+    writeFileSync(join(root, 'knit', 'a.md'), 'one\ntwo\n')
+    const calls = { detail: [], diff: [] }
+    const reader = {
+      readDetailed: async (repo) => {
+        calls.detail.push(repo)
+        if (!repo.endsWith('/knit')) return { available: false, reason: 'not-a-repo', files: [], filesTotal: 0 }
+        return {
+          available: true, reason: null, filesTotal: 1, truncated: false, statsAvailable: true,
+          files: [{ rel: 'a.md', kinds: ['modified'], added: 2, deleted: 1, binary: false }],
+        }
+      },
+      readDiff: async (repo, rel) => {
+        calls.diff.push([repo, rel])
+        return { available: true, reason: null, stdout: '@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n' }
+      },
+    }
+    const status = await statusPayload(root, { gitReader: reader })
+    assert.equal(status.git.available, true)
+    assert.equal(status.git.filesTotal, 1)
+    assert.equal(status.git.files[0].rel, 'knit/a.md')
+    assert.equal(status.git.files[0].repo, 'knit')
+    assert.equal(status.git.files[0].kind, 'md')
+    assert.equal(status.git.files[0].previewable, true)
+    assert.ok(status.git.files[0].mtimeMs > 0)
+
+    const diff = await diffPayload(root, 'knit/a.md', { gitReader: reader })
+    assert.equal(diff.ok, true)
+    assert.deepEqual(calls.diff.at(-1), [join(root, 'knit'), 'a.md'], 'diff 在子仓库里跑，路径是仓库相对路径')
+    assert.equal(diff.added, 1)
+    assert.equal(diff.removed, 1)
+    assert.deepEqual(diff.lines.at(-1), { type: 'add', oldNo: null, newNo: 2, text: 'TWO' })
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

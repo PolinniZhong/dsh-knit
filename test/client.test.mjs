@@ -714,7 +714,7 @@ test('媒体：类型偏好默认 doc，合法值保留，老值 all 回落到 d
   assert.equal(readKindPref(), 'doc')
 })
 
-test('媒体：默认文档视图有**三个**类型按钮（文档/代码/媒体），但不出现媒体网格，计数仍按文档', async () => {
+test('媒体：默认文档视图有**四个**类型按钮（文档/代码/媒体/变更），但不出现媒体网格，计数仍按文档', async () => {
   installFetch(kindResponder({ doc: listPayload() }))
   const { KnitBody } = loadClientModule().exports.__test
   harness.reset()
@@ -724,10 +724,10 @@ test('媒体：默认文档视图有**三个**类型按钮（文档/代码/媒�
   nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
 
   const btns = byClass(nodes, 'knit-type-btn')
-  // v0.23.1（2026-10-12 用户裁决）：**三档**「文档 / 代码 / 媒体」——「全部」整体删除。
-  // 三档等距、下划线页签样式不变，**不留空位**（出现四个按钮或「全部」即红）。
-  assert.equal(btns.length, 3)
-  assert.deepEqual(btns.map(textOf), ['文档', '代码', '媒体'])
+  // v0.26.x：四档「文档 / 代码 / 媒体 / 变更」——「全部」仍然不许回来。
+  // 四档等距、下划线页签样式不变（出现「全部」即红）。
+  assert.equal(btns.length, 4)
+  assert.deepEqual(btns.map(textOf), ['文档', '代码', '媒体', '变更'])
   assert.ok(!btns.some((btn) => textOf(btn) === '全部'), '界面上不许再有「全部」这一档')
   assert.equal(btns.find((b) => textOf(b) === '文档').props['aria-selected'], true)
   assert.equal(byClass(nodes, 'knit-media-grid').length, 0)
@@ -737,6 +737,72 @@ test('媒体：默认文档视图有**三个**类型按钮（文档/代码/媒�
   assert.equal(byClass(nodes, 'knit-multicol').length, 0, '1 列不该有网格容器')
   assert.match(byClass(nodes, 'knit-count').map(textOf).join(''), /^2$/,
     'v0.21.x：计数只剩阿拉伯数字，量词只留在 title 里')
+})
+
+test('变更：第四档列出未提交的 Markdown/代码，带状态与 +N −N', async () => {
+  const statusPayload = {
+    ok: true,
+    mode: 'status',
+    git: {
+      available: true,
+      reason: null,
+      filesTotal: 3,
+      truncated: false,
+      statsAvailable: true,
+      files: [
+        { rel: 'src/a.ts', kind: 'code', kinds: ['modified'], added: 5, removed: 2, mtimeMs: Date.now() },
+        { rel: 'docs/b.md', kind: 'md', kinds: ['untracked'], added: 3, removed: 0, untracked: true, mtimeMs: Date.now() - 1000 },
+        { rel: 'img/c.png', kind: 'image', kinds: ['modified'], added: null, removed: null, mtimeMs: Date.now() - 2000 },
+      ],
+    },
+  }
+  const diffPayload = {
+    ok: true, rel: 'src/a.ts', kind: 'code', added: 2, removed: 1, binary: false, truncated: false,
+    lines: [
+      { type: 'context', oldNo: 1, newNo: 1, text: 'one' },
+      { type: 'del', oldNo: 2, newNo: null, text: 'two' },
+      { type: 'add', oldNo: null, newNo: 2, text: 'TWO' },
+      { type: 'add', oldNo: null, newNo: 3, text: 'three' },
+    ],
+  }
+  installFetch((url) => (url.includes('/api/status') ? statusPayload
+    : url.includes('/api/diff') ? diffPayload : listPayload()))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const changeTab = byClass(nodes, 'knit-type-btn').find((btn) => textOf(btn) === '变更')
+  assert.ok(changeTab, '第四档「变更」在')
+  changeTab.props.onClick()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  assert.equal(byClass(nodes, 'knit-type-btn').find((b) => textOf(b) === '变更').props['aria-selected'], true)
+  const rows = byClass(nodes, 'knit-doc')
+  assert.equal(rows.length, 2, '只列 Markdown / 代码；图片变更不计入可列行')
+  assert.deepEqual(byClass(nodes, 'knit-change-badge').map(textOf), ['修改', '新文件'])
+  const counts = byClass(nodes, 'knit-change-count').map(textOf)
+  assert.ok(counts.some((text) => text.includes('+5') && text.includes('−2')), '修改行带 +5 −2')
+  assert.ok(counts.some((text) => text.includes('+3')), '未跟踪文件按行数补 +3')
+  assert.equal(textOf(byExactClass(nodes, 'knit-count')[0]), '3', '计数是全部变更文件数（含图片）')
+  assert.ok(byClass(nodes, 'knit-seg-btn').every((btn) => btn.props.disabled === true),
+    '变更档固定按时间，排序按钮禁用')
+
+  // 点变更行 → 拉 diff → 同一个预览面板里画逐行
+  rows[0].props.onClick()
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  assert.equal(byExactClass(nodes, 'knit-diff').length, 1, '变更行打开逐行 diff')
+  const diffLines = byClass(nodes, 'knit-diff-line')
+    .filter((node) => String(node.props.className || '').split(' ').includes('knit-diff-line'))
+  assert.equal(diffLines.length, 4)
+  assert.equal(diffLines.filter((node) => String(node.props.className).split(' ').includes('add')).length, 2)
+  assert.equal(diffLines.filter((node) => String(node.props.className).split(' ').includes('del')).length, 1)
+  assert.ok(byClass(nodes, 'knit-diff-add').some((node) => textOf(node) === '+2'))
 })
 
 test('v0.21.x 顶行计数：可见的只有阿拉伯数字，量词只留在 title 里', async () => {
@@ -860,10 +926,10 @@ test('v0.23.1：「全部」档在**源码里整体删除**（KIND_ALL / allRows
   ]) {
     assert.ok(!source.includes(dead), `「全部」必须整体删除，源码里不该再有 ${dead}`)
   }
-  // 类型档只剩三个值 —— 一行写得清清楚楚（多一档就会红）
+  // 类型档就是这四档 —— 一行写得清清楚楚（多一档 / 少一档都会红）
   assert.ok(
-    source.includes("[[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media']]"),
-    '类型档就是三档',
+    source.includes("[[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_CHANGES, 'kind.changes']]"),
+    '类型档就是四档',
   )
 })
 
@@ -4793,8 +4859,8 @@ test('v0.21.x/v0.23.1 工具栏：排序 ｜ 竖线 ｜ 三档类型 ｜ [检索
 
   // ② 各条件都在，而且各用各的控件（不是把条件连排成一串按钮）
   assert.deepEqual(byClass(under, 'knit-seg-btn').map(textOf), ['相关', '最新'])
-  assert.deepEqual(byClass(under, 'knit-type-btn').map(textOf), ['文档', '代码', '媒体'],
-    'v0.23.1（2026-10-12）：「全部」整体删除 ⇒ 三档')
+  assert.deepEqual(byClass(under, 'knit-type-btn').map(textOf), ['文档', '代码', '媒体', '变更'],
+    'v0.26.x：「全部」仍然删除 ⇒ 文档 / 代码 / 媒体 / 变更四档')
   assert.equal(byClass(under, 'knit-retmode-btn').length + byClass(under, 'knit-pipe-method').length, 0,
     'v0.24：第二行只有排序 / 类型 / 搜索三样，检索方式不在这里')
   for (const node of under) {

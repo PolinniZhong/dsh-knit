@@ -198,7 +198,8 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
 | **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
-| **In-image comments**: click "Comment" on the hover preview → a **canvas inside the Knit panel** (never covers the conversation); click the image to drop a pin, write a line, send from the bottom bar. Sending attaches the **original image + `图像 1: …` coordinate text**; comments live in session memory only (lost on refresh, not persisted) | ✅ |
+| **Changes view**: a fourth tab (Docs / Code / Media / Changes) listing **uncommitted** Markdown and code files with modified / added / deleted / renamed status and `+N −N`; clicking opens a line-by-line diff in the existing preview. Read-only `git status + numstat + diff` (`--no-ext-diff --no-textconv`) | ✅ |
+| **In-image comments**: click "Comment" on the hover preview → a **canvas inside the Knit panel** (never covers the conversation); click the image to drop a pin, write a line, send from the bottom bar. Sending attaches the **original image + `图像 N: …` coordinate text** (N follows the composer attachment order, and each send starts a new block); comments live in session memory only (lost on refresh, not persisted) | ✅ |
 | Filter box over title / summary / path | ✅ |
 | **Click the workspace path** to open the project folder in your file manager | ✅ |
 | **Hover the entry button to peek**: a read-only floating list of the 5 most recent docs; click to open the right sidebar (doesn't push the layout; the popover is just header + list — no extra divider or hint line) | ✅ |
@@ -764,7 +765,7 @@ All of it is string arithmetic — **no embeddings, no model calls**.
 - **Makes no outbound network requests**: the client's `fetch` calls all point to
   the plugin's own same-origin routes
 - **No install-time scripts** (no `install` / `postinstall`)
-- **Zero dependencies** — nothing to build, no build-authorisation prompt
+- **Zero dependencies** — nothing to install or build at install time; the dev-only client shard concatenation uses Node built-ins only
 - The media route only allows an **image/video-extension allowlist** (images ≤ 12MB,
   video ≤ 256MB), serves video over HTTP Range, and responds with
   `nosniff` plus `default-src 'none'; sandbox`; the **text route serves documents, code and
@@ -828,16 +829,20 @@ feature request.
 git clone https://github.com/PolinniZhong/dsh-knit.git
 cd dsh-knit
 
-npm test          # 914 tests, zero dependencies, no npm install needed
+npm run build:client             # client source shards → src/client/client.js (no bundler)
+npm run build:client:check       # verify the generated file matches the shards
+npm test          # 927 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
 the client half (`src/client/`) only needs a hard browser refresh.
 
-**There is no build step**: the client half is a hand-written `window.__ModuleLoader__.load({...})`
-using `React.createElement` instead of JSX, so there's no tsbuild / tsc. Static assets are inlined
-too — changing the icon means editing both the `assets/` source and `KNIT_ICON_PATH` in
-`src/client/client.js`; `test/icon.test.mjs` asserts the two are byte-identical.
+**There is no bundler**: the client source lives in `tools/client-src/` and is concatenated into
+`src/client/client.js` by `node tools/build-client.mjs` (DSH still loads exactly one file). It uses
+`React.createElement` instead of JSX, so there's no tsbuild / tsc. Run `npm run build:client` after
+editing a shard, and `npm run build:client:check` before committing. Static assets are inlined too —
+changing the icon means editing both the `assets/` source and `KNIT_ICON_PATH` in the generated
+file; `test/icon.test.mjs` asserts the two are byte-identical.
 
 ```
 knit/
@@ -856,7 +861,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 914 tests
+└── test/                 # 927 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```

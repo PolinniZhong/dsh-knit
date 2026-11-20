@@ -8,7 +8,8 @@
  * 面板本身：列表（相关性或 mtime 排序 + 过滤 + 键盘导航）+ 列表下方的就地预览。
  * 两个宿主共用同一个 KnitBody，只在「怎么开新标签页」上用适配器分叉。
  *
- * 构建：无。手写脚本，由 __ModuleLoader__ 直接装载，用 React.createElement 而非 JSX。
+ * 构建：源码在 `tools/client-src/*.js`，由 `node tools/build-client.mjs` 拼成
+ * `src/client/client.js`（DSH 仍只加载这一个文件；无 bundler、无 JSX）。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-knit',
@@ -41,6 +42,8 @@ window.__ModuleLoader__.load({
       'count.code.filtered': '{hit} / {total} 个代码文件',
       'count.media': '{n} 个媒体',
       'count.media.filtered': '{hit} / {total} 个媒体',
+      'count.changes': '{n} 个变更文件',
+      'count.changes.filtered': '{hit} / {total} 个变更文件',
       'action.refresh': '刷新',
       'path.openTitle': '在文件管理器中打开',
       'peek.empty': '这个工作区里还没有 Markdown 文档。',
@@ -49,6 +52,7 @@ window.__ModuleLoader__.load({
       'sort.relevance': '相关',
       'sort.time': '最新',
       'sort.mediaTimeTitle': '图片一律按时间排序（最新在前）',
+      'sort.changesTitle': '变更按文件修改时间列出（最新在前）',
       'sort.relevanceTitle': '按与当前对话的相关性排序（纯本地关键词匹配，不调模型）',
       'sort.timeTitle': '按文件修改时间倒序',
 
@@ -64,6 +68,7 @@ window.__ModuleLoader__.load({
       //    只扫图片与视频（宿主按扩展名放行，没有音频）；③ 「媒体」省 3 个字，窄侧栏少一次
       //    省略号。**含义由空态说明**（list.emptyMedia 仍写「还没有图片或视频」）。
       'kind.media': '媒体',
+      'kind.changes': '变更',
       'kind.title': '切换要列出的产物类型',
 
       'filter.placeholder': '过滤文档',
@@ -296,6 +301,24 @@ window.__ModuleLoader__.load({
       'list.empty': '这个工作区里还没有 Markdown 文档。',
       'list.emptyCode': '这个工作区里还没有可纳入上下文的代码文件。',
       'list.emptyMedia': '这个工作区里还没有图片或视频。',
+      'list.emptyChanges': '工作区里没有未提交的改动。',
+      'list.changeOnlyOther': '有 {n} 个变更文件，但没有可列出的 Markdown / 代码。',
+      'list.changesLoading': '正在读取 Git 变更…',
+      'changes.unavailable': '读不到 Git 变更：{reason}',
+      'changes.status.modified': '修改',
+      'changes.status.added': '新增',
+      'changes.status.deleted': '删除',
+      'changes.status.renamed': '重命名',
+      'changes.status.untracked': '新文件',
+      'changes.status.unmerged': '冲突',
+      'changes.status.copied': '复制',
+      'changes.binary': '二进制',
+      'changes.lines': '行数统计不可用',
+      'diff.loading': '正在读取 diff…',
+      'diff.failed': '读取 diff 失败',
+      'diff.binary': '二进制文件，没有文本 diff',
+      'diff.truncated': 'diff 已截断',
+      'changes.title': '未提交的改动（只读 git status + numstat）',
       'list.noMatch': '没有匹配「{query}」的文档。',
       // 文档列表这个 listbox 的无障碍名字（原先硬编码在 JSX 里，英文界面下会漏出中文）
       'list.aria': '最近文档',
@@ -432,6 +455,7 @@ window.__ModuleLoader__.load({
       'host.mediaTooLarge': '视频过大',
       'host.readFailed': '读取失败',
       'host.missingRel': '缺少 rel 参数',
+      'host.diffFailed': '读取 diff 失败',
       'host.internal': '宿主内部错误',
     }
 
@@ -448,6 +472,8 @@ window.__ModuleLoader__.load({
       'count.code.filtered': '{hit} / {total} code files',
       'count.media': '{n} media',
       'count.media.filtered': '{hit} / {total} media',
+      'count.changes': '{n} changed files',
+      'count.changes.filtered': '{hit} / {total} changed files',
       'action.refresh': 'Refresh',
       'path.openTitle': 'Open in file manager',
       'peek.empty': 'No Markdown documents in this workspace yet.',
@@ -456,6 +482,7 @@ window.__ModuleLoader__.load({
       'sort.relevance': 'Relevant',
       'sort.time': 'Recent',
       'sort.mediaTimeTitle': 'Images are always sorted by newest first',
+      'sort.changesTitle': 'Changes are listed by file modification time (newest first)',
       'sort.relevanceTitle': 'Sort by relevance to the current conversation (local keyword matching, no model call)',
       'sort.timeTitle': 'Sort by file modified time, newest first',
 
@@ -465,6 +492,7 @@ window.__ModuleLoader__.load({
       // follows the same word as count.media ("{n} media"): the tab says Media, and the
       // explicit "images and videos" wording stays in the empty state / README prose.
       'kind.media': 'Media',
+      'kind.changes': 'Changes',
       'kind.title': 'Switch which artifacts are listed',
 
       'filter.placeholder': 'Filter docs',
@@ -652,6 +680,24 @@ window.__ModuleLoader__.load({
       'list.empty': 'No Markdown documents in this workspace yet.',
       'list.emptyCode': 'No code files eligible for context in this workspace yet.',
       'list.emptyMedia': 'No images or videos in this workspace yet.',
+      'list.emptyChanges': 'No uncommitted changes in this workspace.',
+      'list.changeOnlyOther': '{n} changed file(s), but no Markdown / code to list.',
+      'list.changesLoading': 'Reading Git changes…',
+      'changes.unavailable': 'Git changes unavailable: {reason}',
+      'changes.status.modified': 'Modified',
+      'changes.status.added': 'Added',
+      'changes.status.deleted': 'Deleted',
+      'changes.status.renamed': 'Renamed',
+      'changes.status.untracked': 'Untracked',
+      'changes.status.unmerged': 'Conflict',
+      'changes.status.copied': 'Copied',
+      'changes.binary': 'binary',
+      'changes.lines': 'line counts unavailable',
+      'diff.loading': 'Reading diff…',
+      'diff.failed': 'Could not read the diff',
+      'diff.binary': 'Binary file — no text diff',
+      'diff.truncated': 'Diff truncated',
+      'changes.title': 'Uncommitted changes (read-only git status + numstat)',
       'list.noMatch': 'No documents match “{query}”.',
       // Accessible name of the document listbox (was hardcoded in JSX before)
       'list.aria': 'Recent documents',
@@ -768,6 +814,7 @@ window.__ModuleLoader__.load({
       'host.mediaTooLarge': 'Video too large',
       'host.readFailed': 'Read failed',
       'host.missingRel': 'Missing the rel parameter',
+      'host.diffFailed': 'Could not read the diff',
       'host.internal': 'Internal host error',
     }
 
@@ -807,6 +854,7 @@ window.__ModuleLoader__.load({
       'knit/media-too-large': 'host.mediaTooLarge',
       'knit/read-failed': 'host.readFailed',
       'knit/missing-rel': 'host.missingRel',
+      'knit/diff-failed': 'host.diffFailed',
       'knit/internal': 'host.internal',
     }
 
@@ -902,6 +950,8 @@ window.__ModuleLoader__.load({
     /* v0.25：Git 变更关联的**独立接口**。它与列表接口分开，所以「列表的响应形状」
        不会被这个功能碰到；关掉功能时客户端连这个请求都不发。 */
     const CHANGES_API = '/knit/api/changes'
+    const STATUS_API = '/knit/api/status'
+    const DIFF_API = '/knit/api/diff'
     /* v0.25：媒体档额外显示「对话里工具产出的图」——**独立接口**，`/api/recent` 一个字节没动。
        列表零 I/O（元数据全在会话事件里）；字节按 **sha256** 取（见 `attachmentUrl`）。 */
     const ATTACH_LIST_API = '/knit/api/attachments'
@@ -961,6 +1011,8 @@ window.__ModuleLoader__.load({
      */
     const KIND_CODE = 'code'
     const KIND_MEDIA = 'media'
+    /** v0.26.x：「变更」档 —— 未提交改动（跨 Markdown / 代码）。 */
+    const KIND_CHANGES = 'changes'
 
     /**
      * v0.19：分类层给的「生成产物」档（`.map` / `*.min.js` / `package-lock.json` …）。
@@ -1308,7 +1360,7 @@ window.__ModuleLoader__.load({
      *   1.（x：62.5%，y：31.0%）文案
      *
      * @param {{n:number,xPct:number,yPct:number,text:string}[]} list - 评论
-     * @param {{name?:string,rel?:string,sha?:string}} [image] - 这张图的身份（有就写头行）
+     * @param {{name?:string,rel?:string,sha?:string,index?:number}} [image] - 身份 + 在输入框附件里的序号
      * @returns {string[]} 文本行
      */
     function commentLines(list, image) {
@@ -1316,7 +1368,10 @@ window.__ModuleLoader__.load({
       const label = image && (image.rel || image.name)
       if (label) {
         const sha = image.sha ? String(image.sha).slice(0, 12) : ''
-        lines.push(`图像 1：${label}${sha ? `（sha256 ${sha}）` : ''}`)
+        /* 编号必须与**输入框里的附件顺序**一致：第一张附过去是「图像 1」，第二张是「图像 2」。
+           不传 index（旧调用 / 单测）时回落 1。 */
+        const index = image && Number.isFinite(image.index) && image.index > 0 ? Math.round(image.index) : 1
+        lines.push(`图像 ${index}：${label}${sha ? `（sha256 ${sha}）` : ''}`)
       }
       for (const item of normalizeComments(list)) {
         lines.push(`${item.n}.（x：${item.xPct.toFixed(1)}%，y：${item.yPct.toFixed(1)}%）${item.text}`)
@@ -1550,6 +1605,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 输入框当前状态：已附件几张图、有没有正文。**只读 DOM，不改任何东西**。
+     *
+     * 用途有两个：
+     * ① 新评论的编号 = 已有附件数 + 1（「附件一就是图像一」）；
+     * ② 已经有正文时，这次投递前面要空一行（独立段落），不能拼在上一句后面。
+     *
+     * @param {object|null} doc - document（测试可注入）
+     * @returns {{count:number, hasText:boolean}} 状态
+     */
+    function composerState(doc) {
+      const empty = { count: 0, hasText: false }
+      try {
+        if (!doc || typeof doc.querySelector !== 'function') return empty
+        const input = doc.querySelector('[data-composer-input]')
+        if (!input) return empty
+        const hasText = typeof input.textContent === 'string' && input.textContent.trim() !== ''
+        let count = 0
+        const card = typeof input.closest === 'function' ? input.closest('[data-composer-card]') : null
+        if (card && typeof card.querySelectorAll === 'function') {
+          count = [...card.querySelectorAll('img')].filter((img) => {
+            const src = String((img && img.src) || '')
+            if (src.startsWith('blob:')) return true
+            const parent = img && img.parentElement
+            return /thumbnail/i.test(String((parent && parent.className) || ''))
+          }).length
+        }
+        return { count, hasText }
+      } catch { return empty }
+    }
+
+    /** 把光标放到输入框末尾（否则 paste 会插在当前光标处，段落会断在中间）。 */
+    function caretToEnd(input, win, doc) {
+      try {
+        if (!input || !win || typeof win.getSelection !== 'function') return
+        if (!doc || typeof doc.createRange !== 'function') return
+        const selection = win.getSelection()
+        if (!selection) return
+        const range = doc.createRange()
+        range.selectNodeContents(input)
+        range.collapse(false)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      } catch { /* 拿不到 selection 就按默认光标位置投递 */ }
+    }
+
+    /**
      * 把一段文本投进**输入框**（不发送）。通道照 dsh-image-annotate 的已验证做法：
      * 合成 paste 到 `[data-composer-input]`；失败按序回落 document drop → clipboard → 下载。
      *
@@ -1565,14 +1666,24 @@ window.__ModuleLoader__.load({
       const doc = env.document === undefined ? (typeof document === 'undefined' ? null : document) : env.document
       const win = env.window === undefined ? (typeof window === 'undefined' ? null : window) : env.window
       const file = env.attachment ? await imageFileFrom(env.attachment.src, env.attachment.name, env) : null
+      /* 每次发送 = **独立段落**：输入框里已经有正文时，前面空两行再投；没有就原样。
+         （只加前缀不补后缀 —— 下一次发送自己会补，避免末尾多出空行。） */
+      const existing = (() => {
+        try {
+          const probe = doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-composer-input]') : null
+          return probe && typeof probe.textContent === 'string' ? probe.textContent.trim() : ''
+        } catch { return '' }
+      })()
+      const body = existing ? `\n\n${payload}` : payload
 
       // ① 合成 paste 到输入框（文本 + 图片 File 同一个事件）
       const input = doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-composer-input]') : null
       if (input && typeof input.dispatchEvent === 'function') {
         try { if (typeof input.focus === 'function') input.focus() } catch { /* 拿不到焦点也继续 */ }
+        try { caretToEnd(input, win, doc) } catch { /* 光标放不到末尾就按默认位置 */ }
         const before = typeof input.textContent === 'string' ? input.textContent : ''
         try {
-          const event = buildPasteEvent(payload, win, file)
+          const event = buildPasteEvent(body, win, file)
           const notPrevented = input.dispatchEvent(event)
           const after = typeof input.textContent === 'string' ? input.textContent : ''
           /* 宿主（Lexical）收到 paste 会 `preventDefault()` ⇒ dispatchEvent 返回 false。
@@ -1588,7 +1699,7 @@ window.__ModuleLoader__.load({
       // ② document 上的 drop
       if (doc && typeof doc.dispatchEvent === 'function') {
         try {
-          const event = buildDropEvent(payload, win)
+          const event = buildDropEvent(body, win)
           if (doc.dispatchEvent(event) === false || (event && event.defaultPrevented)) return { ok: true, via: 'drop', image: false }
         } catch { /* 换下一条通道 */ }
       }
@@ -1597,7 +1708,7 @@ window.__ModuleLoader__.load({
       try {
         const clipboard = win && win.navigator && win.navigator.clipboard
         if (clipboard && typeof clipboard.writeText === 'function') {
-          await clipboard.writeText(payload)
+          await clipboard.writeText(body)
           return { ok: true, via: 'clipboard', image: false }
         }
       } catch { /* 换下一条通道 */ }
@@ -1607,7 +1718,7 @@ window.__ModuleLoader__.load({
         const BlobCtor = win && win.Blob
         const UrlApi = win && win.URL
         if (BlobCtor && UrlApi && typeof UrlApi.createObjectURL === 'function' && doc && typeof doc.createElement === 'function') {
-          const url = UrlApi.createObjectURL(new BlobCtor([payload], { type: 'text/plain;charset=utf-8' }))
+          const url = UrlApi.createObjectURL(new BlobCtor([body], { type: 'text/plain;charset=utf-8' }))
           const anchor = doc.createElement('a')
           anchor.href = url
           anchor.download = 'knit-comments.txt'
@@ -2642,6 +2753,47 @@ body[data-ds-dark-theme] .knit-preview{box-shadow:0 -8px 24px rgba(0,0,0,.38)}
    刻意**不是**一个胶囊：没有底色、没有边框、没有圆角 —— 它是一条弱注释，
    不是标签墙。字号比标题小两档，颜色用 caption，永远不抢标题。
    窄侧边栏里它 flex:none，压缩的是标题（.knit-title 会省略号收尾）而不是它。 */
+.knit-change-badge{margin-left:6px;flex:none;font-size:10px;line-height:16px;padding:0 5px;
+  border-radius:4px;background:var(--knit-chip-bg);color:var(--dsw-alias-label-secondary)}
+.knit-change-count{display:inline-flex;gap:4px;flex:none;margin-left:6px;font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-caption)}
+.knit-change-add{color:var(--dsw-alias-state-success-primary)}
+.knit-change-del{color:var(--dsw-alias-label-error)}
+.knit-change-binary{color:var(--dsw-alias-label-caption)}
+/* v0.26.x 变更档：逐行 diff（只画内容行，不接语法高亮 / 折叠 / 编辑器） */
+.knit-diff{display:flex;flex-direction:column;gap:8px;min-height:100%;overflow-x:auto}
+.knit-diff-sum{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:11px;
+  color:var(--dsw-alias-label-caption);position:sticky;top:0;z-index:1;padding:2px 0;
+  background:var(--dsw-alias-bg-base)}
+.knit-diff-file{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary)}
+.knit-diff-add{color:var(--dsw-alias-state-success-primary);font-variant-numeric:tabular-nums}
+.knit-diff-del{color:var(--dsw-alias-label-error);font-variant-numeric:tabular-nums}
+.knit-diff-note{color:var(--dsw-alias-label-caption)}
+.knit-diff-body{display:flex;flex-direction:column;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11.5px;line-height:1.7;min-width:max-content;border-radius:6px;overflow:hidden}
+/* 行底：用**语义色 + 低透明度覆盖层**，不写死 rgba、也不用 color-mix（AGENTS §6.3）。
+   绿 / 红只表达 diff 的增删，不表达好坏；正文仍在最上层。 */
+.knit-diff-line{position:relative;display:flex;align-items:baseline;gap:8px;white-space:pre;
+  padding:0 8px 0 4px;border-left:2px solid transparent}
+.knit-diff-line.add,.knit-diff-line.del{background:var(--knit-hover-bg,var(--dsw-alias-interactive-bg-hover))}
+.knit-diff-line.add{border-left-color:var(--dsw-alias-state-success-primary)}
+.knit-diff-line.del{border-left-color:var(--dsw-alias-label-error)}
+.knit-diff-line.add::before,.knit-diff-line.del::before{content:'';position:absolute;inset:0;
+  pointer-events:none;z-index:0}
+.knit-diff-line.add::before{background:var(--dsw-alias-state-success-primary);opacity:.13}
+.knit-diff-line.del::before{background:var(--dsw-alias-label-error);opacity:.11}
+.knit-diff-line > *{position:relative;z-index:1}
+.knit-diff-line.hunk{color:var(--dsw-alias-label-caption);background:transparent;
+  border-left-color:transparent;margin-top:6px;padding-top:2px;padding-bottom:2px}
+.knit-diff-old,.knit-diff-new{flex:none;width:40px;text-align:right;color:var(--dsw-alias-label-caption);
+  font-variant-numeric:tabular-nums;user-select:none;font-size:11px}
+.knit-diff-line.add .knit-diff-old,.knit-diff-line.add .knit-diff-new{color:var(--dsw-alias-state-success-primary)}
+.knit-diff-line.del .knit-diff-old,.knit-diff-line.del .knit-diff-new{color:var(--dsw-alias-label-error)}
+.knit-diff-sign{flex:none;width:12px;text-align:center;color:var(--dsw-alias-label-secondary);font-weight:600}
+.knit-diff-line.add .knit-diff-sign{color:var(--dsw-alias-state-success-primary)}
+.knit-diff-line.del .knit-diff-sign{color:var(--dsw-alias-label-error)}
+.knit-diff-text{flex:none;min-width:0;color:var(--dsw-alias-label-primary)}
 .knit-lang{flex:none;margin-left:6px;font-size:10px;letter-spacing:.04em;
   text-transform:uppercase;color:var(--dsw-alias-label-caption,#80868b)}
 
@@ -2933,11 +3085,11 @@ video.knit-preview-media{width:100%;background:#000}
      *
      * v0.23.1：「全部」档已整体删除 ⇒ 白名单里的 `'all'` 也删掉 ——
      * 老用户 localStorage 里存着 `'all'` 时**回落到 `文档`**（不空白、不抛）。
-     * @returns {'doc'|'code'|'media'} 类型
+     * @returns {'doc'|'code'|'media'|'changes'} 类型
      */
     function readKindPref() {
       const v = readPref(KIND_KEY)
-      return v === KIND_MEDIA || v === KIND_CODE ? v : KIND_DOC
+      return v === KIND_MEDIA || v === KIND_CODE || v === KIND_CHANGES ? v : KIND_DOC
     }
 
     /**
@@ -3283,6 +3435,65 @@ video.knit-preview-media{width:100%;background:#000}
         ...(Number.isInteger(link.evidenceTotal) && link.evidenceTotal > (Array.isArray(link.evidence) ? link.evidence.length : 0)
           ? { relationsTotal: link.evidenceTotal } : {}),
       }))
+    }
+
+    /**
+     * 一个变更条目 → 状态词（只给一枚主徽标，`kinds` 的完整集合仍随行带出）。
+     * @param {string[]} kinds - `git status` 的 kinds
+     * @returns {string} modified|added|deleted|renamed|untracked|unmerged|copied
+     */
+    function changeStatusOfFile(kinds) {
+      const list = Array.isArray(kinds) ? kinds : []
+      if (list.includes('unmerged')) return 'unmerged'
+      if (list.includes('untracked')) return 'untracked'
+      if (list.includes('deleted')) return 'deleted'
+      if (list.includes('renamed')) return 'renamed'
+      if (list.includes('added')) return 'added'
+      if (list.includes('copied')) return 'copied'
+      return 'modified'
+    }
+
+    /**
+     * `/knit/api/status` 的 `git.files` → 列表行（只做形状映射；只收 Markdown / 代码）。
+     *
+     * 变更档的列表行**就是**既有 `DocRow`：点开走同一条预览路径，不新开第二套渲染。
+     * 额外的 `change` 字段只负责状态徽标与 `+N −N`，不影响键盘 / 预览。
+     *
+     * @param {object|null} data - `/knit/api/status` 的载荷
+     * @returns {Array<object>} 行（`rel/title/name/summary/kind/mtimeMs/change`）
+     */
+    function changeDocsOf(data) {
+      const files = data && data.git && Array.isArray(data.git.files) ? data.git.files : []
+      const out = []
+      for (const file of files) {
+        if (!file || file.isDir === true) continue
+        const kind = file.kind
+        if (kind !== ARTIFACT_DOC && kind !== ARTIFACT_CODE) continue
+        const rel = String(file.rel || '')
+        if (!rel) continue
+        const parts = rel.split('/')
+        const name = parts[parts.length - 1]
+        const dir = parts.slice(0, -1).join('/')
+        out.push({
+          rel,
+          title: name,
+          name,
+          summary: dir ? `${dir}/` : '',
+          kind,
+          mtimeMs: Number.isFinite(file.mtimeMs) ? file.mtimeMs : 0,
+          size: Number.isFinite(file.bytes) ? file.bytes : 0,
+          change: {
+            status: changeStatusOfFile(file.kinds),
+            added: Number.isFinite(file.added) ? file.added : null,
+            removed: Number.isFinite(file.removed) ? file.removed : null,
+            binary: file.binary === true,
+            untracked: file.untracked === true,
+            deleted: file.deleted === true,
+            ...(file.origRel ? { origRel: file.origRel } : {}),
+          },
+        })
+      }
+      return out
     }
 
     /**
@@ -3805,7 +4016,9 @@ video.knit-preview-media{width:100%;background:#000}
       // 全部是**可选** props：平铺列表（时间序 / 过滤结果）一个都不传，那一屏与 v0.20
       // 逐字相同。`onAct` 为 null ⇒ 不渲染动作按钮；`relations` 为空 ⇒ 「为什么」退回
       // 纯文本（没有证据就不装成有证据的样子）。
-      prov, pinned, onAct, relations, relationsTotal, whyOpen, onWhyToggle, onOpenRelation }) {
+      prov, pinned, onAct, relations, relationsTotal, whyOpen, onWhyToggle, onOpenRelation,
+      // v0.26.x 变更档：一个可选的 `change` 只负责「状态徽标 + +N −N」，其余路径不变。
+      change }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       const rowRef = React.useRef(null)
       /* v0.19：只有**代码行**带语言徽章。
@@ -3924,6 +4137,14 @@ video.knit-preview-media{width:100%;background:#000}
             fresh ? h('span', { className: 'knit-badge' }, '🆕') : null,
             doc.title || doc.name,
             lang ? h('span', { className: 'knit-lang' }, lang) : null),
+          change
+            ? h('span', { className: 'knit-change-badge' }, t(`changes.status.${change.status}`))
+            : null,
+          change && !change.binary && (Number.isFinite(change.added) || Number.isFinite(change.removed))
+            ? h('span', { className: 'knit-change-count' },
+                Number.isFinite(change.added) ? h('span', { className: 'knit-change-add' }, `+${change.added}`) : null,
+                Number.isFinite(change.removed) ? h('span', { className: 'knit-change-del' }, `−${change.removed}`) : null)
+            : (change && change.binary ? h('span', { className: 'knit-change-count knit-change-binary' }, t('changes.binary')) : null),
           // v0.17：生命周期状态（文案已算好；没有证据时是 null，一个节点都不加）。
           // 插在**标题与时间之间**：`.knit-title` 是 flex:1 1 auto，会把状态与时间一起推到
           // 行尾，状态在时间左侧、行尾仍然是时间。
@@ -3940,7 +4161,7 @@ video.knit-preview-media{width:100%;background:#000}
           h('div', { className: 'knit-time' }, relTime(doc.mtimeMs, now))),
         doc.summary
           ? h('div', { className: 'knit-sum' }, doc.summary)
-          : h('div', { className: 'knit-sum empty' }, t('summary.empty')),
+          : (change ? null : h('div', { className: 'knit-sum empty' }, t('summary.empty'))),
         // ⚠️ **列表行里不再有路径**（2026-09-29 用户要求）：「文档列表中的文档路径，我觉得
         //    不需要出现了，因为点开查看文档详情的时候已经有了，所以这里是重复的，隐藏掉」。
         //    —— 这是**重复信息**，不是「多列砍字段」那种静默降级：预览头
@@ -4871,6 +5092,34 @@ video.knit-preview-media{width:100%;background:#000}
      *   `find`（v0.25）= 查找条那一组：状态在 `KnitBody`（快捷键挂在面板根上，
      *   所以状态不能只活在这一层）；`bodyRef` = 正文容器 ref，由 `KnitBody` 拿去做 DOM 命中绘制。
      */
+    /**
+     * 逐行 diff 视图（「变更」档点开一行）。只画宿主解析好的内容行：
+     * 旧行号 / 新行号 / +/- / 文本；不加语法高亮、不做折叠（不是编辑器）。
+     * @param {{diff: object}} props - `/knit/api/diff` 的载荷
+     * @returns {import('react').ReactElement} 元素
+     */
+    function DiffPane({ diff }) {
+      const lines = Array.isArray(diff.lines) ? diff.lines : []
+      const rows = lines.map((line, i) => h('div', {
+        key: `${i}-${line.type}`,
+        className: `knit-diff-line ${line.type}`,
+      },
+        h('span', { className: 'knit-diff-old' }, line.oldNo == null ? '' : String(line.oldNo)),
+        h('span', { className: 'knit-diff-new' }, line.newNo == null ? '' : String(line.newNo)),
+        h('span', { className: 'knit-diff-sign' }, line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' '),
+        h('span', { className: 'knit-diff-text' }, line.text === '' ? ' ' : line.text)))
+      const head = h('div', { className: 'knit-diff-sum' },
+        h('span', { className: 'knit-diff-file' }, diff.rel || ''),
+        h('span', { className: 'knit-diff-add' }, `+${Number(diff.added) || 0}`),
+        h('span', { className: 'knit-diff-del' }, `−${Number(diff.removed) || 0}`),
+        diff.binary ? h('span', { className: 'knit-diff-note' }, t('changes.binary')) : null,
+        diff.truncated ? h('span', { className: 'knit-diff-note' }, t('diff.truncated')) : null)
+      const body = diff.binary
+        ? h('div', { className: 'knit-preview-note' }, t('diff.binary'))
+        : h('div', { className: 'knit-diff-body' }, rows)
+      return h('div', { className: 'knit-diff' }, head, body)
+    }
+
     function PreviewPanel({ preview, pathImages, fullscreen, ratio, links, linksExpanded, onToggleLinks, onOpenLink, onClose, onOpenLocal, onReveal, onOpenMap, onOpenWeb, onToggleFullscreen, onResizeStart, find, bodyRef, favorite, onToggleFavorite }) {
       const isMedia = preview.kind === 'image' || preview.kind === 'video'
       const previewPath = splitRelPath(preview.rel)
@@ -5027,7 +5276,13 @@ video.knit-preview-media{width:100%;background:#000}
       // v0.19：代码（含 `.map` 这类生成产物）走轻量 CodePane —— **绝不能落到
       // MarkdownText 那支**，否则 `#` 开头的注释会变成标题、`*` 会变成列表。
       const isCode = preview.kind === ARTIFACT_CODE || preview.kind === KIND_GENERATED
-      const body = preview.status === 'loading'
+      const body = preview.diff
+        ? (preview.diff.loading
+            ? h('div', { className: 'knit-preview-note' }, t('diff.loading'))
+            : preview.diff.error
+              ? h('div', { className: 'knit-preview-note' }, t('diff.failed'))
+              : h(DiffPane, { diff: preview.diff }))
+        : preview.status === 'loading'
         ? h('div', { className: 'knit-preview-note' }, t('preview.loading'))
         : preview.status === 'error'
           ? h('div', { className: 'knit-preview-note' }, t('list.failed', { error: preview.error }))
@@ -5111,7 +5366,7 @@ video.knit-preview-media{width:100%;background:#000}
             : null,
           h('span', { className: 'knit-preview-name' }, previewPath.name)),
           // 复制整篇（只给代码；MarkdownText 自己带代码块复制）
-          isCodeView
+          isCodeView && !preview.diff
             ? h('button', {
                 className: 'knit-btn',
                 onClick: onCopySource,
@@ -5120,7 +5375,7 @@ video.knit-preview-media{width:100%;background:#000}
             : null,
           // Source map：**低权重**入口 —— 只在同名 `<file>.map` 真的存在时出现，
           // 且 `.map` 本身不参与检索（需求 §6 §28）。点开仍是这个面板，纯文本。
-          isCodeView && preview.mapRel
+          isCodeView && !preview.diff && preview.mapRel
             ? h('button', {
                 className: 'knit-btn knit-btn-quiet',
                 onClick: () => { if (onOpenMap) onOpenMap(preview.mapRel) },
@@ -5372,7 +5627,7 @@ video.knit-preview-media{width:100%;background:#000}
 
          ⇒ 请求**就是 time**（不只改显示）：这样宿主不做无用的相关度计算、截断也按时间切。
          排序偏好本身**不做修改** —— 切回文档/代码还是你原来选的那个。 */
-      const effectiveSort = kind === KIND_MEDIA ? 'time' : sort
+      const effectiveSort = kind === KIND_MEDIA || kind === KIND_CHANGES ? 'time' : sort
 
       const load = React.useCallback(async (alive) => {
         const live = () => typeof alive !== 'function' || alive()
@@ -5398,6 +5653,8 @@ video.knit-preview-media{width:100%;background:#000}
             const sig = JSON.stringify(data)
             setState((prev) => (prev.status === 'ready' && prev.sig === sig ? prev : {
               status: 'ready',
+              // 变更档的独立载荷不归 load 管；轮询时原样带过去，别被列表刷新抹掉。
+              changesStatus: prev.changesStatus || null,
               docs: data.docs || [],
               root: data.root || '',
               // v0.19 修订：`hostRoot` 是同一个工作区、但符号链接已展开的那份路径。
@@ -5523,12 +5780,23 @@ video.knit-preview-media{width:100%;background:#000}
       }, [sessionId, load])
 
       /* ── 过滤：纯客户端，不重新请求宿主 ─────────────── */
+      /* v0.26.x「变更」档：数据来自独立 `/api/status`，**不混进 state.docs** ——
+         列表刷新（5 s 轮询）与变更读取互不影响。`changesStatus` 挂在 state 上是为了
+         避免新增 hook 位置（测试按位预置 hook）；它是纯缓存，不参与排序。 */
+      const changesStatus = state.changesStatus || null
+      const changeView = changeStatusOf(changesStatus)
+      const changeDocsAll = changeDocsOf(changesStatus)
+      const changeText = query.trim().toLowerCase()
+      const changeDocs = changeText
+        ? changeDocsAll.filter((doc) => docMatchesQuery(doc, changeText))
+        : changeDocsAll
       const visibleDocs = React.useMemo(() => {
+        if (kind === KIND_CHANGES) return changeDocs
         const all = Array.isArray(state.docs) ? state.docs : []
         const q = query.trim().toLowerCase()
         if (!q) return all
         return all.filter((doc) => docMatchesQuery(doc, q))
-      }, [state.docs, query])
+      }, [kind, changeDocs, state.docs, query])
 
       // ResizeObserver 量到的是 .knit-list（它自己也有左右内边距），
       // 网格的可用宽度 = 列表宽度 − 列表内边距 − 网格内边距。
@@ -5568,7 +5836,7 @@ video.knit-preview-media{width:100%;background:#000}
           renderEntry(doc, numbers ? numbers.get(doc.rel) || 0 : 0, Boolean(primary), mark, withLife))
       }
 
-      const relevance = state.mode === 'relevance'
+      const relevance = state.mode === 'relevance' && kind !== KIND_CHANGES
       const filtering = query.trim().length > 0
 
       /**
@@ -5761,7 +6029,7 @@ video.knit-preview-media{width:100%;background:#000}
         const merged = (Array.isArray(visibleDocs) ? visibleDocs : []).concat(attachmentDocs)
         return orderFavorites(merged.slice().sort(byTimeDesc), favoriteSet)
       }, [visibleDocs, favoriteSet, attachmentDocs])
-      const navDocs = kind === KIND_MEDIA && !contextView ? mediaDocs : (contextView ? contextView.flat : visibleDocs)
+      const navDocs = kind === KIND_CHANGES ? visibleDocs : (kind === KIND_MEDIA && !contextView ? mediaDocs : (contextView ? contextView.flat : visibleDocs))
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
@@ -5845,6 +6113,32 @@ video.knit-preview-media{width:100%;background:#000}
           return previewFor(doc, firstMatchOf(doc))
         })
       }, [previewFor])
+
+      /**
+       * 「变更」档点开一行：拉 `/api/diff`，在同一个预览面板里画逐行 diff。
+       * 普通行仍走 `togglePreview`；这里只是给变更行换一个打开方式，不新增第二套面板。
+       */
+      const openDiff = async (doc) => {
+        if (!doc) return
+        setNotice('')
+        setCursor(doc.rel)
+        setPreview({
+          rel: doc.rel, title: doc.title || doc.name, path: '', text: '', status: 'ready',
+          kind: doc.kind || ARTIFACT_CODE, diff: { loading: true },
+          added: doc.change ? doc.change.added : null, removed: doc.change ? doc.change.removed : null,
+        })
+        try {
+          const res = await fetch(`${DIFF_API}?sessionId=${encodeURIComponent(sessionId)}&rel=${encodeURIComponent(doc.rel)}`, {
+            headers: { accept: 'application/json' }, cache: 'no-store',
+          })
+          const data = await res.json()
+          setPreview((prev) => (prev && prev.rel === doc.rel
+            ? { ...prev, diff: data && data.ok ? data : { error: true } }
+            : prev))
+        } catch {
+          setPreview((prev) => (prev && prev.rel === doc.rel ? { ...prev, diff: { error: true } } : prev))
+        }
+      }
 
       /** 收起预览；全屏时顺带退出全屏。 */
       const closePreview = React.useCallback(() => {
@@ -6413,6 +6707,7 @@ video.knit-preview-media{width:100%;background:#000}
       const motionRows = (() => {
         if (state.status === 'error' || state.docs.length === 0 || visibleDocs.length === 0) return []
         if (kind === KIND_MEDIA) return []   // 媒体格子不参与：网格里收起高度没有意义
+        if (kind === KIND_CHANGES) return []  // 变更档：列表每次刷新可能整批换，别让整屏飞
         if (contextView) {
           // 有包（相关序）：三层的 key 就是运动分组 —— 「全部」与「文档」走同一条路。
           const rows = []
@@ -6525,8 +6820,8 @@ video.knit-preview-media{width:100%;background:#000}
           active: Boolean(preview && preview.rel === doc.rel),
           cursor: doc.rel === cursor,
           optionId: docOptionId(doc),
-          onSelect: togglePreview,
-          onOpenTab,
+          onSelect: doc.change ? () => openDiff(doc) : togglePreview,
+          onOpenTab: doc.change ? () => openDiff(doc) : onOpenTab,
           // v0.20（需求 §12）：只有真的带命中片段的条目才渲染那一行 —— 没有就不渲染，
           // 不编造一个「命中片段：—」的占位（§26：只展示可验证信息）。
           passage: firstMatchOf(doc),
@@ -6562,6 +6857,7 @@ video.knit-preview-media{width:100%;background:#000}
         // 平铺列表里的条目来源未知，不能替它认领一个「检索」。
         const controllable = Boolean(contextView && !isMedia(doc))
         return h(DocRow, { ...common, relevance, why: whyText(doc.reason), num, mark, primary,
+          change: doc.change || null,
           prov: provText(doc.provenance),
           pinned: doc.provenance === 'manual',
           onAct: controllable ? act : null,
@@ -6587,15 +6883,36 @@ video.knit-preview-media{width:100%;background:#000}
 
       // 媒体视图：一格都不隐藏 —— 一屏两行以外的部分在媒体区**内部滚动**，
       // 既不让面板被整面媒体墙顶爆，也不会像旧版那样把剩下的条目直接切掉。
-      const emptyText = kind === KIND_MEDIA
-        ? t('list.emptyMedia')
-        : kind === KIND_CODE
-          ? t('list.emptyCode')
-          : t('list.empty')
+      const emptyText = kind === KIND_CHANGES
+        ? t('list.emptyChanges')
+        : kind === KIND_MEDIA
+          ? t('list.emptyMedia')
+          : kind === KIND_CODE
+            ? t('list.emptyCode')
+            : t('list.empty')
       /* ⚠️ 为什么是**函数**而不是常量：这里要读「面板末尾才声明」的状态（媒体收藏）。
          写成常量会在这一行就求值 ⇒ TDZ（`Cannot access 'favoriteSet' before initialization`）。
          包成函数、在 return 里调用一次，既不改渲染结果，也不会再被后面的新状态绊倒。 */
-      const listBody = () => (state.status === 'loading' && state.docs.length === 0
+      /* 变更档自己的三态：还没读到 / 读不到（带原因）/ 读到了但没东西可列。
+         ⚠️ 它**不**看 `state.status` —— 那是文档列表的加载态，与 git 无关。 */
+      const changesListBody = () => {
+        if (changesStatus === null) return h('div', { className: 'knit-msg' }, t('list.changesLoading'))
+        if (!changeView.read) {
+          return h('div', { className: 'knit-msg' },
+            t('changes.unavailable', { reason: t(changeReasonKey(changeView.reason)) }))
+        }
+        if (changeView.filesTotal === 0) return h('div', { className: 'knit-msg' }, t('list.emptyChanges'))
+        if (changeDocsAll.length === 0) {
+          return h('div', { className: 'knit-msg' }, t('list.changeOnlyOther', { n: changeView.filesTotal }))
+        }
+        if (changeDocs.length === 0) {
+          return h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
+        }
+        return docsGrid(changeDocs)
+      }
+      const listBody = () => (kind === KIND_CHANGES
+        ? changesListBody()
+        : state.status === 'loading' && state.docs.length === 0
         ? h('div', { className: 'knit-msg' }, t('list.scanning'))
         : state.status === 'error'
           ? h('div', { className: 'knit-msg' }, t('list.failed', { error: state.error }), h('br'), t('list.failedHint'))
@@ -6858,18 +7175,22 @@ video.knit-preview-media{width:100%;background:#000}
       // ⚠️ 2026-10-09 用户要求：**屏幕上只留阿拉伯数字**（`9` / `3 / 79`）——
       //    量词本来就随档位变（同一位置换个档就换一种中文，读起来像两套东西）。
       //    整句降级成 `title`（悬停仍读得到「9 个代码文件」），i18n 键不闲置。
-      const countKey = kind === KIND_MEDIA
-        ? (filtering ? 'count.media.filtered' : 'count.media')
-        : kind === KIND_CODE
-          ? (filtering ? 'count.code.filtered' : 'count.code')
-          : (filtering ? 'count.filtered' : 'count')
+      const countKey = kind === KIND_CHANGES
+        ? (filtering ? 'count.changes.filtered' : 'count.changes')
+        : kind === KIND_MEDIA
+          ? (filtering ? 'count.media.filtered' : 'count.media')
+          : kind === KIND_CODE
+            ? (filtering ? 'count.code.filtered' : 'count.code')
+            : (filtering ? 'count.filtered' : 'count')
+      const countTotal = kind === KIND_CHANGES ? changeView.filesTotal : state.total
+      const countVisible = kind === KIND_CHANGES ? changeDocs.length : visibleDocs.length
       // 可见文本 = 纯数字；整句（含量词）只出现在 title 里。
       const countText = filtering
-        ? `${visibleDocs.length} / ${state.total}`
-        : String(state.total ?? 0)
+        ? `${countVisible} / ${countTotal}`
+        : String(countTotal ?? 0)
       const countTitle = filtering
-        ? t(countKey, { hit: visibleDocs.length, total: state.total })
-        : t(countKey, { n: state.total })
+        ? t(countKey, { hit: countVisible, total: countTotal })
+        : t(countKey, { n: countTotal })
 
       /* ── v0.21 检索状态摘要（需求 §6.3；2026-10-09 用户规格重排）──────────
          每一格都是**已经发生的事实**，不是估算：
@@ -6922,7 +7243,7 @@ video.knit-preview-media{width:100%;background:#000}
          ⚠️ **不再看 provider 配没配**（本次放宽）：未配也出现 —— Knit 还没有设置页，
             藏起来用户就永远打不开这个功能；菜单里如实写状态，并就地给配置入口。
          ⚠️ **永远不做置灰禁用态**。 */
-      const showRetrieval = sort === 'relevance'
+      const showRetrieval = sort === 'relevance' && kind !== KIND_CHANGES
       const semReason = semInfo && typeof semInfo.reason === 'string' ? semInfo.reason : null
       /** 菜单底部那行状态：如实说这一档现在到底生效成什么（不美化、不猜）。 */
       const semStateText = !semOn
@@ -7470,7 +7791,13 @@ video.knit-preview-media{width:100%;background:#000}
         const label = lightboxDoc.conversation
           ? (lightboxDoc.name || 'image')
           : lightboxDoc.rel
-        const text = commentLines(list, { rel: label, sha: shaOfDoc(lightboxDoc) }).join('\n')
+        /* 附件序号就是图像序号：输入框里已经有 N 张附件 ⇒ 这一张是「图像 N+1」。 */
+        const composer = composerState(typeof document === 'undefined' ? null : document)
+        const text = commentLines(list, {
+          rel: label,
+          sha: shaOfDoc(lightboxDoc),
+          index: composer.count + 1,
+        }).join('\n')
         const result = await deliverCommentText(text, {
           attachment: {
             src: srcFor(lightboxDoc),
@@ -7514,6 +7841,41 @@ video.knit-preview-media{width:100%;background:#000}
       const commentEditorBox = commentDraft
         ? commentPopoverBox(commentAnchorPoint, { width: COMMENT_POP_W, height: COMMENT_POP_H }, commentView)
         : null
+
+      /* v0.26.x「变更」档：独立的只读状态读取（不混进列表轮询）。
+         · 只在**变更档且面板可见**时请求；切走 / 收起来就停（和列表同一条「看不见不花钱」纪律）；
+         · 载荷放 `state.changesStatus`，`load()` 轮询时原样带过去；
+         · 失败有独立形状（`{failed,reason}`），不会把「读不到」显示成「没有改动」。 */
+      React.useEffect(() => {
+        if (visible === false || kind !== KIND_CHANGES) return undefined
+        let alive = true
+        let timer = null
+        const run = async () => {
+          if (!sessionId) return
+          try {
+            const res = await fetch(`${STATUS_API}?sessionId=${encodeURIComponent(sessionId)}`, {
+              headers: { accept: 'application/json' }, cache: 'no-store',
+            })
+            const data = await res.json()
+            if (!alive) return
+            const next = data && data.ok ? data : { failed: true, reason: 'request' }
+            const sig = JSON.stringify(next)
+            setState((prev) => {
+              if (prev.changesStatus && prev.changesStatus.sig === sig) return prev
+              return { ...prev, changesStatus: { ...next, sig } }
+            })
+          } catch {
+            if (!alive) return
+            const next = { failed: true, reason: 'request' }
+            const sig = JSON.stringify(next)
+            setState((prev) => (prev.changesStatus && prev.changesStatus.sig === sig
+              ? prev : { ...prev, changesStatus: { ...next, sig } }))
+          }
+        }
+        const loop = async () => { await run(); if (alive) timer = setTimeout(loop, POLL_MS) }
+        loop()
+        return () => { alive = false; if (timer) clearTimeout(timer) }
+      }, [visible, kind, sessionId])
 
       /* v0.26 返工：画布内容只渲染一次，但有两种挂载点 ——
          · `lightboxDock` = Knit 面板里的画布（会话不盖住、身份清楚）
@@ -7890,14 +8252,14 @@ video.knit-preview-media{width:100%;background:#000}
           h('button', {
             className: `knit-seg-btn${effectiveSort === 'relevance' ? ' active' : ''}`,
             onClick: () => pickSort('relevance'),
-            disabled: kind === KIND_MEDIA,
-            title: kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.relevanceTitle'),
+            disabled: kind === KIND_MEDIA || kind === KIND_CHANGES,
+            title: kind === KIND_CHANGES ? t('sort.changesTitle') : (kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.relevanceTitle')),
           }, t('sort.relevance')),
           h('button', {
             className: `knit-seg-btn${effectiveSort === 'time' ? ' active' : ''}`,
             onClick: () => pickSort('time'),
-            disabled: kind === KIND_MEDIA,
-            title: kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.timeTitle'),
+            disabled: kind === KIND_MEDIA || kind === KIND_CHANGES,
+            title: kind === KIND_CHANGES ? t('sort.changesTitle') : (kind === KIND_MEDIA ? t('sort.mediaTimeTitle') : t('sort.timeTitle')),
           }, t('sort.time'))),
         // ⚠️ 2026-10-12 用户裁决：排序组与类型组之间**那根竖线去掉了** —— 它的类名与 CSS 规则都已整体删除。
         // 两组靠 `.knit-bar` 的 gap 分开就够 —— 「边界」不再需要一根线来表达。
@@ -7905,7 +8267,7 @@ video.knit-preview-media{width:100%;background:#000}
           // v0.23.1（2026-10-12 用户裁决）：**三档**「文档 / 代码 / 媒体」——
           // 「全部」那一档连同它的混合浏览视图在整个界面上删除了（三档等距、页签样式不变）。
           // **没有第二层分类** —— 代码里不按语言（JS / TS / Python…）分组（需求 §46）。
-          [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media']].map(([value, labelKey]) =>
+          [[KIND_DOC, 'kind.doc'], [KIND_CODE, 'kind.code'], [KIND_MEDIA, 'kind.media'], [KIND_CHANGES, 'kind.changes']].map(([value, labelKey]) =>
             h('button', {
               type: 'button',
               key: value,
@@ -7969,7 +8331,7 @@ video.knit-preview-media{width:100%;background:#000}
          摘要这一行永远紧贴工具栏，位置不随开关变；观察层仍是「列表上方的观察层」，
          而且比原来更贴近列表。⚠️ 别再把它挪回 `.knit-bar` 后面（有守卫钉着顺序）。
          v0.15：开了才显示。不是弹窗、不是新页面、不是 Dashboard。 */
-      usageOn ? lensNode : null,
+      usageOn && kind !== KIND_CHANGES ? lensNode : null,
       // 列表节点**直接挂上去**（2026-09-29 起永远单栏；曾经它要交给一个 IIFE
       // 决定塞进单栏还是双栏的左列）。**输出与 v0.13 逐字一致** ——
       // 时间序、媒体档、「全部」都不受影响。
