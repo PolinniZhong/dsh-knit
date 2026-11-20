@@ -2,11 +2,15 @@
 
 > **Knit 的安全属性 —— 每一条都指向一个真实存在的检查。**
 >
-> 最后更新：2026-11-20（v0.27.0）—— **本版动过安全面**：「变更」档新增两条**只读** git 读取
-> （`git diff --numstat -z --no-renames HEAD` 取行数、`git diff --no-color --no-ext-diff
-> --no-textconv --unified=3 HEAD -- <rel>` 取正文）：argv 固定、不走 shell，外部 diff 与 textconv
-> 都被挡住，**仍无任何写动词**；diff 正文只回本机面板、不落盘不联网。见下表新增行。
+> 最后更新：2026-11-20（v0.28.0）—— **本版无安全相关改动**（纯客户端：**零新路由、零宿主改动、零网络出口**）：
+> 媒体档改造只在浏览器侧做分批挂载与位图降采样，字节仍走既有的 `/knit/api/raw` / `/knit/api/attachment`。
+> ⚠️ 新增的「保存到本地」是**用户主动发起**的浏览器下载（`<a download>` / `DownloadURL`），
+> **不是宿主写盘** —— Knit 仍然不往你的项目里写任何文件。
 > 版本号随每版前移，好让「安全表被漏掉」与「本版没动安全面」在版本一致性检查里能分开
+>
+> 📌 **v0.27.0（2026-11-20）那次改了什么**：**动过安全面** —— 「变更」档新增两条**只读** git 读取
+> （`git diff --numstat -z --no-renames HEAD` 取行数、`git diff --no-color --no-ext-diff
+> --no-textconv --unified=3 HEAD -- <rel>` 取正文）：argv 固定、不走 shell、**无写动词**。
 >
 > 📌 **v0.26.0（2026-11-14）那次改了什么**：**无安全相关改动** —— 图内评论只读既有的
 > `GET /knit/api/raw` 与 `GET /knit/api/attachment`（同一套路径 / 会话边界），**未新增路由**；

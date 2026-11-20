@@ -345,6 +345,10 @@
       // 于是这里也不再需要 `listWidth − LIST_PAD_X` 这个量 —— 只有媒体网格要宽度。
       const mediaLayout = mediaLayoutFor(Math.max(0, listWidth - LIST_PAD_X - MEDIA_GRID_PAD_X))
 
+      /* v0.28：缩略图采样边长（只依赖列宽，没有 TDZ）。
+         真正的「挂多少张」在 `navDocsOf()` 里算 —— 那个要读末尾声明的 `mediaShown`。 */
+      const mediaEdge = thumbEdgeFor(mediaLayout.cell)
+
       /** 媒体网格：列数由 CSS 的 auto-fill 自己数；JS 只下发「一格多宽」用于正方形兜底。
        *  **不设 maxHeight** —— 有多少行就铺多少行，纵向滚动统一交给 `.knit-list`。 */
       // v0.23：`inSection` 参数随「全部」的类型分区一起删除 —— 媒体网格只有一种形态
@@ -356,7 +360,13 @@
           '--knit-media-cell': `${mediaLayout.cell}px`,
           ...(mediaLayout.scaled ? { '--knit-media-label': 'none' } : {}),
         },
-      }, docs.map(renderEntry))
+      }, docs.map(renderEntry),
+      // 滚到底的哨兵：IntersectionObserver 命中就追加一批
+      // （`mediaShown` 声明在末尾，所以这里只能**函数内**判断，不能在渲染期读常量）
+      mediaVisibleDocs().length < mediaDocs.length
+        ? h('div', { key: 'knit-media-more', className: 'knit-media-more', 'data-knit-media-more': '1', ref: mediaSentinelRef },
+            h('span', { className: 'knit-media-more-text' }, t('media.loadingMore')))
+        : null)
 
       /**
        * 渲染一组文档行：**没有容器、没有列数**（2026-09-29 起）。
@@ -570,16 +580,53 @@
         const merged = (Array.isArray(visibleDocs) ? visibleDocs : []).concat(attachmentDocs)
         return orderFavorites(merged.slice().sort(byTimeDesc), favoriteSet)
       }, [visibleDocs, favoriteSet, attachmentDocs])
-      const navDocs = kind === KIND_CHANGES ? visibleDocs : (kind === KIND_MEDIA && !contextView ? mediaDocs : (contextView ? contextView.flat : visibleDocs))
+      /* v0.28：**函数**而不是常量 —— 媒体档要读「当前挂载到第几张」（`mediaShown`），
+         而那个 state 声明在函数末尾（新 hook 只能往后追加，不能插队）。
+         这里改成惰性求值：渲染期与事件/effect 里调用它时，末尾那些声明早已初始化。 */
+      const navDocsOf = () => {
+        if (kind === KIND_CHANGES) return visibleDocs
+        if (kind === KIND_MEDIA && !contextView) return mediaVisibleDocs()
+        return contextView ? contextView.flat : visibleDocs
+      }
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
-        if (navDocs.length === 0) {
+        const list = navDocsOf()
+        if (list.length === 0) {
           if (cursor !== '') setCursor('')
           return
         }
-        if (!navDocs.some((doc) => doc.rel === cursor)) setCursor(navDocs[0].rel)
-      }, [navDocs, cursor])
+        if (!list.some((doc) => doc.rel === cursor)) setCursor(list[0].rel)
+        // 依赖里**不放** navDocsOf（每次渲染都是新函数）；用它的输入量代替。
+      }, [kind, query, cursor, state.docs, mediaDocs, visibleDocs, contextView])
+
+      /* v0.28：换档 / 换搜索词 / 条目批次变化 ⇒ 回到首屏批量。
+         （只按 kind+query 重置：5 秒轮询拿到的新数组不该把用户已经滚出来的量收回去。） */
+      React.useEffect(() => {
+        setMediaShown((prev) => (prev === 0 ? prev : 0))
+      }, [kind, query])
+
+      /* v0.28：哨兵进视口就追加一批。没有 `IntersectionObserver` 时**保持原样**
+         （只挂首屏那批；用户可以用键盘 / 搜索到达更多），绝不假装加载过。 */
+      React.useEffect(() => {
+        if (mediaDocs.length <= mediaFirstBatch(mediaLayout.columns)) return undefined
+        if (typeof IntersectionObserver !== 'function') return undefined
+        const node = mediaSentinelRef.current
+        const root = listRef.current
+        if (!node) return undefined
+        const io = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry || !entry.isIntersecting) continue
+            setMediaShown((prev) => {
+              const all = mediaDocs.length
+              const base = prev > 0 ? prev : mediaFirstBatch(mediaLayout.columns)
+              return mediaNextCount(Math.min(base, all), all)
+            })
+          }
+        }, { root: root || null, rootMargin: '320px' })
+        io.observe(node)
+        return () => { try { io.disconnect() } catch { /* 忽略 */ } }
+      }, [mediaDocs.length, mediaLayout.columns])
 
       /* 键盘焦点跟手滚进视口（测试环境没有 DOM，静默跳过）。
          ⚠️ 2026-10-04（交互审的那个 bug）：这里曾经把 `state.docs` 也放进依赖里，而那是**每 5 秒
@@ -798,6 +845,7 @@
       }, [mediaDocs])
 
       const onListKeyDown = React.useCallback((event) => {
+        const navDocs = navDocsOf()
         if (navDocs.length === 0) return
         const index = navDocs.findIndex((doc) => doc.rel === cursor)
         const last = navDocs.length - 1
@@ -830,7 +878,7 @@
           if (fullscreen) setFullscreen(false)
           else closePreview()
         }
-      }, [navDocs, cursor, fullscreen, kind, mediaLayout.columns, openPreview, togglePreview, closePreview, lightboxOpen])
+      }, [cursor, fullscreen, kind, query, state.docs, mediaDocs, visibleDocs, contextView, mediaLayout.columns, openPreview, togglePreview, closePreview, lightboxOpen])
 
       /** 拖拽预览面板上缘改变高度。 */
       const onResizeStart = React.useCallback((event) => {
@@ -1376,6 +1424,7 @@
             onSelect: () => setCursor(doc.rel),
             onPreview: togglePreview,
             src: srcFor(doc),
+            edge: mediaEdge,
             favorite: favoriteSet.has(doc.rel),
             conversation: Boolean(doc.conversation),
             onHoverStart: hoverStart,
@@ -1462,7 +1511,7 @@
             : visibleDocs.length === 0
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
-                ? mediaGrid(mediaDocs)
+                ? mediaGrid(mediaVisibleDocs())
                 : contextView
                   ? contextBody(contextView)
                   : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs)))
@@ -2195,6 +2244,77 @@
       const [commentStatus, setCommentStatus] = React.useState('')
       const commentStageRef = React.useRef(null)
       const commentImgRef = React.useRef(null)
+
+      /* v0.28：媒体首屏分批（新 hook 只能往末尾追加：前面被测试按位预置）。
+         `mediaShown` = 当前挂载上限；0 = 还没算过，用首屏批量的推导值。 */
+      const [mediaShown, setMediaShown] = React.useState(0)
+      const mediaSentinelRef = React.useRef(null)
+
+      /**
+       * 媒体档「当前该挂载的那一份」。**函数**：调用时 `mediaShown` / `mediaDocs` 都已就绪。
+       * 首屏批量按列数估（三行），`mediaShown` > 0 之后就是用户已经滚出来的量。
+       */
+      const mediaVisibleDocs = () => {
+        const all = mediaDocs
+        const first = mediaFirstBatch(mediaLayout.columns)
+        const cap = mediaShown > 0 ? Math.min(all.length, mediaShown) : Math.min(all.length, first)
+        return cap >= all.length ? all : all.slice(0, cap)
+      }
+
+      /* v0.28：查看器的「保存到本地」——
+         · 右键：自己画一个只有一项的菜单（浏览器原生菜单在桌面壳里不可靠，且没有「保存」语义）；
+         · 拖拽：把图拖到桌面 / 文件夹，`DownloadURL` 让系统按一次下载处理。
+         两条都**只读同源字节**，不新增路由、不落任何服务端状态。 */
+      const [shotMenu, setShotMenu] = React.useState(null)
+
+      const openShotMenu = React.useCallback((event) => {
+        if (!lightboxDoc) return
+        if (!event) return
+        if (event.preventDefault) event.preventDefault()
+        if (event.stopPropagation) event.stopPropagation()
+        const x = Number(event.clientX) || 0
+        const y = Number(event.clientY) || 0
+        setShotMenu({ x, y })
+      }, [lightboxDoc])
+
+      const closeShotMenu = React.useCallback(() => setShotMenu(null), [])
+
+      /** 右键菜单：把当前这张图取字节落盘（不依赖浏览器原生「图片另存为」）。 */
+      const saveLightboxImage = React.useCallback(async () => {
+        setShotMenu(null)
+        if (!lightboxDoc) return
+        const name = downloadNameOf(lightboxDoc)
+        try {
+          const res = await fetch(srcFor(lightboxDoc), { credentials: 'same-origin' })
+          if (!res || res.ok === false) throw new Error('fetch')
+          const blob = await res.blob()
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = name
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* 忽略 */ } }, 10000)
+        } catch {
+          setNotice(t('lightbox.saveFailed'))
+        }
+      }, [lightboxDoc, srcFor, setNotice, t])
+
+      /** 拖拽：把 `DownloadURL` 写进 dataTransfer，系统会按文件名与 MIME 落盘。 */
+      const onLightboxDragStart = React.useCallback((event) => {
+        if (!lightboxDoc || !event) return
+        const dt = event.dataTransfer
+        if (!dt) return
+        const name = downloadNameOf(lightboxDoc)
+        const src = srcFor(lightboxDoc)
+        try {
+          dt.effectAllowed = 'copy'
+          dt.setData('DownloadURL', downloadUrlFor(src, name, typeof window !== 'undefined' ? window.location && window.location.origin : ''))
+          const abs = /^https?:/i.test(src) ? src : `${(typeof window !== 'undefined' && window.location && window.location.origin) || ''}${src}`
+          dt.setData('text/uri-list', abs)
+        } catch { /* 某些宿主禁止写自定义类型：不影响右键保存 */ }
+      }, [lightboxDoc, srcFor])
       const commentAnchor = lightboxDoc ? anchorIdFor(lightboxDoc) : ''
       const commentList = commentsFor(commentsByAnchor, commentAnchor)
 
@@ -2430,18 +2550,10 @@
             'aria-label': t('lightbox.aria', { name: lightboxDoc.name || lightboxDoc.rel }),
             tabIndex: 0,
             ref: lightboxRef,
-            onClick: lightboxClose,
-            /* 面板画布：滚轮在**画布任意位置**都能换图（评论栏除外，那里要滚评论列表）。
-               整屏仍只在图片区接管滚轮（左列要滚缩略图）。 */
-            onWheel: lightboxDock
-              ? (event) => {
-                  const target = event && event.target
-                  if (target && typeof target.closest === 'function' && target.closest('.knit-lightbox-comments')) return
-                  const delta = event && (event.deltaY || event.deltaX)
-                  if (!delta) return
-                  lightboxStep(delta > 0 ? 1 : -1)
-                }
-              : undefined,
+            /* 菜单开着时，点空白只收菜单 —— 不然「想关菜单」会连查看器一起关掉。 */
+            onClick: () => { if (shotMenu) { setShotMenu(null); return } lightboxClose() },
+            /* v0.28：**不再用滚轮翻页**（用户 2026-11-20：一次滑动会连翻好几张，
+               而且和图片自身的滚动混在一起）。翻页只走显式的上一张 / 下一张按钮、左列缩略图、方向键。 */
           },
             lightboxDock
               ? h('div', { className: 'knit-lightbox-dockhead' },
@@ -2468,6 +2580,28 @@
               'data-thumb-index': lightboxRailView.start + i,
               onClick: () => setLightboxRel(doc.rel),
             }, h('img', { src: srcFor(doc), alt: '', draggable: false })))),
+            /* v0.28：右键菜单（保存到本地）。坐标夹在视口内，避免贴边被裁。 */
+            shotMenu
+              ? (() => {
+                  const vw = typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1024
+                  const vh = typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768
+                  const left = Math.max(8, Math.min(shotMenu.x, vw - 170))
+                  const top = Math.max(8, Math.min(shotMenu.y, vh - 52))
+                  return h('div', {
+                    className: 'knit-lightbox-menu',
+                    role: 'menu',
+                    style: { left: `${left}px`, top: `${top}px` },
+                    onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+                    onContextMenu: (event) => { if (event && event.preventDefault) event.preventDefault() },
+                  }, h('button', {
+                    className: 'knit-lightbox-menu-item',
+                    type: 'button',
+                    role: 'menuitem',
+                    'data-knit-save-local': '1',
+                    onClick: saveLightboxImage,
+                  }, t('lightbox.saveLocal')))
+                })()
+              : null,
             /* 查看器工具条：「收藏」「本地打开」原来只活在**被撤掉的**媒体预览头里 ——
                不搬过来就等于静默丢掉两个功能（用户 2026-10-21 明确要过「收藏排第一」）。
                收藏只对工作区文件有意义（对话里的图还没有路径），所以对话图不显示这一条。 */
@@ -2559,6 +2693,34 @@
                     },
                   }, t('lightbox.canvas.back'))
                 : null),
+            /* v0.28：整屏的上一张 / 下一张（滚轮删掉之后的显式入口）。
+               停掉冒泡，否则会冒到遮罩上把查看器关掉。 */
+            lightboxDock
+              ? null
+              : h('button', {
+                  className: 'knit-lightbox-nav prev',
+                  type: 'button',
+                  title: t('lightbox.canvas.prev'),
+                  'aria-label': t('lightbox.canvas.prev'),
+                  'data-knit-lightbox-prev': '1',
+                  onClick: (event) => {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    lightboxStep(-1)
+                  },
+                }, '‹'),
+            lightboxDock
+              ? null
+              : h('button', {
+                  className: 'knit-lightbox-nav next',
+                  type: 'button',
+                  title: t('lightbox.canvas.next'),
+                  'aria-label': t('lightbox.canvas.next'),
+                  'data-knit-lightbox-next': '1',
+                  onClick: (event) => {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    lightboxStep(1)
+                  },
+                }, '›'),
             /* 右上角 ✕ —— 照 DSH 自带查看器那套（全屏之后必须有一个**看得见的**出口：
                光靠「点图片以外」和 Esc，第一次用的人不知道往哪点）。 */
             lightboxDock
@@ -2570,8 +2732,7 @@
                   'aria-label': t('lightbox.close'),
                   onClick: () => lightboxClose(),
                 }, '✕'),
-            /* 滚轮翻页：只在**图片这一块**生效。左列自己会滚（它 overflow-y:auto），
-               在它上面滚轮应该滚列表，而不是换图 —— 所以监听挂在 stage 上、不挂在遮罩上。 */
+            /* v0.28：滚轮翻页已删除 —— 一次滑动惯性会连翻好几张，用户明确要求去掉。 */
             h('div', {
               className: 'knit-lightbox-stage',
               ref: commentStageRef,
@@ -2579,18 +2740,16 @@
                  非评论模式：不拦，冒泡到遮罩 = 点图片以外才关的既有语义不变。 */
               onClick: commentOn ? onCommentStageClick : undefined,
               style: commentOn ? { cursor: 'crosshair' } : undefined,
-              onWheel: lightboxDock ? undefined : (event) => {
-                const delta = event && (event.deltaY || event.deltaX)
-                if (!delta) return
-                lightboxStep(delta > 0 ? 1 : -1)
-              },
+              onContextMenu: openShotMenu,
             },
               h('img', {
                 className: 'knit-lightbox-img',
                 ref: commentImgRef,
                 src: srcFor(lightboxDoc),
                 alt: lightboxDoc.name || '',
-                draggable: false,
+                /* v0.28：拖到桌面 / 文件夹即保存（配 `DownloadURL`）。 */
+                draggable: true,
+                onDragStart: onLightboxDragStart,
                 style: commentOn ? { cursor: 'crosshair' } : undefined,
                 onLoad: measureCommentBox,
                 onClick: (event) => {
@@ -2891,9 +3050,12 @@
           // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
           // 所以用 activedescendant 把「当前项」告诉辅助技术。
           // cursor 不在可见列表里时（被过滤/被上限截断）就不指向任何东西。
-          'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
-            ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
-            : undefined,
+          'aria-activedescendant': (() => {
+            const list = navDocsOf()
+            return list.some((doc) => doc.rel === cursor)
+              ? docOptionId(list.find((doc) => doc.rel === cursor))
+              : undefined
+          })(),
         }, listBody())
         /* ── 曾经在这里的一层：双栏装配 ────────────────────────
            `if (!contextView) return listNode` 之后是 `.knit-context-layout`

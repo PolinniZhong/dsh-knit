@@ -828,10 +828,13 @@ test('评论：悬停大图点一下 → 在 **Knit 面板里**打开画布（�
     .props.onClick({ stopPropagation() {} })
   current = render()
   assert.notEqual(imgSrc(), first, '「下一张」能换图')
+  /* v0.28：滚轮翻页已删除 —— 画布上点「下一张」才是唯一的手动翻页入口 */
   const second = imgSrc()
-  lightboxRoot(current).props.onWheel({ deltaY: 120, target: null })
+  assert.equal(lightboxRoot(current).props.onWheel, undefined, '画布上不许再用滚轮翻页')
+  current.find((n) => n && n.props && n.props['data-knit-canvas-next'] === '1')
+    .props.onClick({ stopPropagation() {} })
   current = render()
-  assert.notEqual(imgSrc(), second, '画布上滚轮也能换图（不用只能返回）')
+  assert.notEqual(imgSrc(), second, '点「下一张」仍能换图')
 
   // 面板画布里点图 → 落 pin → 写 → 保存（与整屏共用同一套逻辑）
   clickImage(current, 40, 60)

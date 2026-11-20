@@ -126,6 +126,8 @@ export function loadClientModule(options = {}) {
         // v0.23（方案 A）：`ALL_DOC_CAP` 已随「全部」的类型分区一起删除 ——
         // 这个名单是**只增不减**的重灾区，删功能时也要同步删名字（L1 §8）。
         + 'MIN_RATIO, MAX_RATIO, MEDIA_MAX_ITEMS, MEDIA_TRACK_PX, '
+        + 'MEDIA_BATCH, MEDIA_FIRST_MIN, MEDIA_FIRST_MAX, mediaFirstBatch, mediaNextCount, thumbEdgeFor, THUMB_CACHE_MAX, '
+        + 'downloadNameOf, imageMimeOf, downloadUrlFor, extOf, '
         + 'MEDIA_LABEL_MIN_PX, MEDIA_GAP_PX, '
         // v0.18 Context Usage Lens：纯函数与阈值（渲染层的东西仍走 DOM 断言）。
         + 'LIFE_GLYPH, lifeStatusOf, coverageOf, groupOutsideDocs, groupDelta, '

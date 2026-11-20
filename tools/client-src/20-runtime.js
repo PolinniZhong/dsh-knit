@@ -166,6 +166,116 @@
      * **它不决定列数** —— 列数交给 CSS 的 `auto-fill`，见 mediaLayoutFor。
      */
     const MEDIA_MAX_ITEMS = 8
+    /* ── v0.28：媒体档分批 + 缩略图降采样（实测：40 张原图同屏 = 586 MB 位图）──
+       两层缺一不可：① 首屏只挂一屏量、滚到底追加；② 缩略图降采样后上屏（见 useThumb）。
+       完整取证与数字在 `docs/media-performance.md`。 */
+    /** 一次「加载更多」追加多少张。 */
+    const MEDIA_BATCH = 24
+    /** 首屏最少 / 最多挂几张（列数 × 行数会夹在这个区间里）。 */
+    const MEDIA_FIRST_MIN = 12
+    const MEDIA_FIRST_MAX = 48
+    /** 缩略图缓存条数上限（240 × ≈20 KB ≈ 5 MB，远小于一张原图的位图）。 */
+    const THUMB_CACHE_MAX = 240
+    /** 同时进行的缩略图解码数（>2 会让主线程解码峰值叠起来）。 */
+    const THUMB_CONCURRENCY = 2
+    /** 生成缩略图时按格宽的几倍采样（2× 足够 2x DPR 屏清晰）。 */
+    const THUMB_SCALE = 2
+    const THUMB_EDGE_MIN = 96
+    const THUMB_EDGE_MAX = 320
+
+    /* ── v0.28：查看器「保存到本地」（右键菜单 / 拖到桌面）───────────────
+       没有新路由：仍然只读同源的 `/knit/api/raw` / `/knit/api/attachment`，
+       客户端拿到字节后用 `<a download>` 落盘；拖拽则用 `DownloadURL` 让浏览器/系统
+       自己把它当成一次「下载」。文件名要**带扩展名**，否则系统会存成 `raw`。 */
+    const IMAGE_MIME = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+      webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml', bmp: 'image/bmp',
+    }
+
+    /**
+     * 取文件扩展名（小写，不含点）。**纯函数**。
+     * @param {string} name - 文件名或路径
+     * @returns {string} 扩展名；没有就空串
+     */
+    function extOf(name) {
+      const m = String(name || '').match(/\.([a-z0-9]{1,5})$/i)
+      return m ? m[1].toLowerCase() : ''
+    }
+
+    /**
+     * 图片的 MIME。**纯函数**。
+     * @param {string} name - 文件名
+     * @returns {string} MIME；认不出就 octet-stream
+     */
+    function imageMimeOf(name) {
+      return IMAGE_MIME[extOf(name)] || 'application/octet-stream'
+    }
+
+    /**
+     * 保存时用的文件名：basename + 去掉文件系统非法字符，缺扩展名时补 `.png`。**纯函数**。
+     * @param {{name?:string, rel?:string}} doc - 媒体条目
+     * @returns {string} 可落盘的文件名
+     */
+    function downloadNameOf(doc) {
+      const raw = String((doc && (doc.name || doc.rel)) || '')
+      const base = raw.split(/[\\/]/).pop() || ''
+      const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-').trim()
+      if (!cleaned) return 'knit-image.png'
+      return extOf(cleaned) ? cleaned : `${cleaned}.png`
+    }
+
+    /**
+     * 拖拽用的 `DownloadURL` 值（Chromium 约定 `mime:filename:absoluteUrl`）。**纯函数**。
+     * @param {string} src - 同源相对地址
+     * @param {string} name - 落盘文件名
+     * @param {string} origin - 当前页面 origin
+     * @returns {string} `DownloadURL` 字符串
+     */
+    function downloadUrlFor(src, name, origin) {
+      const rel = String(src || '')
+      const abs = /^https?:/i.test(rel) ? rel : `${origin || ''}${rel}`
+      return `${imageMimeOf(name)}:${name}:${abs}`
+    }
+
+    /**
+     * 首屏该挂多少张媒体。**纯函数**。
+     *
+     * 按「三行 + 一行预取」估：列数 × 3，夹进 `MEDIA_FIRST_MIN…MAX`。
+     * ⚠️ **刻意不读面板高度**：高度那个 state 在 KnitBody 里声明得比使用点晚
+     * （TDZ），而首屏批量必须在 `navDocs` 之前就能算出来（键盘与挂载必须同一份清单）。
+     * 三行已足够覆盖一屏；真正的「按屏精确」由滚动哨兵追加来补。
+     *
+     * @param {number} columns - 当前列数（`mediaLayoutFor().columns`）
+     * @returns {number} 首屏挂载数
+     */
+    function mediaFirstBatch(columns) {
+      const cols = Math.max(1, Math.round(Number(columns) || 1))
+      return Math.max(MEDIA_FIRST_MIN, Math.min(MEDIA_FIRST_MAX, cols * 3))
+    }
+
+    /**
+     * 「加载更多」之后该挂多少张。**纯函数**。
+     * @param {number} current - 当前已挂载数
+     * @param {number} total - 总条目数
+     * @returns {number} 新的挂载数（不超过 total）
+     */
+    function mediaNextCount(current, total) {
+      const have = Math.max(0, Math.round(Number(current) || 0))
+      const all = Math.max(0, Math.round(Number(total) || 0))
+      return Math.min(all, have + MEDIA_BATCH)
+    }
+
+    /**
+     * 缩略图采样边长。**纯函数**。
+     * @param {number} cell - 格子实际边长（px）
+     * @returns {number} 采样边长（px）
+     */
+    function thumbEdgeFor(cell) {
+      const c = Number(cell)
+      const base = Number.isFinite(c) && c > 0 ? c : MEDIA_TRACK_PX
+      return Math.max(THUMB_EDGE_MIN, Math.min(THUMB_EDGE_MAX, Math.round(base * THUMB_SCALE)))
+    }
+
     /**
      * 媒体格子的基准边长（CSS `minmax` 的下限）。
      *

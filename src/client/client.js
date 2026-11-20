@@ -301,6 +301,7 @@ window.__ModuleLoader__.load({
       'list.empty': '这个工作区里还没有 Markdown 文档。',
       'list.emptyCode': '这个工作区里还没有可纳入上下文的代码文件。',
       'list.emptyMedia': '这个工作区里还没有图片或视频。',
+      'media.loadingMore': '继续下滑加载更多',
       'list.emptyChanges': '工作区里没有未提交的改动。',
       'list.changeOnlyOther': '有 {n} 个变更文件，但没有可列出的 Markdown / 代码。',
       'list.changesLoading': '正在读取 Git 变更…',
@@ -373,6 +374,8 @@ window.__ModuleLoader__.load({
       'lightbox.canvas.dockTitle': '回到 Knit 面板里的画布（不盖住会话）',
       'lightbox.canvas.commentHint': '评论',
       'lightbox.canvas.hintTitle': '点击在 Knit 面板里打开画布并评论（不盖住会话）',
+      'lightbox.saveLocal': '保存到本地',
+      'lightbox.saveFailed': '保存失败，请重试。',
       'lightbox.canvas.prev': '上一张',
       'lightbox.canvas.next': '下一张',
       'attach.badge': '对话',
@@ -680,6 +683,7 @@ window.__ModuleLoader__.load({
       'list.empty': 'No Markdown documents in this workspace yet.',
       'list.emptyCode': 'No code files eligible for context in this workspace yet.',
       'list.emptyMedia': 'No images or videos in this workspace yet.',
+      'media.loadingMore': 'Scroll for more',
       'list.emptyChanges': 'No uncommitted changes in this workspace.',
       'list.changeOnlyOther': '{n} changed file(s), but no Markdown / code to list.',
       'list.changesLoading': 'Reading Git changes…',
@@ -750,6 +754,8 @@ window.__ModuleLoader__.load({
       'lightbox.canvas.dockTitle': 'Back to the canvas inside the Knit panel (the conversation stays visible)',
       'lightbox.canvas.commentHint': 'Comment',
       'lightbox.canvas.hintTitle': 'Click to open the canvas in the Knit panel and comment (the conversation stays visible)',
+      'lightbox.saveLocal': 'Save to local',
+      'lightbox.saveFailed': 'Could not save the image. Try again.',
       'lightbox.canvas.prev': 'Previous image',
       'lightbox.canvas.next': 'Next image',
       'attach.badge': 'Chat',
@@ -1058,6 +1064,116 @@ window.__ModuleLoader__.load({
      * **它不决定列数** —— 列数交给 CSS 的 `auto-fill`，见 mediaLayoutFor。
      */
     const MEDIA_MAX_ITEMS = 8
+    /* ── v0.28：媒体档分批 + 缩略图降采样（实测：40 张原图同屏 = 586 MB 位图）──
+       两层缺一不可：① 首屏只挂一屏量、滚到底追加；② 缩略图降采样后上屏（见 useThumb）。
+       完整取证与数字在 `docs/media-performance.md`。 */
+    /** 一次「加载更多」追加多少张。 */
+    const MEDIA_BATCH = 24
+    /** 首屏最少 / 最多挂几张（列数 × 行数会夹在这个区间里）。 */
+    const MEDIA_FIRST_MIN = 12
+    const MEDIA_FIRST_MAX = 48
+    /** 缩略图缓存条数上限（240 × ≈20 KB ≈ 5 MB，远小于一张原图的位图）。 */
+    const THUMB_CACHE_MAX = 240
+    /** 同时进行的缩略图解码数（>2 会让主线程解码峰值叠起来）。 */
+    const THUMB_CONCURRENCY = 2
+    /** 生成缩略图时按格宽的几倍采样（2× 足够 2x DPR 屏清晰）。 */
+    const THUMB_SCALE = 2
+    const THUMB_EDGE_MIN = 96
+    const THUMB_EDGE_MAX = 320
+
+    /* ── v0.28：查看器「保存到本地」（右键菜单 / 拖到桌面）───────────────
+       没有新路由：仍然只读同源的 `/knit/api/raw` / `/knit/api/attachment`，
+       客户端拿到字节后用 `<a download>` 落盘；拖拽则用 `DownloadURL` 让浏览器/系统
+       自己把它当成一次「下载」。文件名要**带扩展名**，否则系统会存成 `raw`。 */
+    const IMAGE_MIME = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+      webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml', bmp: 'image/bmp',
+    }
+
+    /**
+     * 取文件扩展名（小写，不含点）。**纯函数**。
+     * @param {string} name - 文件名或路径
+     * @returns {string} 扩展名；没有就空串
+     */
+    function extOf(name) {
+      const m = String(name || '').match(/\.([a-z0-9]{1,5})$/i)
+      return m ? m[1].toLowerCase() : ''
+    }
+
+    /**
+     * 图片的 MIME。**纯函数**。
+     * @param {string} name - 文件名
+     * @returns {string} MIME；认不出就 octet-stream
+     */
+    function imageMimeOf(name) {
+      return IMAGE_MIME[extOf(name)] || 'application/octet-stream'
+    }
+
+    /**
+     * 保存时用的文件名：basename + 去掉文件系统非法字符，缺扩展名时补 `.png`。**纯函数**。
+     * @param {{name?:string, rel?:string}} doc - 媒体条目
+     * @returns {string} 可落盘的文件名
+     */
+    function downloadNameOf(doc) {
+      const raw = String((doc && (doc.name || doc.rel)) || '')
+      const base = raw.split(/[\\/]/).pop() || ''
+      const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-').trim()
+      if (!cleaned) return 'knit-image.png'
+      return extOf(cleaned) ? cleaned : `${cleaned}.png`
+    }
+
+    /**
+     * 拖拽用的 `DownloadURL` 值（Chromium 约定 `mime:filename:absoluteUrl`）。**纯函数**。
+     * @param {string} src - 同源相对地址
+     * @param {string} name - 落盘文件名
+     * @param {string} origin - 当前页面 origin
+     * @returns {string} `DownloadURL` 字符串
+     */
+    function downloadUrlFor(src, name, origin) {
+      const rel = String(src || '')
+      const abs = /^https?:/i.test(rel) ? rel : `${origin || ''}${rel}`
+      return `${imageMimeOf(name)}:${name}:${abs}`
+    }
+
+    /**
+     * 首屏该挂多少张媒体。**纯函数**。
+     *
+     * 按「三行 + 一行预取」估：列数 × 3，夹进 `MEDIA_FIRST_MIN…MAX`。
+     * ⚠️ **刻意不读面板高度**：高度那个 state 在 KnitBody 里声明得比使用点晚
+     * （TDZ），而首屏批量必须在 `navDocs` 之前就能算出来（键盘与挂载必须同一份清单）。
+     * 三行已足够覆盖一屏；真正的「按屏精确」由滚动哨兵追加来补。
+     *
+     * @param {number} columns - 当前列数（`mediaLayoutFor().columns`）
+     * @returns {number} 首屏挂载数
+     */
+    function mediaFirstBatch(columns) {
+      const cols = Math.max(1, Math.round(Number(columns) || 1))
+      return Math.max(MEDIA_FIRST_MIN, Math.min(MEDIA_FIRST_MAX, cols * 3))
+    }
+
+    /**
+     * 「加载更多」之后该挂多少张。**纯函数**。
+     * @param {number} current - 当前已挂载数
+     * @param {number} total - 总条目数
+     * @returns {number} 新的挂载数（不超过 total）
+     */
+    function mediaNextCount(current, total) {
+      const have = Math.max(0, Math.round(Number(current) || 0))
+      const all = Math.max(0, Math.round(Number(total) || 0))
+      return Math.min(all, have + MEDIA_BATCH)
+    }
+
+    /**
+     * 缩略图采样边长。**纯函数**。
+     * @param {number} cell - 格子实际边长（px）
+     * @returns {number} 采样边长（px）
+     */
+    function thumbEdgeFor(cell) {
+      const c = Number(cell)
+      const base = Number.isFinite(c) && c > 0 ? c : MEDIA_TRACK_PX
+      return Math.max(THUMB_EDGE_MIN, Math.min(THUMB_EDGE_MAX, Math.round(base * THUMB_SCALE)))
+    }
+
     /**
      * 媒体格子的基准边长（CSS `minmax` 的下限）。
      *
@@ -2571,8 +2687,8 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
 .knit-shot:hover .knit-shot-hint{opacity:1}
 /* v0.25 媒体档「双击全屏」：整窗遮罩 + 毛玻璃。层级在悬停浮窗（60）与菜单之上。
    左侧留 96px 给缩略图带（它绝对定位在遮罩里）；图片按 contain 铺满剩下的区域。 */
-.knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
-  padding:32px 32px 32px 96px;outline:none;cursor:zoom-out;
+.knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:stretch;justify-content:center;
+  padding:32px 32px 32px 96px;outline:none;cursor:zoom-out;overflow:hidden;box-sizing:border-box;
   /* ⚠️ 遮罩的 α 是**人眼定的**（与 box-shadow 同一性质，推不出来）；两套值**必须不同**，
      否则「随深色模式变化」就是假话（有守卫）。
      ⚠️ 这两个变量故意**挂在查看器自己身上** —— 它被 portal 到 document.body 之后
@@ -2584,10 +2700,27 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
   background:var(--knit-scrim);backdrop-filter:blur(22px) saturate(1.1);
   -webkit-backdrop-filter:blur(22px) saturate(1.1)}
 body[data-ds-dark-theme] .knit-lightbox{--knit-scrim:rgba(18,18,20,.72)}
-.knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;
+.knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;height:100%;display:flex;align-items:center;
   justify-content:center;cursor:default;position:relative}
-.knit-lightbox-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;cursor:default;
+.knit-lightbox-img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:10px;cursor:default;
   box-shadow:0 24px 64px rgba(0,0,0,.36);background:var(--dsw-alias-bg-base,#fff)}
+/* v0.28：查看器右键菜单（保存到本地）。浮在遮罩之上，坐标用 clientX/Y。 */
+.knit-lightbox-menu{position:fixed;z-index:2147483001;min-width:150px;padding:4px;border-radius:10px;
+  background:var(--dsw-alias-bg-base,#fff);border:.5px solid var(--dsw-alias-border-l3,transparent);
+  box-shadow:0 10px 28px rgba(0,0,0,.22);cursor:default}
+.knit-lightbox-menu-item{display:block;width:100%;padding:7px 10px;border:0;border-radius:6px;
+  background:transparent;color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:12px;
+  line-height:1.4;text-align:left;cursor:pointer}
+.knit-lightbox-menu-item:hover{background:var(--knit-hover-bg,var(--dsw-alias-interactive-bg-hover))}
+/* v0.28：整屏的上一张 / 下一张。滚轮翻页已删除（一次滑动会连翻好几张），
+   改成**显式点按**。左列缩略图带占 96px，所以 prev 让到它右边。 */
+.knit-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;
+  width:40px;height:40px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-family:inherit;font-size:22px;line-height:1;cursor:pointer;
+  color:var(--dsw-alias-label-primary,#0f1115);background:var(--knit-hover-bg,transparent);opacity:.72}
+.knit-lightbox-nav:hover{opacity:1;background:var(--knit-active-bg,var(--dsw-alias-interactive-bg-active))}
+.knit-lightbox-nav.prev{left:104px}
+.knit-lightbox-nav.next{right:22px}
 .knit-lightbox-tools{position:absolute;top:18px;right:62px;z-index:2;display:flex;align-items:center;gap:6px}
 .knit-lightbox-close{position:absolute;top:18px;right:18px;z-index:2;width:34px;height:34px;padding:0;
   display:flex;align-items:center;justify-content:center;border:0;border-radius:10px;
@@ -2953,6 +3086,11 @@ mark.knit-find-current{background:var(--knit-chip-bg)}
 /* 正在预览 → 品牌色描边（排在 cursor 之后，确保同时命中时以「选中」为准） */
 .knit-media-card.active .knit-media-thumbbox{
   border-color:var(--knit-accent);box-shadow:0 0 0 1.5px var(--knit-accent)}
+/* v0.28：小图还没生成时的占位（骨架）。用中性灰阶，不用品牌色 —— 它是等待，不是状态。 */
+.knit-thumb-pending{background:var(--knit-active-bg,var(--dsw-alias-interactive-bg-active))}
+/* 分批次加载的哨兵：细一行提示，滚到这里就自动追加下一批。 */
+.knit-media-more{grid-column:1 / -1;display:flex;align-items:center;justify-content:center;
+  min-height:36px;font-size:11px;color:var(--dsw-alias-label-caption,#80868b)}
 /* 格子窄到 96px 以下时，文件名与时间会挤成一团 —— 整块让位给缩略图（mediaLayoutFor 的 scaled） */
 .knit-media-meta{margin-top:5px;display:var(--knit-media-label,block)}
 .knit-media-name{display:flex;align-items:center;gap:3px;font-size:11.5px;line-height:1.3;
@@ -4292,6 +4430,138 @@ video.knit-preview-media{width:100%;background:#000}
             : null) : null))
     }
 
+    /* ── v0.28：缩略图降采样缓存（原图当 104px 用 = 586 MB 位图，见 docs/media-performance.md）──
+       解码时缩到格宽 ×2 → JPEG blob，限并发 2，按 src 进有界 LRU；失败/老内核回落原图。 */
+    const THUMB_CACHE = new Map()
+    const THUMB_JOBS = []
+    let THUMB_ACTIVE = 0
+
+    /** 当前内核能不能在解码时就降采样。 */
+    function thumbCanDownscale() {
+      return typeof createImageBitmap === 'function'
+        && typeof document !== 'undefined' && typeof document.createElement === 'function'
+    }
+
+    /** 取缓存的小图地址（没有就空串）。 */
+    function thumbCacheGet(src) {
+      const hit = THUMB_CACHE.get(String(src || ''))
+      return hit || ''
+    }
+
+    /** 写缓存；超过上限就把最老的一条连同它的 blob 一起释放。 */
+    function thumbCachePut(src, url) {
+      if (!url) return
+      const key = String(src || '')
+      const old = THUMB_CACHE.get(key)
+      if (old && old !== url) { try { URL.revokeObjectURL(old) } catch { /* 无所谓 */ } }
+      THUMB_CACHE.set(key, url)
+      while (THUMB_CACHE.size > THUMB_CACHE_MAX) {
+        const first = THUMB_CACHE.keys().next()
+        if (first.done) break
+        const stale = THUMB_CACHE.get(first.value)
+        THUMB_CACHE.delete(first.value)
+        if (stale) { try { URL.revokeObjectURL(stale) } catch { /* 无所谓 */ } }
+      }
+    }
+
+    /**
+     * 读一次原图字节 → 解码时就缩到 `edge` 宽 → 画成 canvas → 输出 JPEG blob URL。
+     * 全程同源、本机；失败一律回空串（上层回落成原图）。
+     */
+    async function decodeThumb(src, edge) {
+      try {
+        const res = await fetch(src, { credentials: 'same-origin' })
+        if (!res || res.ok === false) return ''
+        const blob = await res.blob()
+        if (!blob || !Number(blob.size)) return ''
+        let bmp = null
+        try {
+          bmp = await createImageBitmap(blob, { resizeWidth: edge, resizeQuality: 'low' })
+        } catch {
+          bmp = await createImageBitmap(blob)
+        }
+        if (!bmp) return ''
+        const w = Math.max(1, bmp.width)
+        const h = Math.max(1, bmp.height)
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { if (bmp.close) bmp.close(); return '' }
+        ctx.drawImage(bmp, 0, 0, w, h)
+        if (bmp.close) bmp.close()
+        const out = await new Promise((resolve) => {
+          try { canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.72) } catch { resolve(null) }
+        })
+        if (!out) return ''
+        return URL.createObjectURL(out)
+      } catch { return '' }
+    }
+
+    /** 队列泵：始终最多 `THUMB_CONCURRENCY` 个解码在跑。 */
+    function pumpThumbs() {
+      while (THUMB_ACTIVE < THUMB_CONCURRENCY && THUMB_JOBS.length > 0) {
+        const job = THUMB_JOBS.shift()
+        THUMB_ACTIVE += 1
+        decodeThumb(job.src, job.edge)
+          .then((url) => { if (url) thumbCachePut(job.src, url); job.done(url) })
+          .catch(() => job.done(''))
+          .finally(() => { THUMB_ACTIVE -= 1; pumpThumbs() })
+      }
+    }
+
+    /**
+     * 申请一格的小图：缓存命中立刻回调，否则排队；返回取消函数。
+     */
+    function requestThumb(src, edge, done) {
+      const key = String(src || '')
+      const cached = thumbCacheGet(key)
+      if (cached) { done(cached); return () => {} }
+      let alive = true
+      THUMB_JOBS.push({ src: key, edge, done: (url) => { if (alive) done(url) } })
+      pumpThumbs()
+      return () => { alive = false }
+    }
+
+    /**
+     * 一格媒体的小图状态：`{ url, settled }`。
+     * `settled` 很重要 —— 生成失败时不能一直停在骨架屏上：
+     * 失败即回落成原图（`src`），宁可慢一点，也不能永远白着。
+     */
+    function useThumb(src, edge) {
+      const cached = thumbCacheGet(src)
+      const [state, setState] = React.useState(() => ({ url: cached, settled: Boolean(cached) }))
+      React.useEffect(() => {
+        const hit = thumbCacheGet(src)
+        setState({ url: hit, settled: Boolean(hit) })
+        if (hit || !src || !thumbCanDownscale()) return undefined
+        return requestThumb(src, edge, (next) => setState({ url: next || thumbCacheGet(src), settled: true }))
+      }, [src, edge])
+      return state
+    }
+
+    /**
+     * 元素进入视口附近才置真（视频首帧只在看得见时取）。
+     * 没有 `IntersectionObserver`（老内核 / 测试替身）⇒ 直接返回 true，行为与本版之前一致。
+     */
+    function useNearViewport(ref, enabled = true) {
+      const [near, setNear] = React.useState(() => typeof IntersectionObserver !== 'function')
+      React.useEffect(() => {
+        if (!enabled) return undefined
+        if (typeof IntersectionObserver !== 'function') { setNear(true); return undefined }
+        const node = ref.current
+        if (!node) { setNear(true); return undefined }
+        const io = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (entry && entry.isIntersecting) { setNear(true); io.disconnect() }
+          }
+        }, { rootMargin: '240px' })
+        io.observe(node)
+        return () => { try { io.disconnect() } catch { /* 忽略 */ } }
+      }, [enabled])
+      return near
+    }
+
     /**
      * 视频缩略图。
      *
@@ -4307,8 +4577,12 @@ video.knit-preview-media{width:100%;background:#000}
      */
     function VideoThumb({ src }) {
       const [duration, setDuration] = React.useState(null)
-      return h('div', { className: 'knit-thumb' },
-        h('video', {
+      const boxRef = React.useRef(null)
+      /* v0.28：**看得见才挂 `<video>`**。每张视频缩略图都要一条 Range 请求取首帧，
+         一屏 40 个播放器同时建元素会把媒体管线压满（真机滚动卡顿的主要来源之一）。 */
+      const near = useNearViewport(boxRef, true)
+      return h('div', { className: 'knit-thumb', ref: boxRef },
+        near ? h('video', {
           preload: 'metadata',
           muted: true,
           playsInline: true,
@@ -4317,7 +4591,7 @@ video.knit-preview-media{width:100%;background:#000}
             const v = event && event.target
             if (v && Number.isFinite(v.duration) && v.duration > 0) setDuration(v.duration)
           },
-        }),
+        }) : null,
         h('span', { className: 'knit-thumb-play', 'aria-hidden': true },
           h('svg', { viewBox: '0 0 24 24', focusable: false },
             h('path', { d: 'M8 5v14l11-7z' }))),
@@ -4329,10 +4603,18 @@ video.knit-preview-media{width:100%;background:#000}
      * @param {{doc:object,src:string}} props - 条目与字节地址
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaThumb({ doc, src }) {
+    function MediaThumb({ doc, src, edge }) {
       if (doc.kind === 'video') return h(VideoThumb, { src })
+      const thumb = useThumb(src, edge)
+      const canScale = thumbCanDownscale()
+      /* 小图还没生成时**不挂原图** —— 挂它等于把 15 MB 的位图解出来两次
+         （一次为了缩略图、一次为了显示），那正是要治的那个峰值。
+         老内核不能降采样、或者这一张**生成失败** ⇒ 回落原图，宁可慢也不白屏。 */
+      if (!thumb.url && canScale && !thumb.settled) {
+        return h('div', { className: 'knit-thumb knit-thumb-pending', 'aria-hidden': 'true' })
+      }
       return h('div', { className: 'knit-thumb' },
-        h('img', { loading: 'lazy', src, alt: doc.name || '', draggable: false }))
+        h('img', { loading: 'lazy', decoding: 'async', src: thumb.url || src, alt: doc.name || '', draggable: false }))
     }
 
     /**
@@ -4340,7 +4622,7 @@ video.knit-preview-media{width:100%;background:#000}
      * @param {object} props - 与 DocRow 同构，外加 src
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab, onZoom, onPreview, optionId, favorite, conversation, onHoverStart, onHoverEnd }) {
+    function MediaCard({ doc, now, active, cursor, src, edge, onSelect, onOpenTab, onZoom, onPreview, optionId, favorite, conversation, onHoverStart, onHoverEnd }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       return h('div', {
         className: `knit-media-card${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
@@ -4364,7 +4646,7 @@ video.knit-preview-media{width:100%;background:#000}
         onMouseEnter: onHoverStart ? (event) => onHoverStart(doc, src, event) : undefined,
         onMouseLeave: onHoverEnd || undefined,
       },
-      h('div', { className: 'knit-media-thumbbox' }, h(MediaThumb, { doc, src })),
+      h('div', { className: 'knit-media-thumbbox' }, h(MediaThumb, { doc, src, edge })),
       h('div', { className: 'knit-media-meta' },
         h('div', { className: 'knit-media-name', title: doc.name },
           // v0.25：对话里生成的图带一个「对话」标记 —— 它解释两件事：这张还没存进项目、
@@ -5804,6 +6086,10 @@ video.knit-preview-media{width:100%;background:#000}
       // 于是这里也不再需要 `listWidth − LIST_PAD_X` 这个量 —— 只有媒体网格要宽度。
       const mediaLayout = mediaLayoutFor(Math.max(0, listWidth - LIST_PAD_X - MEDIA_GRID_PAD_X))
 
+      /* v0.28：缩略图采样边长（只依赖列宽，没有 TDZ）。
+         真正的「挂多少张」在 `navDocsOf()` 里算 —— 那个要读末尾声明的 `mediaShown`。 */
+      const mediaEdge = thumbEdgeFor(mediaLayout.cell)
+
       /** 媒体网格：列数由 CSS 的 auto-fill 自己数；JS 只下发「一格多宽」用于正方形兜底。
        *  **不设 maxHeight** —— 有多少行就铺多少行，纵向滚动统一交给 `.knit-list`。 */
       // v0.23：`inSection` 参数随「全部」的类型分区一起删除 —— 媒体网格只有一种形态
@@ -5815,7 +6101,13 @@ video.knit-preview-media{width:100%;background:#000}
           '--knit-media-cell': `${mediaLayout.cell}px`,
           ...(mediaLayout.scaled ? { '--knit-media-label': 'none' } : {}),
         },
-      }, docs.map(renderEntry))
+      }, docs.map(renderEntry),
+      // 滚到底的哨兵：IntersectionObserver 命中就追加一批
+      // （`mediaShown` 声明在末尾，所以这里只能**函数内**判断，不能在渲染期读常量）
+      mediaVisibleDocs().length < mediaDocs.length
+        ? h('div', { key: 'knit-media-more', className: 'knit-media-more', 'data-knit-media-more': '1', ref: mediaSentinelRef },
+            h('span', { className: 'knit-media-more-text' }, t('media.loadingMore')))
+        : null)
 
       /**
        * 渲染一组文档行：**没有容器、没有列数**（2026-09-29 起）。
@@ -6029,16 +6321,53 @@ video.knit-preview-media{width:100%;background:#000}
         const merged = (Array.isArray(visibleDocs) ? visibleDocs : []).concat(attachmentDocs)
         return orderFavorites(merged.slice().sort(byTimeDesc), favoriteSet)
       }, [visibleDocs, favoriteSet, attachmentDocs])
-      const navDocs = kind === KIND_CHANGES ? visibleDocs : (kind === KIND_MEDIA && !contextView ? mediaDocs : (contextView ? contextView.flat : visibleDocs))
+      /* v0.28：**函数**而不是常量 —— 媒体档要读「当前挂载到第几张」（`mediaShown`），
+         而那个 state 声明在函数末尾（新 hook 只能往后追加，不能插队）。
+         这里改成惰性求值：渲染期与事件/effect 里调用它时，末尾那些声明早已初始化。 */
+      const navDocsOf = () => {
+        if (kind === KIND_CHANGES) return visibleDocs
+        if (kind === KIND_MEDIA && !contextView) return mediaVisibleDocs()
+        return contextView ? contextView.flat : visibleDocs
+      }
 
       // cursor 消失（被过滤掉 / 被上限截断 / 列表刷新）时落回第一项
       React.useEffect(() => {
-        if (navDocs.length === 0) {
+        const list = navDocsOf()
+        if (list.length === 0) {
           if (cursor !== '') setCursor('')
           return
         }
-        if (!navDocs.some((doc) => doc.rel === cursor)) setCursor(navDocs[0].rel)
-      }, [navDocs, cursor])
+        if (!list.some((doc) => doc.rel === cursor)) setCursor(list[0].rel)
+        // 依赖里**不放** navDocsOf（每次渲染都是新函数）；用它的输入量代替。
+      }, [kind, query, cursor, state.docs, mediaDocs, visibleDocs, contextView])
+
+      /* v0.28：换档 / 换搜索词 / 条目批次变化 ⇒ 回到首屏批量。
+         （只按 kind+query 重置：5 秒轮询拿到的新数组不该把用户已经滚出来的量收回去。） */
+      React.useEffect(() => {
+        setMediaShown((prev) => (prev === 0 ? prev : 0))
+      }, [kind, query])
+
+      /* v0.28：哨兵进视口就追加一批。没有 `IntersectionObserver` 时**保持原样**
+         （只挂首屏那批；用户可以用键盘 / 搜索到达更多），绝不假装加载过。 */
+      React.useEffect(() => {
+        if (mediaDocs.length <= mediaFirstBatch(mediaLayout.columns)) return undefined
+        if (typeof IntersectionObserver !== 'function') return undefined
+        const node = mediaSentinelRef.current
+        const root = listRef.current
+        if (!node) return undefined
+        const io = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry || !entry.isIntersecting) continue
+            setMediaShown((prev) => {
+              const all = mediaDocs.length
+              const base = prev > 0 ? prev : mediaFirstBatch(mediaLayout.columns)
+              return mediaNextCount(Math.min(base, all), all)
+            })
+          }
+        }, { root: root || null, rootMargin: '320px' })
+        io.observe(node)
+        return () => { try { io.disconnect() } catch { /* 忽略 */ } }
+      }, [mediaDocs.length, mediaLayout.columns])
 
       /* 键盘焦点跟手滚进视口（测试环境没有 DOM，静默跳过）。
          ⚠️ 2026-10-04（交互审的那个 bug）：这里曾经把 `state.docs` 也放进依赖里，而那是**每 5 秒
@@ -6257,6 +6586,7 @@ video.knit-preview-media{width:100%;background:#000}
       }, [mediaDocs])
 
       const onListKeyDown = React.useCallback((event) => {
+        const navDocs = navDocsOf()
         if (navDocs.length === 0) return
         const index = navDocs.findIndex((doc) => doc.rel === cursor)
         const last = navDocs.length - 1
@@ -6289,7 +6619,7 @@ video.knit-preview-media{width:100%;background:#000}
           if (fullscreen) setFullscreen(false)
           else closePreview()
         }
-      }, [navDocs, cursor, fullscreen, kind, mediaLayout.columns, openPreview, togglePreview, closePreview, lightboxOpen])
+      }, [cursor, fullscreen, kind, query, state.docs, mediaDocs, visibleDocs, contextView, mediaLayout.columns, openPreview, togglePreview, closePreview, lightboxOpen])
 
       /** 拖拽预览面板上缘改变高度。 */
       const onResizeStart = React.useCallback((event) => {
@@ -6835,6 +7165,7 @@ video.knit-preview-media{width:100%;background:#000}
             onSelect: () => setCursor(doc.rel),
             onPreview: togglePreview,
             src: srcFor(doc),
+            edge: mediaEdge,
             favorite: favoriteSet.has(doc.rel),
             conversation: Boolean(doc.conversation),
             onHoverStart: hoverStart,
@@ -6921,7 +7252,7 @@ video.knit-preview-media{width:100%;background:#000}
             : visibleDocs.length === 0
               ? h('div', { className: 'knit-msg' }, t('list.noMatch', { query: query.trim() }))
               : kind === KIND_MEDIA
-                ? mediaGrid(mediaDocs)
+                ? mediaGrid(mediaVisibleDocs())
                 : contextView
                   ? contextBody(contextView)
                   : docsGrid(withGhosts(MOTION_TIER_FLAT, visibleDocs)))
@@ -7654,6 +7985,77 @@ video.knit-preview-media{width:100%;background:#000}
       const [commentStatus, setCommentStatus] = React.useState('')
       const commentStageRef = React.useRef(null)
       const commentImgRef = React.useRef(null)
+
+      /* v0.28：媒体首屏分批（新 hook 只能往末尾追加：前面被测试按位预置）。
+         `mediaShown` = 当前挂载上限；0 = 还没算过，用首屏批量的推导值。 */
+      const [mediaShown, setMediaShown] = React.useState(0)
+      const mediaSentinelRef = React.useRef(null)
+
+      /**
+       * 媒体档「当前该挂载的那一份」。**函数**：调用时 `mediaShown` / `mediaDocs` 都已就绪。
+       * 首屏批量按列数估（三行），`mediaShown` > 0 之后就是用户已经滚出来的量。
+       */
+      const mediaVisibleDocs = () => {
+        const all = mediaDocs
+        const first = mediaFirstBatch(mediaLayout.columns)
+        const cap = mediaShown > 0 ? Math.min(all.length, mediaShown) : Math.min(all.length, first)
+        return cap >= all.length ? all : all.slice(0, cap)
+      }
+
+      /* v0.28：查看器的「保存到本地」——
+         · 右键：自己画一个只有一项的菜单（浏览器原生菜单在桌面壳里不可靠，且没有「保存」语义）；
+         · 拖拽：把图拖到桌面 / 文件夹，`DownloadURL` 让系统按一次下载处理。
+         两条都**只读同源字节**，不新增路由、不落任何服务端状态。 */
+      const [shotMenu, setShotMenu] = React.useState(null)
+
+      const openShotMenu = React.useCallback((event) => {
+        if (!lightboxDoc) return
+        if (!event) return
+        if (event.preventDefault) event.preventDefault()
+        if (event.stopPropagation) event.stopPropagation()
+        const x = Number(event.clientX) || 0
+        const y = Number(event.clientY) || 0
+        setShotMenu({ x, y })
+      }, [lightboxDoc])
+
+      const closeShotMenu = React.useCallback(() => setShotMenu(null), [])
+
+      /** 右键菜单：把当前这张图取字节落盘（不依赖浏览器原生「图片另存为」）。 */
+      const saveLightboxImage = React.useCallback(async () => {
+        setShotMenu(null)
+        if (!lightboxDoc) return
+        const name = downloadNameOf(lightboxDoc)
+        try {
+          const res = await fetch(srcFor(lightboxDoc), { credentials: 'same-origin' })
+          if (!res || res.ok === false) throw new Error('fetch')
+          const blob = await res.blob()
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = name
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* 忽略 */ } }, 10000)
+        } catch {
+          setNotice(t('lightbox.saveFailed'))
+        }
+      }, [lightboxDoc, srcFor, setNotice, t])
+
+      /** 拖拽：把 `DownloadURL` 写进 dataTransfer，系统会按文件名与 MIME 落盘。 */
+      const onLightboxDragStart = React.useCallback((event) => {
+        if (!lightboxDoc || !event) return
+        const dt = event.dataTransfer
+        if (!dt) return
+        const name = downloadNameOf(lightboxDoc)
+        const src = srcFor(lightboxDoc)
+        try {
+          dt.effectAllowed = 'copy'
+          dt.setData('DownloadURL', downloadUrlFor(src, name, typeof window !== 'undefined' ? window.location && window.location.origin : ''))
+          const abs = /^https?:/i.test(src) ? src : `${(typeof window !== 'undefined' && window.location && window.location.origin) || ''}${src}`
+          dt.setData('text/uri-list', abs)
+        } catch { /* 某些宿主禁止写自定义类型：不影响右键保存 */ }
+      }, [lightboxDoc, srcFor])
       const commentAnchor = lightboxDoc ? anchorIdFor(lightboxDoc) : ''
       const commentList = commentsFor(commentsByAnchor, commentAnchor)
 
@@ -7889,18 +8291,10 @@ video.knit-preview-media{width:100%;background:#000}
             'aria-label': t('lightbox.aria', { name: lightboxDoc.name || lightboxDoc.rel }),
             tabIndex: 0,
             ref: lightboxRef,
-            onClick: lightboxClose,
-            /* 面板画布：滚轮在**画布任意位置**都能换图（评论栏除外，那里要滚评论列表）。
-               整屏仍只在图片区接管滚轮（左列要滚缩略图）。 */
-            onWheel: lightboxDock
-              ? (event) => {
-                  const target = event && event.target
-                  if (target && typeof target.closest === 'function' && target.closest('.knit-lightbox-comments')) return
-                  const delta = event && (event.deltaY || event.deltaX)
-                  if (!delta) return
-                  lightboxStep(delta > 0 ? 1 : -1)
-                }
-              : undefined,
+            /* 菜单开着时，点空白只收菜单 —— 不然「想关菜单」会连查看器一起关掉。 */
+            onClick: () => { if (shotMenu) { setShotMenu(null); return } lightboxClose() },
+            /* v0.28：**不再用滚轮翻页**（用户 2026-11-20：一次滑动会连翻好几张，
+               而且和图片自身的滚动混在一起）。翻页只走显式的上一张 / 下一张按钮、左列缩略图、方向键。 */
           },
             lightboxDock
               ? h('div', { className: 'knit-lightbox-dockhead' },
@@ -7927,6 +8321,28 @@ video.knit-preview-media{width:100%;background:#000}
               'data-thumb-index': lightboxRailView.start + i,
               onClick: () => setLightboxRel(doc.rel),
             }, h('img', { src: srcFor(doc), alt: '', draggable: false })))),
+            /* v0.28：右键菜单（保存到本地）。坐标夹在视口内，避免贴边被裁。 */
+            shotMenu
+              ? (() => {
+                  const vw = typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1024
+                  const vh = typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768
+                  const left = Math.max(8, Math.min(shotMenu.x, vw - 170))
+                  const top = Math.max(8, Math.min(shotMenu.y, vh - 52))
+                  return h('div', {
+                    className: 'knit-lightbox-menu',
+                    role: 'menu',
+                    style: { left: `${left}px`, top: `${top}px` },
+                    onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation() },
+                    onContextMenu: (event) => { if (event && event.preventDefault) event.preventDefault() },
+                  }, h('button', {
+                    className: 'knit-lightbox-menu-item',
+                    type: 'button',
+                    role: 'menuitem',
+                    'data-knit-save-local': '1',
+                    onClick: saveLightboxImage,
+                  }, t('lightbox.saveLocal')))
+                })()
+              : null,
             /* 查看器工具条：「收藏」「本地打开」原来只活在**被撤掉的**媒体预览头里 ——
                不搬过来就等于静默丢掉两个功能（用户 2026-10-21 明确要过「收藏排第一」）。
                收藏只对工作区文件有意义（对话里的图还没有路径），所以对话图不显示这一条。 */
@@ -8018,6 +8434,34 @@ video.knit-preview-media{width:100%;background:#000}
                     },
                   }, t('lightbox.canvas.back'))
                 : null),
+            /* v0.28：整屏的上一张 / 下一张（滚轮删掉之后的显式入口）。
+               停掉冒泡，否则会冒到遮罩上把查看器关掉。 */
+            lightboxDock
+              ? null
+              : h('button', {
+                  className: 'knit-lightbox-nav prev',
+                  type: 'button',
+                  title: t('lightbox.canvas.prev'),
+                  'aria-label': t('lightbox.canvas.prev'),
+                  'data-knit-lightbox-prev': '1',
+                  onClick: (event) => {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    lightboxStep(-1)
+                  },
+                }, '‹'),
+            lightboxDock
+              ? null
+              : h('button', {
+                  className: 'knit-lightbox-nav next',
+                  type: 'button',
+                  title: t('lightbox.canvas.next'),
+                  'aria-label': t('lightbox.canvas.next'),
+                  'data-knit-lightbox-next': '1',
+                  onClick: (event) => {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    lightboxStep(1)
+                  },
+                }, '›'),
             /* 右上角 ✕ —— 照 DSH 自带查看器那套（全屏之后必须有一个**看得见的**出口：
                光靠「点图片以外」和 Esc，第一次用的人不知道往哪点）。 */
             lightboxDock
@@ -8029,8 +8473,7 @@ video.knit-preview-media{width:100%;background:#000}
                   'aria-label': t('lightbox.close'),
                   onClick: () => lightboxClose(),
                 }, '✕'),
-            /* 滚轮翻页：只在**图片这一块**生效。左列自己会滚（它 overflow-y:auto），
-               在它上面滚轮应该滚列表，而不是换图 —— 所以监听挂在 stage 上、不挂在遮罩上。 */
+            /* v0.28：滚轮翻页已删除 —— 一次滑动惯性会连翻好几张，用户明确要求去掉。 */
             h('div', {
               className: 'knit-lightbox-stage',
               ref: commentStageRef,
@@ -8038,18 +8481,16 @@ video.knit-preview-media{width:100%;background:#000}
                  非评论模式：不拦，冒泡到遮罩 = 点图片以外才关的既有语义不变。 */
               onClick: commentOn ? onCommentStageClick : undefined,
               style: commentOn ? { cursor: 'crosshair' } : undefined,
-              onWheel: lightboxDock ? undefined : (event) => {
-                const delta = event && (event.deltaY || event.deltaX)
-                if (!delta) return
-                lightboxStep(delta > 0 ? 1 : -1)
-              },
+              onContextMenu: openShotMenu,
             },
               h('img', {
                 className: 'knit-lightbox-img',
                 ref: commentImgRef,
                 src: srcFor(lightboxDoc),
                 alt: lightboxDoc.name || '',
-                draggable: false,
+                /* v0.28：拖到桌面 / 文件夹即保存（配 `DownloadURL`）。 */
+                draggable: true,
+                onDragStart: onLightboxDragStart,
                 style: commentOn ? { cursor: 'crosshair' } : undefined,
                 onLoad: measureCommentBox,
                 onClick: (event) => {
@@ -8350,9 +8791,12 @@ video.knit-preview-media{width:100%;background:#000}
           // 焦点始终在容器上（roving 焦点会打断「移动即预览」），
           // 所以用 activedescendant 把「当前项」告诉辅助技术。
           // cursor 不在可见列表里时（被过滤/被上限截断）就不指向任何东西。
-          'aria-activedescendant': navDocs.some((doc) => doc.rel === cursor)
-            ? docOptionId(navDocs.find((doc) => doc.rel === cursor))
-            : undefined,
+          'aria-activedescendant': (() => {
+            const list = navDocsOf()
+            return list.some((doc) => doc.rel === cursor)
+              ? docOptionId(list.find((doc) => doc.rel === cursor))
+              : undefined
+          })(),
         }, listBody())
         /* ── 曾经在这里的一层：双栏装配 ────────────────────────
            `if (!contextView) return listNode` 之后是 `.knit-context-layout`

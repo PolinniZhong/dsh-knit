@@ -1261,6 +1261,138 @@
             : null) : null))
     }
 
+    /* ── v0.28：缩略图降采样缓存（原图当 104px 用 = 586 MB 位图，见 docs/media-performance.md）──
+       解码时缩到格宽 ×2 → JPEG blob，限并发 2，按 src 进有界 LRU；失败/老内核回落原图。 */
+    const THUMB_CACHE = new Map()
+    const THUMB_JOBS = []
+    let THUMB_ACTIVE = 0
+
+    /** 当前内核能不能在解码时就降采样。 */
+    function thumbCanDownscale() {
+      return typeof createImageBitmap === 'function'
+        && typeof document !== 'undefined' && typeof document.createElement === 'function'
+    }
+
+    /** 取缓存的小图地址（没有就空串）。 */
+    function thumbCacheGet(src) {
+      const hit = THUMB_CACHE.get(String(src || ''))
+      return hit || ''
+    }
+
+    /** 写缓存；超过上限就把最老的一条连同它的 blob 一起释放。 */
+    function thumbCachePut(src, url) {
+      if (!url) return
+      const key = String(src || '')
+      const old = THUMB_CACHE.get(key)
+      if (old && old !== url) { try { URL.revokeObjectURL(old) } catch { /* 无所谓 */ } }
+      THUMB_CACHE.set(key, url)
+      while (THUMB_CACHE.size > THUMB_CACHE_MAX) {
+        const first = THUMB_CACHE.keys().next()
+        if (first.done) break
+        const stale = THUMB_CACHE.get(first.value)
+        THUMB_CACHE.delete(first.value)
+        if (stale) { try { URL.revokeObjectURL(stale) } catch { /* 无所谓 */ } }
+      }
+    }
+
+    /**
+     * 读一次原图字节 → 解码时就缩到 `edge` 宽 → 画成 canvas → 输出 JPEG blob URL。
+     * 全程同源、本机；失败一律回空串（上层回落成原图）。
+     */
+    async function decodeThumb(src, edge) {
+      try {
+        const res = await fetch(src, { credentials: 'same-origin' })
+        if (!res || res.ok === false) return ''
+        const blob = await res.blob()
+        if (!blob || !Number(blob.size)) return ''
+        let bmp = null
+        try {
+          bmp = await createImageBitmap(blob, { resizeWidth: edge, resizeQuality: 'low' })
+        } catch {
+          bmp = await createImageBitmap(blob)
+        }
+        if (!bmp) return ''
+        const w = Math.max(1, bmp.width)
+        const h = Math.max(1, bmp.height)
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { if (bmp.close) bmp.close(); return '' }
+        ctx.drawImage(bmp, 0, 0, w, h)
+        if (bmp.close) bmp.close()
+        const out = await new Promise((resolve) => {
+          try { canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.72) } catch { resolve(null) }
+        })
+        if (!out) return ''
+        return URL.createObjectURL(out)
+      } catch { return '' }
+    }
+
+    /** 队列泵：始终最多 `THUMB_CONCURRENCY` 个解码在跑。 */
+    function pumpThumbs() {
+      while (THUMB_ACTIVE < THUMB_CONCURRENCY && THUMB_JOBS.length > 0) {
+        const job = THUMB_JOBS.shift()
+        THUMB_ACTIVE += 1
+        decodeThumb(job.src, job.edge)
+          .then((url) => { if (url) thumbCachePut(job.src, url); job.done(url) })
+          .catch(() => job.done(''))
+          .finally(() => { THUMB_ACTIVE -= 1; pumpThumbs() })
+      }
+    }
+
+    /**
+     * 申请一格的小图：缓存命中立刻回调，否则排队；返回取消函数。
+     */
+    function requestThumb(src, edge, done) {
+      const key = String(src || '')
+      const cached = thumbCacheGet(key)
+      if (cached) { done(cached); return () => {} }
+      let alive = true
+      THUMB_JOBS.push({ src: key, edge, done: (url) => { if (alive) done(url) } })
+      pumpThumbs()
+      return () => { alive = false }
+    }
+
+    /**
+     * 一格媒体的小图状态：`{ url, settled }`。
+     * `settled` 很重要 —— 生成失败时不能一直停在骨架屏上：
+     * 失败即回落成原图（`src`），宁可慢一点，也不能永远白着。
+     */
+    function useThumb(src, edge) {
+      const cached = thumbCacheGet(src)
+      const [state, setState] = React.useState(() => ({ url: cached, settled: Boolean(cached) }))
+      React.useEffect(() => {
+        const hit = thumbCacheGet(src)
+        setState({ url: hit, settled: Boolean(hit) })
+        if (hit || !src || !thumbCanDownscale()) return undefined
+        return requestThumb(src, edge, (next) => setState({ url: next || thumbCacheGet(src), settled: true }))
+      }, [src, edge])
+      return state
+    }
+
+    /**
+     * 元素进入视口附近才置真（视频首帧只在看得见时取）。
+     * 没有 `IntersectionObserver`（老内核 / 测试替身）⇒ 直接返回 true，行为与本版之前一致。
+     */
+    function useNearViewport(ref, enabled = true) {
+      const [near, setNear] = React.useState(() => typeof IntersectionObserver !== 'function')
+      React.useEffect(() => {
+        if (!enabled) return undefined
+        if (typeof IntersectionObserver !== 'function') { setNear(true); return undefined }
+        const node = ref.current
+        if (!node) { setNear(true); return undefined }
+        const io = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (entry && entry.isIntersecting) { setNear(true); io.disconnect() }
+          }
+        }, { rootMargin: '240px' })
+        io.observe(node)
+        return () => { try { io.disconnect() } catch { /* 忽略 */ } }
+      }, [enabled])
+      return near
+    }
+
     /**
      * 视频缩略图。
      *
@@ -1276,8 +1408,12 @@
      */
     function VideoThumb({ src }) {
       const [duration, setDuration] = React.useState(null)
-      return h('div', { className: 'knit-thumb' },
-        h('video', {
+      const boxRef = React.useRef(null)
+      /* v0.28：**看得见才挂 `<video>`**。每张视频缩略图都要一条 Range 请求取首帧，
+         一屏 40 个播放器同时建元素会把媒体管线压满（真机滚动卡顿的主要来源之一）。 */
+      const near = useNearViewport(boxRef, true)
+      return h('div', { className: 'knit-thumb', ref: boxRef },
+        near ? h('video', {
           preload: 'metadata',
           muted: true,
           playsInline: true,
@@ -1286,7 +1422,7 @@
             const v = event && event.target
             if (v && Number.isFinite(v.duration) && v.duration > 0) setDuration(v.duration)
           },
-        }),
+        }) : null,
         h('span', { className: 'knit-thumb-play', 'aria-hidden': true },
           h('svg', { viewBox: '0 0 24 24', focusable: false },
             h('path', { d: 'M8 5v14l11-7z' }))),
@@ -1298,10 +1434,18 @@
      * @param {{doc:object,src:string}} props - 条目与字节地址
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaThumb({ doc, src }) {
+    function MediaThumb({ doc, src, edge }) {
       if (doc.kind === 'video') return h(VideoThumb, { src })
+      const thumb = useThumb(src, edge)
+      const canScale = thumbCanDownscale()
+      /* 小图还没生成时**不挂原图** —— 挂它等于把 15 MB 的位图解出来两次
+         （一次为了缩略图、一次为了显示），那正是要治的那个峰值。
+         老内核不能降采样、或者这一张**生成失败** ⇒ 回落原图，宁可慢也不白屏。 */
+      if (!thumb.url && canScale && !thumb.settled) {
+        return h('div', { className: 'knit-thumb knit-thumb-pending', 'aria-hidden': 'true' })
+      }
       return h('div', { className: 'knit-thumb' },
-        h('img', { loading: 'lazy', src, alt: doc.name || '', draggable: false }))
+        h('img', { loading: 'lazy', decoding: 'async', src: thumb.url || src, alt: doc.name || '', draggable: false }))
     }
 
     /**
@@ -1309,7 +1453,7 @@
      * @param {object} props - 与 DocRow 同构，外加 src
      * @returns {import('react').ReactElement} 元素
      */
-    function MediaCard({ doc, now, active, cursor, src, onSelect, onOpenTab, onZoom, onPreview, optionId, favorite, conversation, onHoverStart, onHoverEnd }) {
+    function MediaCard({ doc, now, active, cursor, src, edge, onSelect, onOpenTab, onZoom, onPreview, optionId, favorite, conversation, onHoverStart, onHoverEnd }) {
       const fresh = now - doc.mtimeMs < NEW_WINDOW_MS
       return h('div', {
         className: `knit-media-card${active ? ' active' : ''}${cursor ? ' cursor' : ''}${fresh ? ' fresh' : ''}`,
@@ -1333,7 +1477,7 @@
         onMouseEnter: onHoverStart ? (event) => onHoverStart(doc, src, event) : undefined,
         onMouseLeave: onHoverEnd || undefined,
       },
-      h('div', { className: 'knit-media-thumbbox' }, h(MediaThumb, { doc, src })),
+      h('div', { className: 'knit-media-thumbbox' }, h(MediaThumb, { doc, src, edge })),
       h('div', { className: 'knit-media-meta' },
         h('div', { className: 'knit-media-name', title: doc.name },
           // v0.25：对话里生成的图带一个「对话」标记 —— 它解释两件事：这张还没存进项目、

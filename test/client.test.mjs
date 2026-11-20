@@ -6892,7 +6892,7 @@ test('查看器：对话里生成的图**没有**「收藏 / 本地打开」（�
   assert.equal(byExactClass(nodes, 'knit-lightbox-close').length, 1, '但关闭按钮必须在')
 })
 
-test('查看器：**↑↓ 也能翻页**（左列是竖的），滚轮在图片区翻页、但不抢左列的滚动', async () => {
+test('查看器：**↑↓ 也能翻页**；滚轮翻页已删除，改走显式的上一张 / 下一张', async () => {
   const { nodes, render } = await mountLightbox(manyMediaPayload(), 3)
   const rootOf = (n) => byClass(n, 'knit-root')[0]
   const key = (name) => ({ key: name, preventDefault() {}, stopPropagation() {} })
@@ -6907,24 +6907,25 @@ test('查看器：**↑↓ 也能翻页**（左列是竖的），滚轮在图片
   after = render()
   assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '↑ 应回上一张')
 
-  // 滚轮：在图片区（stage）上滚 = 翻页
+  /* v0.28：滚轮翻页**已删除**（一次滑动惯性会连翻好几张，用户明确要求去掉）。
+     这里反过来守：stage 上不许挂 onWheel；翻页只走显式按钮 / 缩略图 / 方向键。 */
   const stage = byExactClass(after, 'knit-lightbox-stage')[0]
   assert.ok(stage, '应有图片区（stage）')
-  assert.equal(typeof stage.props.onWheel, 'function', '滚轮要能翻页')
-  stage.props.onWheel({ deltaY: 120 })
-  after = render()
-  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m4\.png/, '往下滚 = 下一张')
-  stage.props.onWheel({ deltaY: -120 })
-  after = render()
-  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '往上滚 = 上一张')
-  // delta 为 0 不许乱翻
-  const before = String(byExactClass(after, 'knit-lightbox-img')[0].props.src)
-  byExactClass(after, 'knit-lightbox-stage')[0].props.onWheel({ deltaY: 0 })
-  assert.equal(String(byExactClass(render(), 'knit-lightbox-img')[0].props.src), before, '零位移不许翻')
-
-  // 左列自己会滚 ⇒ 它上面**不许**挂翻页（否则「滚列表」变成「换图」）
+  assert.equal(stage.props.onWheel, undefined, '滚轮不许再翻页')
   const rail = byExactClass(after, 'knit-lightbox-rail')[0]
-  assert.equal(rail.props.onWheel, undefined, '滚轮在左列上应该滚列表，不许被翻页抢走')
+  assert.equal(rail.props.onWheel, undefined, '左列也不许因为翻页被动过')
+
+  // 显式的上一张 / 下一张（提掉滚轮之后的入口）
+  const nextBtn = after.find((n) => n && n.props && n.props['data-knit-lightbox-next'] === '1')
+  assert.ok(nextBtn, '整屏要有「下一张」按钮')
+  nextBtn.props.onClick({ stopPropagation() {} })
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m4\.png/, '点「下一张」要换图')
+  const prevBtn = after.find((n) => n && n.props && n.props['data-knit-lightbox-prev'] === '1')
+  assert.ok(prevBtn, '整屏要有「上一张」按钮')
+  prevBtn.props.onClick({ stopPropagation() {} })
+  after = render()
+  assert.match(String(byExactClass(after, 'knit-lightbox-img')[0].props.src), /m3\.png/, '点「上一张」要回退')
 })
 
 test('查看器：换图时把当前缩略图滚进可视区（替身没有 DOM，这条只能守形状）', async () => {
@@ -6937,4 +6938,198 @@ test('查看器：换图时把当前缩略图滚进可视区（替身没有 DOM�
     '换图要把「当前那张」滚进视野（block:nearest —— 已在视野里就一格不动）')
   assert.ok(source.includes("rail.querySelector('.knit-lightbox-thumb.active')"), '找的是「当前那张」')
   assert.ok(source.includes("typeof rail.querySelector !== 'function'"), '没有 DOM（替身 / 老宿主）要能跳过')
+})
+
+/* ── v0.28：媒体档性能治理（分批挂载 + 缩略图降采样）────────────────── */
+
+test('纯：mediaFirstBatch 按列数估三行，并夹在 12–48 之间', () => {
+  const { mediaFirstBatch, MEDIA_FIRST_MIN, MEDIA_FIRST_MAX } = loadClientModule().exports.__test
+  assert.equal(MEDIA_FIRST_MIN, 12)
+  assert.equal(MEDIA_FIRST_MAX, 48)
+  assert.equal(mediaFirstBatch(1), 12, '一列也只有最少 12 张（不然一屏都铺不满）')
+  assert.equal(mediaFirstBatch(2), 12)
+  assert.equal(mediaFirstBatch(5), 15)
+  assert.equal(mediaFirstBatch(10), 30)
+  assert.equal(mediaFirstBatch(20), 48, '宽面板封顶 48，不无限挂')
+  assert.equal(mediaFirstBatch(0), 12, '还没量到宽度时按一列兜底')
+  assert.equal(mediaFirstBatch(NaN), 12)
+})
+
+test('纯：mediaNextCount 每次追加一批，且不超过总数', () => {
+  const { mediaNextCount, MEDIA_BATCH } = loadClientModule().exports.__test
+  assert.equal(MEDIA_BATCH, 24)
+  assert.equal(mediaNextCount(12, 60), 36)
+  assert.equal(mediaNextCount(36, 60), 60)
+  assert.equal(mediaNextCount(60, 60), 60, '已经到底就不再涨')
+  assert.equal(mediaNextCount(0, 5), 5, '总数比一批还少时直接到头')
+  assert.equal(mediaNextCount(12, 0), 0)
+})
+
+test('纯：thumbEdgeFor 按格宽 ×2 采样，夹在 96–320', () => {
+  const { thumbEdgeFor } = loadClientModule().exports.__test
+  assert.equal(thumbEdgeFor(104), 208)
+  assert.equal(thumbEdgeFor(60), 120)
+  assert.equal(thumbEdgeFor(10), 96, '小格子也至少 96，太小会糊')
+  assert.equal(thumbEdgeFor(400), 320, '大格子封顶 320，不回到原图尺寸')
+  assert.equal(thumbEdgeFor(0), 208, '量不到格宽时按 104 基准')
+})
+
+test('媒体：首屏只挂一批，滚到底的哨兵存在，计数仍是总数', async () => {
+  const now = Date.now()
+  const docs = Array.from({ length: 60 }, (_, i) => ({
+    path: `/p/shot-${i}.jpg`, rel: `shot-${i}.jpg`, name: `shot-${i}.jpg`, title: `shot-${i}`,
+    kind: 'image', summary: '', size: 1024, mtimeMs: now - i * 1000, score: null,
+  }))
+  installFetch(kindResponder({ media: mixedPayload({ total: docs.length, docs }) }))
+  const { KnitBody } = loadClientModule().exports.__test
+  harness.reset()
+  harness.seed(['', 'time', 'media'])
+  let nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+  await harness.flush()
+  nodes = harness.render(h(KnitBody, { sessionId: 's1' }))
+
+  const cards = byClass(nodes, 'knit-media-card')
+  assert.ok(cards.length > 0, '首屏至少出一批')
+  assert.ok(cards.length <= 48, `首屏不超过 48 张，实际 ${cards.length}`)
+  assert.ok(cards.length < 60, '60 张不该一次全挂')
+  // 计数仍然是**总数**（截断只影响挂载，不影响「有多少」）
+  assert.equal(textOf(byExactClass(nodes, 'knit-count')[0]), '60')
+  // 还有更多 ⇒ 哨兵在
+  assert.equal(byExactClass(nodes, 'knit-media-more').length, 1, '还有更多时要有滚动哨兵')
+})
+
+test('守卫：媒体网格必须分批 + 图片降采样 + 视频看得见才挂', async () => {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  /* 源码分片不在 npm 包里（净室测试只带生成物）——
+     分片在就读分片，不在就读生成文件；两者内容同源，守卫照样成立。 */
+  const readShard = (name) => {
+    const shard = fileURLToPath(new URL(`../tools/client-src/${name}`, import.meta.url))
+    if (existsSync(shard)) return readFileSync(shard, 'utf8')
+    return readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  }
+  const body = readShard('50-body.js')
+  const comps = readShard('40-components.js')
+  // ① 网格上屏的必须是「截过的那一份」，不能整份 mediaDocs 直接铺
+  assert.ok(!body.includes('mediaGrid(mediaDocs)'), '不许把整份 mediaDocs 一次全挂上网格')
+  assert.match(body, /mediaGrid\(mediaVisibleDocs\(\)\)/, '上屏必须走 mediaVisibleDocs()')
+  assert.match(body, /const mediaVisibleDocs = \(\) =>/, '分批函数必须存在')
+  // ② 缩略图必须降采样后再上屏（否则 40 张原图 = 586 MB 位图，真机实测）
+  assert.match(comps, /function useThumb\(/, '必须有小图缓存 hook')
+  assert.match(comps, /createImageBitmap\(blob, \{ resizeWidth: edge/, '解码时就缩到格宽')
+  assert.match(comps, /THUMB_CONCURRENCY/, '解码必须限量并发')
+  assert.match(comps, /decoding: 'async'/, '图片必须异步解码')
+  // ③ 视频首帧只在视口附近才挂（一屏 40 个播放器会把媒体管线压满）
+  assert.match(comps, /useNearViewport\(boxRef/, '视频缩略图必须视口门控')
+})
+
+/* ── v0.28：查看器的「装进窗口」与「滚轮翻页移除」 ───────────────────── */
+
+test('查看器：图片必须装进窗口 —— 容器裁切、stage 有确定高度、img 双向封顶', async () => {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const readShard = (name) => {
+    const shard = fileURLToPath(new URL(`../tools/client-src/${name}`, import.meta.url))
+    if (existsSync(shard)) return readFileSync(shard, 'utf8')
+    // 净室包只有生成物：内容同源，守卫照样成立
+    return readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  }
+  const css = readShard('30-styles.js')
+  const rule = (sel) => {
+    const at = css.indexOf(sel + '{')
+    assert.ok(at >= 0, `缺少规则 ${sel}`)
+    return css.slice(at, css.indexOf('}', at) + 1)
+  }
+  /* 根因：flex 的 align-items:center 让 stage 高度变成「内容高」，
+     img 的 max-height:100% 于是解析不出约束 ⇒ 大图按原始像素铺出去，跑到窗口外。
+     三条一起钉住：容器 stretch + 裁切、stage height:100%、img max-height:100%。 */
+  const root = rule('.knit-lightbox')
+  assert.match(root, /align-items:stretch/, '根容器必须拉伸子项（center 会让 stage 没有确定高度）')
+  assert.match(root, /overflow:hidden/, '根容器必须裁切，图片不许画到窗口外')
+  assert.match(rule('.knit-lightbox-stage'), /height:100%/, 'stage 必须有确定高度')
+  const img = rule('.knit-lightbox-img')
+  assert.match(img, /max-height:100%/, '图片必须按 stage 高度封顶')
+  assert.match(img, /max-width:100%/, '图片必须按 stage 宽度封顶')
+})
+
+test('查看器：整屏翻页是显式按钮，且不再挂滚轮', async () => {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const readShard = (name) => {
+    const shard = fileURLToPath(new URL(`../tools/client-src/${name}`, import.meta.url))
+    if (existsSync(shard)) return readFileSync(shard, 'utf8')
+    return readFileSync(fileURLToPath(new URL('../src/client/client.js', import.meta.url)), 'utf8')
+  }
+  const body = readShard('50-body.js')
+  assert.ok(!/onWheel:\s*lightboxDock/.test(body), '画布根上不许再挂滚轮翻页')
+  assert.ok(!/onWheel:\s*lightboxDock \? undefined/.test(body), 'stage 上不许再挂滚轮翻页')
+  assert.match(body, /data-knit-lightbox-next/, '整屏要有「下一张」按钮')
+  assert.match(body, /data-knit-lightbox-prev/, '整屏要有「上一张」按钮')
+  const css2 = readShard('30-styles.js')
+  assert.match(css2, /\.knit-lightbox-nav\{/, '箭头按钮要有样式')
+})
+
+/* ── v0.28：查看器「保存到本地」（右键菜单 + 拖拽） ─────────────────── */
+
+test('纯：保存文件名 / MIME / DownloadURL', () => {
+  const { downloadNameOf, imageMimeOf, downloadUrlFor, extOf } = loadClientModule().exports.__test
+  assert.equal(extOf('a/b/Photo.JPG'), 'jpg')
+  assert.equal(extOf('noext'), '')
+  // 正常文件名原样保留
+  assert.equal(downloadNameOf({ rel: 'media/shot-01.jpg' }), 'shot-01.jpg')
+  assert.equal(downloadNameOf({ name: 'clip.mp4' }), 'clip.mp4')
+  // 没有扩展名 ⇒ 补 .png（否则系统会存成 raw / 无后缀）
+  assert.equal(downloadNameOf({ rel: 'media/no-ext' }), 'no-ext.png')
+  assert.equal(downloadNameOf({ rel: 'media/no-ext' }), 'no-ext.png')
+  // 文件系统非法字符被替换
+  assert.equal(downloadNameOf({ name: 'a:b*c?.png' }), 'a-b-c-.png')
+  assert.equal(downloadNameOf(null), 'knit-image.png')
+
+  assert.equal(imageMimeOf('x.png'), 'image/png')
+  assert.equal(imageMimeOf('x.JPEG'), 'image/jpeg')
+  assert.equal(imageMimeOf('x.webp'), 'image/webp')
+  assert.equal(imageMimeOf('x.unknown'), 'application/octet-stream')
+
+  assert.equal(downloadUrlFor('/knit/api/raw?rel=a.png', 'a.png', 'http://127.0.0.1:1'),
+    'image/png:a.png:http://127.0.0.1:1/knit/api/raw?rel=a.png')
+  assert.equal(downloadUrlFor('https://x/y.png', 'y.png', 'http://127.0.0.1:1'),
+    'image/png:y.png:https://x/y.png', '绝对地址不许再拼 origin')
+})
+
+test('查看器：右键出「保存到本地」，点空白先收菜单、不关查看器', async () => {
+  const { nodes, render } = await mountLightbox(manyMediaPayload(), 3)
+  const stage = byExactClass(nodes, 'knit-lightbox-stage')[0]
+  assert.ok(stage, '应有图片区')
+  assert.equal(typeof stage.props.onContextMenu, 'function', '图片区要能右键')
+
+  stage.props.onContextMenu({ clientX: 40, clientY: 50, preventDefault() {}, stopPropagation() {} })
+  let after = render()
+  const menu = byExactClass(after, 'knit-lightbox-menu')[0]
+  assert.ok(menu, '右键后应出现菜单')
+  const item = byExactClass(after, 'knit-lightbox-menu-item')[0]
+  assert.ok(item, '菜单里要有条目')
+  assert.equal(item.props['data-knit-save-local'], '1', '条目就是「保存到本地」')
+
+  // 点空白：只收菜单，查看器仍在
+  byExactClass(after, 'knit-lightbox')[0].props.onClick({})
+  after = render()
+  assert.equal(byExactClass(after, 'knit-lightbox-menu').length, 0, '点空白应收起菜单')
+  assert.ok(byExactClass(after, 'knit-lightbox-img')[0], '查看器不许被一起关掉')
+})
+
+test('查看器：图片可拖拽，拖拽写入 DownloadURL（带文件名）', async () => {
+  const { nodes } = await mountLightbox(manyMediaPayload(), 3)
+  const img = byExactClass(nodes, 'knit-lightbox-img')[0]
+  assert.equal(img.props.draggable, true, '图片必须可拖（拖到桌面即保存）')
+  assert.equal(typeof img.props.onDragStart, 'function', '要有 dragstart')
+  const store = {}
+  img.props.onDragStart({
+    dataTransfer: {
+      set effectAllowed(v) { store.effectAllowed = v }, get effectAllowed() { return store.effectAllowed },
+      setData(type, value) { store[type] = value },
+    },
+  })
+  assert.match(String(store.DownloadURL), /^image\/[a-z+]+:[^:]+:\S+$/, 'DownloadURL 必须是 mime:name:url')
+  assert.match(String(store.DownloadURL), /m3\.png/, '文件名要带扩展名')
+  assert.equal(store.effectAllowed, 'copy')
 })

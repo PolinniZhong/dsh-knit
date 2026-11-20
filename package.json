@@ -1,6 +1,6 @@
 {
   "name": "dsh-knit",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "type": "module",
   "description": "Context retrieval for DeepSeek Harness: ranks docs, code and media by relevance into a sidebar Context Pack. Lexical and fully local by default. Hybrid is off until you configure a provider; it sends your query and file titles/summaries, not bodies.",
   "main": "./src/host/index.js",

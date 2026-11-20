@@ -669,8 +669,8 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
 .knit-shot:hover .knit-shot-hint{opacity:1}
 /* v0.25 媒体档「双击全屏」：整窗遮罩 + 毛玻璃。层级在悬停浮窗（60）与菜单之上。
    左侧留 96px 给缩略图带（它绝对定位在遮罩里）；图片按 contain 铺满剩下的区域。 */
-.knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
-  padding:32px 32px 32px 96px;outline:none;cursor:zoom-out;
+.knit-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:stretch;justify-content:center;
+  padding:32px 32px 32px 96px;outline:none;cursor:zoom-out;overflow:hidden;box-sizing:border-box;
   /* ⚠️ 遮罩的 α 是**人眼定的**（与 box-shadow 同一性质，推不出来）；两套值**必须不同**，
      否则「随深色模式变化」就是假话（有守卫）。
      ⚠️ 这两个变量故意**挂在查看器自己身上** —— 它被 portal 到 document.body 之后
@@ -682,10 +682,27 @@ button.knit-why:hover,button.knit-why:focus-visible{color:var(--dsw-alias-label-
   background:var(--knit-scrim);backdrop-filter:blur(22px) saturate(1.1);
   -webkit-backdrop-filter:blur(22px) saturate(1.1)}
 body[data-ds-dark-theme] .knit-lightbox{--knit-scrim:rgba(18,18,20,.72)}
-.knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;
+.knit-lightbox-stage{flex:1 1 auto;min-width:0;min-height:0;height:100%;display:flex;align-items:center;
   justify-content:center;cursor:default;position:relative}
-.knit-lightbox-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;cursor:default;
+.knit-lightbox-img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:10px;cursor:default;
   box-shadow:0 24px 64px rgba(0,0,0,.36);background:var(--dsw-alias-bg-base,#fff)}
+/* v0.28：查看器右键菜单（保存到本地）。浮在遮罩之上，坐标用 clientX/Y。 */
+.knit-lightbox-menu{position:fixed;z-index:2147483001;min-width:150px;padding:4px;border-radius:10px;
+  background:var(--dsw-alias-bg-base,#fff);border:.5px solid var(--dsw-alias-border-l3,transparent);
+  box-shadow:0 10px 28px rgba(0,0,0,.22);cursor:default}
+.knit-lightbox-menu-item{display:block;width:100%;padding:7px 10px;border:0;border-radius:6px;
+  background:transparent;color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;font-size:12px;
+  line-height:1.4;text-align:left;cursor:pointer}
+.knit-lightbox-menu-item:hover{background:var(--knit-hover-bg,var(--dsw-alias-interactive-bg-hover))}
+/* v0.28：整屏的上一张 / 下一张。滚轮翻页已删除（一次滑动会连翻好几张），
+   改成**显式点按**。左列缩略图带占 96px，所以 prev 让到它右边。 */
+.knit-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;
+  width:40px;height:40px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-family:inherit;font-size:22px;line-height:1;cursor:pointer;
+  color:var(--dsw-alias-label-primary,#0f1115);background:var(--knit-hover-bg,transparent);opacity:.72}
+.knit-lightbox-nav:hover{opacity:1;background:var(--knit-active-bg,var(--dsw-alias-interactive-bg-active))}
+.knit-lightbox-nav.prev{left:104px}
+.knit-lightbox-nav.next{right:22px}
 .knit-lightbox-tools{position:absolute;top:18px;right:62px;z-index:2;display:flex;align-items:center;gap:6px}
 .knit-lightbox-close{position:absolute;top:18px;right:18px;z-index:2;width:34px;height:34px;padding:0;
   display:flex;align-items:center;justify-content:center;border:0;border-radius:10px;
@@ -1051,6 +1068,11 @@ mark.knit-find-current{background:var(--knit-chip-bg)}
 /* 正在预览 → 品牌色描边（排在 cursor 之后，确保同时命中时以「选中」为准） */
 .knit-media-card.active .knit-media-thumbbox{
   border-color:var(--knit-accent);box-shadow:0 0 0 1.5px var(--knit-accent)}
+/* v0.28：小图还没生成时的占位（骨架）。用中性灰阶，不用品牌色 —— 它是等待，不是状态。 */
+.knit-thumb-pending{background:var(--knit-active-bg,var(--dsw-alias-interactive-bg-active))}
+/* 分批次加载的哨兵：细一行提示，滚到这里就自动追加下一批。 */
+.knit-media-more{grid-column:1 / -1;display:flex;align-items:center;justify-content:center;
+  min-height:36px;font-size:11px;color:var(--dsw-alias-label-caption,#80868b)}
 /* 格子窄到 96px 以下时，文件名与时间会挤成一团 —— 整块让位给缩略图（mediaLayoutFor 的 scaled） */
 .knit-media-meta{margin-top:5px;display:var(--knit-media-label,block)}
 .knit-media-name{display:flex;align-items:center;gap:3px;font-size:11.5px;line-height:1.3;

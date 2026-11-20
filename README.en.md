@@ -198,6 +198,8 @@ as one of its tabs. Each host is an independent optional dependency; missing one
 | Preview pane is height-draggable (20%–80%, remembered), fullscreen-able, `Esc` to exit | ✅ |
 | **"Open locally"** opens the document in your default app; the **path in the preview header is clickable** and now opens the system file manager with the file **selected** (`action:'reveal'`), and its tooltip carries the full relative path | ✅ |
 | Double-click opens in a new tab (the official document preview, with its PDF renderer and renderer switching) | ✅ |
+| **Large media libraries**: only one screenful is mounted at first (12–48, by column count); scrolling appends 24 more. Thumbnails are downscaled in the browser to 2× the cell width with a bounded LRU, and video posters are created only near the viewport. Measured: 40 × 2400×1600 photos drop from **586 MB** of decoded bitmaps to **4 MB** (see `docs/media-performance.md`) | ✅ |
+| **Save from the viewer**: in the fullscreen image viewer, right-click → **Save to local**, or drag the image straight to the desktop (filename keeps its extension). The viewer still shows the original bytes; saving reuses the same read-only same-origin route | ✅ |
 | **Changes view**: a fourth tab (Docs / Code / Media / Changes) listing **uncommitted** Markdown and code files with modified / added / deleted / renamed status and `+N −N`; clicking opens a line-by-line diff in the existing preview. Read-only `git status + numstat + diff` (`--no-ext-diff --no-textconv`) | ✅ |
 | **In-image comments**: click "Comment" on the hover preview → a **canvas inside the Knit panel** (never covers the conversation); click the image to drop a pin, write a line, send from the bottom bar. Sending attaches the **original image + `图像 N: …` coordinate text** (N follows the composer attachment order, and each send starts a new block); comments live in session memory only (lost on refresh, not persisted) | ✅ |
 | Filter box over title / summary / path | ✅ |
@@ -831,7 +833,7 @@ cd dsh-knit
 
 npm run build:client             # client source shards → src/client/client.js (no bundler)
 npm run build:client:check       # verify the generated file matches the shards
-npm test          # 927 tests, zero dependencies, no npm install needed
+npm test          # 937 tests, zero dependencies, no npm install needed
 ```
 
 **How changes take effect**: the host half (`src/host/`) **requires a DSH restart** (no hot reload);
@@ -861,7 +863,7 @@ knit/
 │   ├── host/feedback.js  # usage feedback: read-time attribution / Context Epoch / delta (pure)
 │   ├── host/tool.js      # the agent tool knit_docs (hand-written ToolDefinition)
 │   └── client/client.js  # dual-host registration + panel UI
-└── test/                 # 927 tests
+└── test/                 # 937 tests
     ├── eval/             # retrieval quality: corpus + cases + frozen v0.5.2 baseline
     └── context/          # context tiering: 24-doc corpus + 12 real-task cases
 ```
